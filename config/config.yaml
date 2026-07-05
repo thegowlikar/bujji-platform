@@ -1,0 +1,62 @@
+# Bujji ORB-VWAP ATM Seller — configuration.
+# Secrets (FYERS app id / access token) come from environment variables:
+#   FYERS_APP_ID, FYERS_ACCESS_TOKEN — never put them in this file.
+
+log_level: INFO
+
+market:
+  underlying: NIFTY
+  exchange: NSE
+  strike_interval: 50
+  lot_size: 75
+  expiry_selection: nearest_weekly
+  # FYERS supplies real index volume in historical candles, so VWAP is a true
+  # volume-weighted VWAP. Keep this false in production: if a feed ever reports
+  # no volume, the bot stands down instead of trading on an approximation.
+  vwap_equal_weight_fallback: false
+
+timing:
+  candle_minutes: 5
+  orb_start: "09:15"
+  orb_end: "09:20"
+  trading_start: "09:20"
+  trading_end: "15:15"
+  hard_exit: "15:15"
+
+risk:
+  lots: 1
+  max_mtm_loss: 6000
+  daily_loss_limit: 6000
+  breakout_body_ratio: 0.60
+
+strategy:
+  max_trades_per_day: 1
+  allow_reentry: false
+
+broker:
+  # paper       — fully synthetic: no live data, no live orders.
+  # fyers_paper — Paper Trading mode: LIVE FYERS market data (candles, quotes,
+  #               option prices, contract resolution), but every order is
+  #               placed/tracked exclusively in the paper ledger. No real
+  #               order can be placed in this mode — see docs/PAPER_TRADING_LIVE_DATA.md.
+  #               Recommended mode for the paper-trading campaign.
+  # fyers       — full live trading. Real orders, real capital.
+  name: paper
+  retry_attempts: 3
+  retry_backoff_seconds: 1.5
+  poll_interval_seconds: 1.0
+  order_timeout_seconds: 15.0
+
+paths:
+  log_dir: logs
+  data_dir: data
+  journal_csv: data/trade_journal.csv
+  database: data/bujji.db
+  state_file: data/session_state.json
+  lock_file: data/bujji.lock
+
+dashboard:
+  enabled: true
+  host: 127.0.0.1
+  port: 8787
+  refresh_seconds: 5

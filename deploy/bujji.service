@@ -1,0 +1,42 @@
+[Unit]
+Description=Bujji ORB-VWAP ATM Seller
+# Wait for real network/DNS before starting — the broker connection at
+# startup will otherwise fail fast (by design) on every boot.
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+
+# --- EDIT THESE FOR YOUR DEPLOYMENT -----------------------------------
+User=bujji
+WorkingDirectory=/opt/bujji
+ExecStart=/opt/bujji/.venv/bin/python -m bujji.app --config /opt/bujji/config/config.yaml
+# Secrets belong in an EnvironmentFile with 0600 permissions, never in this
+# unit file or in config.yaml.
+EnvironmentFile=/opt/bujji/.env
+# ------------------------------------------------------------------------
+
+# F2 (process supervision): this is what makes Tier 1's crash-recovery (C1)
+# and single-instance lock (F4) guarantees actually hold after a VPS reboot
+# or an unexpected process death — without this, a crashed bot simply stays
+# dead and any open position is abandoned until a human notices.
+Restart=always
+RestartSec=5
+
+# A single misbehaving restart loop should not hammer the broker forever;
+# systemd's built-in start-rate limiting backs this off automatically.
+StartLimitIntervalSec=600
+StartLimitBurst=10
+
+# Give the process time to run its graceful shutdown (release the F4 lock,
+# stop the dashboard) on SIGTERM before systemd escalates to SIGKILL.
+TimeoutStopSec=30
+KillSignal=SIGTERM
+
+# Hygiene: keep failures visible in `journalctl -u bujji`, not lost.
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target
