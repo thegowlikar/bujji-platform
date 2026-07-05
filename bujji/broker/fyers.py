@@ -87,6 +87,17 @@ class FyersBroker(Broker):
     async def connect(self) -> None:
         if self._connected:
             return
+        # Fail fast and unambiguously when credentials are simply absent —
+        # do not let this fall through to a transport-level error (which,
+        # with `_call` unwired, would otherwise surface as a confusing
+        # `NotImplementedError` regardless of whether credentials were ever
+        # provided at all).
+        if not self._cfg.app_id or not self._cfg.access_token:
+            raise AuthenticationError(
+                "FYERS credentials missing: FYERS_APP_ID and/or "
+                "FYERS_ACCESS_TOKEN are not set. Set both environment "
+                "variables and restart."
+            )
         data = await self._call("profile")  # Validates the access token.
         self._raise_if_auth_error(data)
         self._connected = True

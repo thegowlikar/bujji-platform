@@ -8,6 +8,7 @@ from __future__ import annotations
 import argparse
 import asyncio
 
+from ..core.banner import render_startup_banner
 from ..core.config import AppConfig
 from ..core.logging_setup import setup_logging
 from .engine import ReplayEngine, load_candles_csv
@@ -22,6 +23,8 @@ def main() -> None:
     config = AppConfig.load(args.config)
     config.ensure_dirs()
     logger = setup_logging(config.paths.log_dir, config.log_level)
+
+    print(render_startup_banner(config, mode_override="REPLAY"))
 
     candles = load_candles_csv(args.candles)
     engine = ReplayEngine(config, logger)

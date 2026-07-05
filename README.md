@@ -143,20 +143,41 @@ items (log rotation, config cross-field validation, margin pre-check, and a
 handful of narrower edge cases) are deferred until real paper-trading evidence
 indicates which of them actually matter — not implemented speculatively.
 
-### Paper Trading mode — live FYERS data, paper-only execution
+### Paper Trading mode — live FYERS data, paper-only execution (default)
 
-One capability was added as the final pre-campaign step: `broker.name:
-fyers_paper` runs against **real FYERS market data** (candles, quotes, option
-prices, contract resolution) while every order is placed, tracked, and
-exited **exclusively** through the existing `PaperBroker` ledger — structurally
-impossible to place a real order in this mode (the live broker's execution
-methods are neutered at construction time, not just avoided by convention).
+`broker.name: fyers_paper` is the **default operating mode** in
+`config/config.yaml`. It runs against **real FYERS market data** (candles,
+quotes, option prices, contract resolution) while every order is placed,
+tracked, and exited **exclusively** through the existing `PaperBroker`
+ledger — structurally impossible to place a real order in this mode (the
+live broker's execution methods are neutered at construction time, not just
+avoided by convention). Requires `FYERS_APP_ID`/`FYERS_ACCESS_TOKEN` as
+environment variables; startup fails fast with a clear `AuthenticationError`
+if either is missing.
+
+Full live trading (`broker.name: fyers`) remains an explicit, separate
+opt-in — never the default. The startup banner, printed immediately on every
+run, makes the active mode impossible to miss:
+
+```
+==============================================================
+  Bujji ORB-VWAP ATM Seller  v0.9-paper
+  Mode:               PAPER
+  Broker:             fyers_paper
+  Market data source: FYERS LIVE
+  Execution dest.:    PAPER LEDGER
+  Live Orders: DISABLED ✓
+==============================================================
+```
+
+`broker.name: fyers` instead shows `Mode: LIVE`, `Execution dest.: FYERS
+LIVE`, and `Live Orders: ENABLED — REAL CAPITAL AT RISK ⚠ ⚠ ⚠`.
+
 See [docs/PAPER_TRADING_LIVE_DATA.md](docs/PAPER_TRADING_LIVE_DATA.md) for the
 composite-broker architecture and safety proof, and
 [docs/PAPER_TRADING_CAMPAIGN.md](docs/PAPER_TRADING_CAMPAIGN.md) for how to run
-the campaign with it. This is the recommended mode for the campaign — plain
-`paper` is a fully synthetic simulator and doesn't exercise real market
-conditions.
+the campaign with it. Plain `paper` (fully synthetic, no live data) remains
+available for offline development/testing only.
 
 ## Run
 

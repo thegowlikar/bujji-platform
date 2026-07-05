@@ -34,6 +34,40 @@ def _fyers(config, logger):
     return FyersBroker(config.broker, logger)
 
 
+# ---------------------------------------------------------------------- #
+# Credential-presence guard: fail fast with a clear AuthenticationError
+# BEFORE ever touching the (unwired) transport, if credentials are absent.
+# ---------------------------------------------------------------------- #
+@pytest.mark.asyncio
+async def test_connect_fails_fast_with_no_credentials(config, logger):
+    config.broker.app_id = None
+    config.broker.access_token = None
+    broker = _fyers(config, logger)
+    with pytest.raises(AuthenticationError, match="credentials missing"):
+        await broker.connect()
+
+
+@pytest.mark.asyncio
+async def test_connect_fails_fast_with_only_app_id_set(config, logger):
+    config.broker.app_id = "some-app-id"
+    config.broker.access_token = None
+    broker = _fyers(config, logger)
+    with pytest.raises(AuthenticationError, match="credentials missing"):
+        await broker.connect()
+
+
+@pytest.mark.asyncio
+async def test_connect_with_credentials_reaches_transport(config, logger):
+    """With credentials present, connect() proceeds past the guard to the
+    actual transport call (still unwired, so NotImplementedError here proves
+    the guard did NOT block it — a real deployment wires `_call` to FYERS)."""
+    config.broker.app_id = "some-app-id"
+    config.broker.access_token = "some-token"
+    broker = _fyers(config, logger)
+    with pytest.raises(NotImplementedError):
+        await broker.connect()
+
+
 def test_classifier_http_401_403(config, logger):
     b = _fyers(config, logger)
     with pytest.raises(AuthenticationError):

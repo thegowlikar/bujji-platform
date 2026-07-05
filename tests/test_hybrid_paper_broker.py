@@ -64,6 +64,13 @@ class FakeLiveFyers(FyersBroker):
 
 
 def _build_hybrid(config, logger):
+    # FyersBroker.connect() now fails fast with AuthenticationError if
+    # credentials are absent (this is the behavior requirement 3 asks for) —
+    # supply dummy-but-present values so these tests exercise the fake
+    # transport, not the credential-presence guard itself (which has its own
+    # dedicated coverage elsewhere).
+    config.broker.app_id = "test-app-id"
+    config.broker.access_token = "test-access-token"
     live = disable_live_execution(FakeLiveFyers(config.broker, logger))
     ledger = PaperBroker()
     return HybridPaperBroker(live, ledger, logger), live, ledger

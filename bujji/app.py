@@ -9,9 +9,11 @@ from __future__ import annotations
 import asyncio
 import logging
 import signal as os_signal
+from typing import Optional
 
 from .broker.errors import AuthenticationError
 from .broker.factory import build_broker
+from .core.banner import render_startup_banner
 from .core.clock import ClockGuard, now_ist
 from .core.config import AppConfig
 from .core.event_bus import Event, EventBus, EventType
@@ -68,7 +70,16 @@ class Application:
             self._status, self._journal, config.dashboard.host,
             config.dashboard.port, config.dashboard.refresh_seconds, self._log,
         )
-        self._stop = asyncio.Event()
+        # NOTE: asyncio.Event() is intentionally NOT constructed here. On
+        # Python < 3.10, an Event binds to whatever loop `get_event_loop()`
+        # returns at construction time. `Application(config)` runs as a plain
+        # expression BEFORE `asyncio.run()` creates its loop (see `main()`
+        # below), so an Event created in `__init__` would bind to a throwaway
+        # loop distinct from the one everything actually runs on — surfacing
+        # later as "RuntimeError: Future attached to a different loop" the
+        # first time it's awaited. It is created in `run()` instead, which is
+        # only ever entered while the real loop is already running.
+        self._stop: Optional[asyncio.Event] = None
         # D1: detects in-session wall-clock jumps (NTP correction, suspend/
         # resume). Threshold is intentionally conservative and not exposed as
         # a config knob in this pass — 5s of unexplained drift between ticks
@@ -98,6 +109,17 @@ class Application:
                 pass
 
     async def run(self) -> None:
+        # Printed immediately, before anything else can fail — an operator
+        # must be able to see at a glance whether this is PAPER or LIVE,
+        # never having to infer it from the config file.
+        banner = render_startup_banner(self._cfg)
+        print(banner)
+        self._log.info("\n%s", banner)
+
+        # Created here, not in __init__ — this coroutine only ever executes
+        # inside the real running loop (whether entered via `asyncio.run()`
+        # or a test's own event loop), so the Event correctly binds to it.
+        self._stop = asyncio.Event()
         self._install_signals()
         if self._cfg.dashboard.enabled:
             self._dashboard.start()

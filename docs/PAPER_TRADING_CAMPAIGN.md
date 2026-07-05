@@ -9,15 +9,23 @@ capital is committed.
 
 ## Before starting
 
-1. Set `broker.name: fyers_paper` in `config/config.yaml` — **not** plain
-   `paper`. Plain `paper` is a fully synthetic simulator (random-walk spot and
-   premiums); it validates the software, not market behaviour. `fyers_paper`
-   runs against real FYERS market data with execution routed exclusively
-   through the paper ledger — see
-   [PAPER_TRADING_LIVE_DATA.md](PAPER_TRADING_LIVE_DATA.md) for the
-   architecture and the safety guarantee that no real order can be placed in
-   this mode. This is what "run the bot every market day using live FYERS
-   data + paper execution" means in config terms.
+1. `broker.name: fyers_paper` is now the **shipped default** in
+   `config/config.yaml` — no change needed unless you've edited it locally.
+   Confirm it still says `fyers_paper`, **not** plain `paper`. Plain `paper`
+   is a fully synthetic simulator (random-walk spot and premiums); it
+   validates the software, not market behaviour. `fyers_paper` runs against
+   real FYERS market data with execution routed exclusively through the
+   paper ledger — see [PAPER_TRADING_LIVE_DATA.md](PAPER_TRADING_LIVE_DATA.md)
+   for the architecture and the safety guarantee that no real order can be
+   placed in this mode. This is what "run the bot every market day using live
+   FYERS data + paper execution" means in config terms.
+   `FYERS_APP_ID`/`FYERS_ACCESS_TOKEN` must be set as environment variables —
+   startup fails fast with a clear `AuthenticationError` naming the missing
+   variable(s) if they aren't, before any trading logic runs. The startup
+   banner (printed immediately, before anything else can fail) always shows
+   the active mode, market-data source, execution destination, and a
+   prominent `Live Orders: DISABLED ✓` / `ENABLED — REAL CAPITAL AT RISK`
+   line — check it every time you start the process.
 2. Install process supervision per [deploy/README.md](../deploy/README.md) —
    run the campaign under systemd, not a bare foreground process, so F2's
    crash-recovery guarantees are actually exercised end-to-end, not assumed.

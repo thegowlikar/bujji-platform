@@ -1,9 +1,11 @@
 # Paper Trading Mode — Live Data, Paper Execution (Composite Broker)
 
-**Status: implemented.** Select via `broker.name: fyers_paper` in config. This
-is an essential validation capability, not a strategy enhancement — it lets
-the bot run against real market conditions every trading day without any
-possibility of a real order being placed.
+**Status: implemented, and the default operating mode** (`broker.name:
+fyers_paper` in `config/config.yaml`). This is an essential validation
+capability, not a strategy enhancement — it lets the bot run against real
+market conditions every trading day without any possibility of a real order
+being placed. Full live trading (`broker.name: fyers`) remains a separate,
+explicit opt-in.
 
 ## Architecture
 

@@ -41,7 +41,7 @@ broker:
   #               order can be placed in this mode — see docs/PAPER_TRADING_LIVE_DATA.md.
   #               Recommended mode for the paper-trading campaign.
   # fyers       — full live trading. Real orders, real capital.
-  name: paper
+  name: fyers_paper
   retry_attempts: 3
   retry_backoff_seconds: 1.5
   poll_interval_seconds: 1.0
