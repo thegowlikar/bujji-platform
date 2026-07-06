@@ -61,9 +61,18 @@ class FakeLiveFyers(FyersBroker):
                 for i in range(10)
             ]
             return {"s": "ok", "candles": candles}
-        if action == "instruments":
-            return {"s": "ok", "expiries": ["25JAN"]}
         raise AssertionError(f"unexpected live call in test double: {action}")
+
+    async def resolve_atm_contract(self, underlying, spot, direction, strike_interval, lot_size):
+        # Phase C: resolve_atm_contract no longer goes through _call() at all
+        # — it uses InstrumentMaster (a real network+cache subsystem, tested
+        # separately in test_instrument_master.py). Stub it here so this
+        # broker-delegation test stays hermetic (no live network in CI).
+        self.call_log.append("resolve_atm_contract")
+        strike = self.atm_strike(spot, strike_interval)
+        opt = self.option_type_for(direction)
+        return OptionContract(f"NSE:NIFTY-FAKE{strike}{opt.value}", underlying,
+                              strike, opt, "2026-07-09", lot_size)
 
 
 def _build_hybrid(config, logger):
@@ -104,7 +113,7 @@ async def test_market_data_flows_through_live_fyers_call_path(config, logger):
     )
     assert contract.strike == 22050
     assert contract.option_type is OptionType.PE
-    assert "instruments" in live.call_log
+    assert "resolve_atm_contract" in live.call_log
 
     ltp = await hybrid.get_ltp(contract)
     assert ltp == 118.5

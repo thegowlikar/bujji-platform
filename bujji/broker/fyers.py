@@ -26,6 +26,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+from pathlib import Path
 from typing import Any, Optional
 
 from fyers_apiv3 import fyersModel
@@ -100,6 +101,7 @@ class FyersBroker(Broker):
         # It does NOT survive a process restart — recovery after a restart
         # relies on get_open_positions()/reconcile (C1), not this cache.
         self._cid_to_order_id: dict[str, str] = {}
+        self._instruments = None  # Lazily built InstrumentMaster (Phase C).
 
     def _get_client(self) -> fyersModel.FyersModel:
         if self._client is None:
@@ -259,51 +261,26 @@ class FyersBroker(Broker):
     async def resolve_atm_contract(
         self, underlying, spot, direction, strike_interval, lot_size
     ) -> OptionContract:
-        """Resolve the nearest ATM option contract.
+        """Resolve the nearest-expiry ATM option contract.
 
-        ⚠ UNVERIFIED AGAINST LIVE DATA — this is the one capability this
-        pass could NOT confirm works, and no workaround was invented in its
-        place (per explicit instruction). Two things were tried and both
-        failed:
-
-        1. The available FYERS instrument-search tool only covers the NSE/
-           BSE/MCX *cash-market* symbol master (equities/indices/ETFs) — a
-           live search for "NIFTY" returned zero option contracts. It has no
-           F&O/derivatives segment at all.
-        2. A direct LTP query against a manually-constructed guess at the
-           FYERS weekly-option symbol format (two plausible variants tried)
-           returned `last_price: null` for both — i.e., neither guess
-           resolved to a real, quotable instrument.
-
-        The symbol construction below is therefore an UNCHANGED, UNVERIFIED
-        best-effort guess (`_build_option_symbol`) carried over from the
-        prior implementation. Before any live or `fyers_paper` run that
-        depends on entering a position, this MUST be replaced with a
-        correctly-verified format — e.g. by downloading FYERS's published
-        NFO symbol-master CSV directly (outside the tool surface available
-        in this session) and confirming the exact weekly-expiry token
-        convention against it.
+        Backed by :class:`InstrumentMaster` — FYERS's real, public NFO
+        symbol-master CSV (downloaded, cached 24h, parsed locally). No
+        hardcoded symbols. A prior pass could not verify this at all: the
+        MCP-tool-mediated instrument search only covered the cash-market
+        segment (no F&O), and manual symbol guesses failed. Downloading the
+        real NFO file directly (verified live — see
+        docs/FYERS_TRANSPORT_READINESS.md) resolved it properly.
         """
-        strike = self.atm_strike(spot, strike_interval)
         opt = self.option_type_for(direction)
-        expiry = await self._nearest_weekly_expiry(underlying)
-        symbol = self._build_option_symbol(underlying, expiry, strike, opt.value)
-        return OptionContract(symbol, underlying, strike, opt, expiry, lot_size)
+        return await self._instrument_master().resolve_atm(
+            underlying, spot, opt, strike_interval, lot_size
+        )
 
-    async def _nearest_weekly_expiry(self, underlying: str) -> str:
-        # ⚠ Same limitation as resolve_atm_contract: no verified FYERS tool
-        # returns option expiry tokens for an underlying. This action name
-        # has no confirmed real-world mapping; left as-is, unwired, rather
-        # than invented.
-        data = await self._call("instruments", underlying=underlying)
-        self._raise_if_auth_error(data)
-        return data["expiries"][0]
-
-    def _build_option_symbol(
-        self, underlying: str, expiry: str, strike: int, opt: str
-    ) -> str:
-        # e.g. NSE:NIFTY25JAN22000CE — UNVERIFIED, see resolve_atm_contract.
-        return f"NSE:{underlying}{expiry}{strike}{opt}"
+    def _instrument_master(self):
+        if self._instruments is None:
+            from .instrument_master import InstrumentMaster
+            self._instruments = InstrumentMaster(Path("data/instrument_master"), self._log)
+        return self._instruments
 
     async def get_ltp(self, contract: OptionContract) -> float:
         return await self._quote(contract.symbol)
