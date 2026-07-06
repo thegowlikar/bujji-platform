@@ -115,8 +115,45 @@ async def test_refresh_persists_to_credentials_file(logger, tmp_path):
         await manager.refresh()
 
     content = cred_file.read_text()
-    assert "PERSISTED-TOKEN" in content
-    assert "PERSISTED-RT" in content
+    assert "FYERS_ACCESS_TOKEN=PERSISTED-TOKEN" in content
+    assert "FYERS_REFRESH_TOKEN=PERSISTED-RT" in content
+
+
+@pytest.mark.asyncio
+async def test_persist_is_atomic_preserves_other_keys_and_sets_0600(logger, tmp_path):
+    """Atomic write must: update both token keys in one replace, preserve
+    other keys/comments, leave no .tmp file behind, and be owner-only (0600)."""
+    import os
+    import stat
+
+    cred_file = tmp_path / "creds.env"
+    cred_file.write_text(
+        "# bujji credentials\n"
+        "FYERS_APP_ID=myapp\n"
+        "FYERS_ACCESS_TOKEN=OLD-TOKEN\n"
+        "FYERS_PIN=1234\n"
+    )
+    manager = FyersTokenManager("app", "secret", "rt", "1234", logger,
+                                credentials_file=str(cred_file))
+    with patch("bujji.broker.fyers_token_manager.requests.post") as post:
+        post.return_value = _mock_response({
+            "s": "ok", "access_token": "NEW-TOKEN", "refresh_token": "NEW-RT",
+        })
+        await manager.refresh()
+
+    content = cred_file.read_text()
+    # Updated in place (not duplicated) and other keys/comments preserved.
+    assert content.count("FYERS_ACCESS_TOKEN=") == 1
+    assert "FYERS_ACCESS_TOKEN=NEW-TOKEN" in content
+    assert "FYERS_REFRESH_TOKEN=NEW-RT" in content  # New key appended.
+    assert "FYERS_APP_ID=myapp" in content          # Preserved.
+    assert "FYERS_PIN=1234" in content              # Preserved.
+    assert "# bujji credentials" in content         # Comment preserved.
+    # No temp file left behind.
+    assert not (tmp_path / "creds.env.tmp").exists()
+    # Owner read/write only.
+    mode = stat.S_IMODE(os.stat(cred_file).st_mode)
+    assert mode == 0o600, oct(mode)
 
 
 # ---------------------------------------------------------------------- #

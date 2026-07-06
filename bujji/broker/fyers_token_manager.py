@@ -33,6 +33,7 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import logging
+import os
 from pathlib import Path
 from typing import Optional
 
@@ -114,6 +115,23 @@ class FyersTokenManager:
         return new_access_token
 
     def _persist(self, access_token: str, refresh_token: str) -> None:
+        """Write both renewed tokens back to the credentials file ATOMICALLY.
+
+        Deliberately does NOT use python-dotenv's ``set_key``: it writes via a
+        temp file in the system temp dir then ``shutil.move``, which is only
+        atomic when temp and target share a filesystem — under the production
+        systemd unit's ``PrivateTmp=true``, ``/tmp`` is a separate tmpfs, so
+        that move degrades to a non-atomic copy. It also rewrites once per
+        key, so a crash between the two writes could persist a new
+        access_token against a stale refresh_token.
+
+        Instead: update both keys in memory, write to a temp file IN THE SAME
+        DIRECTORY as the target (guaranteeing a same-filesystem, atomic
+        ``os.replace``), fsync, then replace in one operation. Other keys and
+        comments in the file are preserved. Permissions are set to 0600 on the
+        temp file before the replace, so the credentials are never briefly
+        world-readable.
+        """
         if self._credentials_file is None:
             self._log.warning(
                 "fyers_token_refresh_not_persisted: no credentials_file "
@@ -121,8 +139,38 @@ class FyersTokenManager:
                 "will be lost on the next restart"
             )
             return
-        from dotenv import set_key
-        self._credentials_file.parent.mkdir(parents=True, exist_ok=True)
-        self._credentials_file.touch(exist_ok=True)
-        set_key(str(self._credentials_file), "FYERS_ACCESS_TOKEN", access_token)
-        set_key(str(self._credentials_file), "FYERS_REFRESH_TOKEN", refresh_token)
+        path = self._credentials_file
+        path.parent.mkdir(parents=True, exist_ok=True)
+
+        updates = {
+            "FYERS_ACCESS_TOKEN": access_token,
+            "FYERS_REFRESH_TOKEN": refresh_token,
+        }
+        existing = path.read_text().splitlines() if path.exists() else []
+        seen: set[str] = set()
+        out_lines: list[str] = []
+        for line in existing:
+            stripped = line.lstrip()
+            key = stripped.split("=", 1)[0].strip() if "=" in stripped else None
+            if key in updates and not stripped.startswith("#"):
+                out_lines.append(f"{key}={updates[key]}")
+                seen.add(key)
+            else:
+                out_lines.append(line)
+        for key, value in updates.items():
+            if key not in seen:
+                out_lines.append(f"{key}={value}")
+        payload = "\n".join(out_lines) + "\n"
+
+        tmp = path.with_suffix(path.suffix + ".tmp")
+        fd = os.open(str(tmp), os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+        try:
+            with os.fdopen(fd, "w", encoding="utf-8") as fh:
+                fh.write(payload)
+                fh.flush()
+                os.fsync(fh.fileno())
+            os.chmod(tmp, 0o600)  # Belt-and-braces if umask altered O_CREAT mode.
+            os.replace(tmp, path)  # Atomic — same directory, same filesystem.
+        finally:
+            if tmp.exists():
+                tmp.unlink()

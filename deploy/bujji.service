@@ -5,11 +5,19 @@ Description=Bujji ORB-VWAP ATM Seller
 After=network-online.target
 Wants=network-online.target
 
+# Restart-loop rate limiting. NOTE: StartLimit* directives belong in [Unit],
+# not [Service] — systemd silently ignores them if placed in [Service]. If a
+# crash loop trips this (10 starts in 600s), systemd stops trying and the unit
+# enters "failed"; clear it with `systemctl reset-failed bujji`.
+StartLimitIntervalSec=600
+StartLimitBurst=10
+
 [Service]
 Type=simple
 
 # --- EDIT THESE FOR YOUR DEPLOYMENT -----------------------------------
 User=bujji
+Group=bujji
 WorkingDirectory=/opt/bujji
 ExecStart=/opt/bujji/.venv/bin/python -m bujji.app --config /opt/bujji/config/config.yaml
 # Secrets belong in an EnvironmentFile with 0600 permissions, never in this
@@ -29,11 +37,6 @@ EnvironmentFile=/opt/bujji/.env
 Restart=always
 RestartSec=5
 
-# A single misbehaving restart loop should not hammer the broker forever;
-# systemd's built-in start-rate limiting backs this off automatically.
-StartLimitIntervalSec=600
-StartLimitBurst=10
-
 # Give the process time to run its graceful shutdown (release the F4 lock,
 # stop the dashboard) on SIGTERM before systemd escalates to SIGKILL.
 TimeoutStopSec=30
@@ -42,6 +45,20 @@ KillSignal=SIGTERM
 # Hygiene: keep failures visible in `journalctl -u bujji`, not lost.
 StandardOutput=journal
 StandardError=journal
+SyslogIdentifier=bujji
+
+# --- Security hardening ------------------------------------------------
+# The service holds a live broker credential, so lock down what it can touch.
+# The token-renewal subsystem writes back to FYERS_CREDENTIALS_FILE, and the
+# app writes logs/data/lock under WorkingDirectory — those are the ONLY paths
+# it needs write access to. Everything else on the system is read-only or
+# hidden from the process.
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+ReadWritePaths=/opt/bujji/logs /opt/bujji/data /opt/bujji/.env
+# ------------------------------------------------------------------------
 
 [Install]
 WantedBy=multi-user.target
