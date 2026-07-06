@@ -90,6 +90,9 @@ class Application:
         self._dashboard = DashboardServer(
             self._status, self._journal, config.dashboard.host,
             config.dashboard.port, config.dashboard.refresh_seconds, self._log,
+            stale_after=config.dashboard.stale_after_seconds,
+            stop_loss=config.risk.max_mtm_loss,
+            profit_target=config.risk.max_mtm_profit,
         )
         # NOTE: asyncio.Event() is intentionally NOT constructed here. On
         # Python < 3.10, an Event binds to whatever loop `get_event_loop()`

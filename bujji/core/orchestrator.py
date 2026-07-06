@@ -661,6 +661,7 @@ class Orchestrator:
         s.spot = candle.close
         s.vwap = round(self._signal.vwap, 2)
         s.vwap_real = self._signal.vwap_is_real
+        s.last_candle_ts = candle.timestamp.isoformat()  # Observability only (P4).
         orb = self._signal.opening_range
         if orb:
             s.orb_high, s.orb_low = orb.high, orb.low

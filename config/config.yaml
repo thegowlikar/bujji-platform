@@ -60,3 +60,7 @@ dashboard:
   host: 127.0.0.1
   port: 8787
   refresh_seconds: 5
+  # Show a STALE warning if the status hasn't updated for this many seconds.
+  # Must stay above the 5-min candle cadence (the status advances at most once
+  # per completed candle while idle); 420s flags a genuinely missed candle.
+  stale_after_seconds: 420

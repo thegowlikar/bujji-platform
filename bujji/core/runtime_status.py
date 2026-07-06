@@ -40,6 +40,10 @@ class RuntimeStatus:
     # C_D1: candle feed quality — detection only, purely observational.
     duplicate_candles_ignored: int = 0
     last_candle_gap_seconds: Optional[float] = None
+    # Dashboard Priority 4: timestamp (ISO, IST) of the last completed candle
+    # the loop processed — observability only, mirrored from the candle in
+    # _update_status_market; never read by any trading/runtime logic.
+    last_candle_ts: Optional[str] = None
     # Tick/Health Engine — independent of Signal Engine, observational plus
     # the tick-driven MTM/exit trigger's own visibility (never influences
     # candle-driven entries).

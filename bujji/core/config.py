@@ -109,6 +109,12 @@ class DashboardConfig(BaseModel):
     host: str = "127.0.0.1"
     port: int = 8787
     refresh_seconds: int = 5
+    # Dashboard Priority 1: show a STALE warning when the status hasn't updated
+    # for this many seconds. Default 420s (7 min) is deliberately > one 5-min
+    # candle cadence (the status advances at most once per completed candle
+    # while idle, so a shorter threshold would false-alarm every cycle); this
+    # flags a genuinely missed candle / hung loop, not normal idle waiting.
+    stale_after_seconds: int = 420
 
 
 class AppConfig(BaseModel):
