@@ -1,11 +1,12 @@
-"""FyersBroker mapping correctness — verified against live FYERS response
-shapes (see docs/FYERS_TRANSPORT_READINESS.md for the verification record).
+"""FyersBroker mapping correctness — verified against a real, authenticated
+FYERS session via the official fyers-apiv3 SDK (see
+docs/FYERS_TRANSPORT_READINESS.md for the live verification record).
 
 These tests exercise FyersBroker's parsing/param-construction logic directly
 against canned responses shaped exactly like what was empirically observed
-from a live, authenticated FYERS session. `_call` itself remains unwired
-(no real network transport is invoked); these prove the mapping logic sitting
-on top of `_call` is correct for when a transport is wired in.
+live. `_call` itself is overridden here (no real network call is made in the
+test suite); the real implementation is exercised separately by a live
+verification script, not by the automated test suite.
 """
 import pytest
 
@@ -39,14 +40,19 @@ def _creds(config):
 async def test_get_spot_uses_verified_index_symbol_and_parses_shape(config, logger):
     """Regression test for a real bug caught during live verification:
     "NSE:{underlying}-INDEX" naively produces "NSE:NIFTY-INDEX", which is not
-    a real instrument. The verified-live symbol is "NSE:NIFTY50-INDEX"."""
+    a real instrument. The verified-live symbol is "NSE:NIFTY50-INDEX", and
+    the real SDK's quotes() response is a LIST under "d", not a dict keyed by
+    symbol (that shape was the MCP tool's own reshaping, not the raw API)."""
     broker = RecordingFyers(_creds(config).broker, logger)
-    broker.responses["ltp"] = {"NSE:NIFTY50-INDEX": {"last_price": 24270.85}}
+    broker.responses["ltp"] = {
+        "s": "ok",
+        "d": [{"n": "NSE:NIFTY50-INDEX", "v": {"lp": 24270.85}}],
+    }
     spot = await broker.get_spot("NIFTY")
     assert spot == 24270.85
     action, params = broker.calls[0]
     assert action == "ltp"
-    assert params["instruments"] == ["NSE:NIFTY50-INDEX"]  # list, not scalar.
+    assert params["symbols"] == "NSE:NIFTY50-INDEX"  # Single symbol string.
 
 
 @pytest.mark.asyncio
@@ -54,18 +60,23 @@ async def test_get_spot_unmapped_underlying_falls_back_unverified(config, logger
     """Anything other than NIFTY has no verified mapping — falls back to the
     old, explicitly-unverified construction rather than a silent guess."""
     broker = RecordingFyers(_creds(config).broker, logger)
-    broker.responses["ltp"] = {"NSE:BANKNIFTY-INDEX": {"last_price": 1.0}}
+    broker.responses["ltp"] = {
+        "s": "ok", "d": [{"n": "NSE:BANKNIFTY-INDEX", "v": {"lp": 1.0}}],
+    }
     await broker.get_spot("BANKNIFTY")
     _, params = broker.calls[0]
-    assert params["instruments"] == ["NSE:BANKNIFTY-INDEX"]
+    assert params["symbols"] == "NSE:BANKNIFTY-INDEX"
 
 
 @pytest.mark.asyncio
-async def test_get_ltp_parses_verified_nested_shape(config, logger):
+async def test_get_ltp_parses_verified_list_shape(config, logger):
     broker = RecordingFyers(_creds(config).broker, logger)
     contract = OptionContract("NSE:NIFTY25JAN22000CE", "NIFTY", 22000,
                               OptionType.CE, "25JAN", 75)
-    broker.responses["ltp"] = {"NSE:NIFTY25JAN22000CE": {"last_price": 118.5}}
+    broker.responses["ltp"] = {
+        "s": "ok",
+        "d": [{"n": "NSE:NIFTY25JAN22000CE", "v": {"lp": 118.5}}],
+    }
     ltp = await broker.get_ltp(contract)
     assert ltp == 118.5
 
@@ -86,6 +97,7 @@ async def test_get_recent_candles_uses_verified_symbol_and_parses_six_field_rows
     action, params = broker.calls[0]
     assert action == "historical"
     assert params["symbol"] == "NSE:NIFTY 50"
+    assert "range_from" in params and "range_to" in params  # Real SDK: date range, not count.
     assert len(candles) == 1
     assert candles[0].open == 24375.65
     assert candles[0].volume == 21779034
@@ -93,7 +105,22 @@ async def test_get_recent_candles_uses_verified_symbol_and_parses_six_field_rows
 
 
 @pytest.mark.asyncio
-async def test_place_order_uses_verified_field_names(config, logger):
+async def test_get_recent_candles_truncates_to_requested_count(config, logger):
+    broker = RecordingFyers(_creds(config).broker, logger)
+    broker.responses["historical"] = {
+        "s": "ok",
+        "candles": [
+            [1783050300 + i * 300, 100 + i, 101 + i, 99 + i, 100 + i, 1000]
+            for i in range(10)
+        ],
+    }
+    candles = await broker.get_recent_candles("NIFTY", 5, 3)
+    assert len(candles) == 3
+    assert candles[-1].open == 109  # The most recent 3, in order.
+
+
+@pytest.mark.asyncio
+async def test_place_order_uses_verified_sdk_field_names(config, logger):
     broker = RecordingFyers(_creds(config).broker, logger)
     broker.responses["place_order"] = {
         "s": "ok", "id": "FY-ORDER-1", "status": 2, "filledQty": 75,
@@ -106,28 +133,44 @@ async def test_place_order_uses_verified_field_names(config, logger):
 
     action, params = broker.calls[0]
     assert action == "place_order"
-    # Verified real tool schema: separate exchange/tradingsymbol, string
-    # transaction_type/order_type, required product, tag (not orderTag).
-    assert params["exchange"] == "NSE"
-    assert params["tradingsymbol"] == "NIFTY25JAN22000CE"
-    assert params["transaction_type"] == "SELL"
-    assert params["order_type"] == "MARKET"
-    assert params["product"] == "MIS"
-    assert params["tag"] == "CID-1"
+    # Verified against the real fyers-apiv3 SDK's place_order() signature
+    # (introspected directly): combined symbol, int side/type, productType.
+    assert params["symbol"] == "NSE:NIFTY25JAN22000CE"
+    assert params["side"] == -1  # SELL.
+    assert params["type"] == 2   # Market.
+    assert params["productType"] == "INTRADAY"
+    assert params["orderTag"] == "CID-1"
     assert result.broker_order_id == "FY-ORDER-1"
     assert result.filled_quantity == 75
 
 
 @pytest.mark.asyncio
+async def test_place_order_buy_and_limit(config, logger):
+    broker = RecordingFyers(_creds(config).broker, logger)
+    broker.responses["place_order"] = {"s": "ok", "id": "FY-2", "status": 1}
+    contract = OptionContract("NSE:NIFTY25JAN22000CE", "NIFTY", 22000,
+                              OptionType.CE, "25JAN", 75)
+    req = OrderRequest(contract, Side.BUY, 75, "CID-2", limit_price=100.0)
+    await broker.place_order(req)
+    _, params = broker.calls[0]
+    assert params["side"] == 1
+    assert params["type"] == 1
+    assert params["limitPrice"] == 100.0
+
+
+@pytest.mark.asyncio
 async def test_get_order_uses_cached_order_id_when_known(config, logger):
+    """No separate order-history-by-id method exists on the real SDK —
+    get_order always fetches the full orderbook and filters locally."""
     broker = RecordingFyers(_creds(config).broker, logger)
     broker._cid_to_order_id["CID-1"] = "FY-ORDER-1"  # noqa: SLF001
-    broker.responses["order_history"] = {"s": "ok", "id": "FY-ORDER-1", "status": 2}
-
+    broker.responses["orders"] = {
+        "s": "ok",
+        "orderBook": [{"id": "FY-ORDER-1", "status": 2, "filledQty": 75}],
+    }
     result = await broker.get_order("CID-1")
-    action, params = broker.calls[0]
-    assert action == "order_history"
-    assert params["order_id"] == "FY-ORDER-1"
+    action, _ = broker.calls[0]
+    assert action == "orders"
     assert result.broker_order_id == "FY-ORDER-1"
 
 
@@ -135,18 +178,16 @@ async def test_get_order_uses_cached_order_id_when_known(config, logger):
 async def test_get_order_falls_back_to_tag_scan_when_uncached(config, logger):
     """The C3-critical case: we don't yet know the FYERS order_id (e.g. a
     crash right after placing) — must find it by scanning today's order book
-    for a matching tag, per the real tool surface (no direct tag lookup)."""
+    for a matching orderTag."""
     broker = RecordingFyers(_creds(config).broker, logger)
     broker.responses["orders"] = {
         "s": "ok",
         "orderBook": [
-            {"id": "FY-OTHER", "tag": "CID-OTHER", "status": 2},
-            {"id": "FY-ORDER-1", "tag": "CID-1", "status": 2, "filledQty": 75},
+            {"id": "FY-OTHER", "orderTag": "CID-OTHER", "status": 2},
+            {"id": "FY-ORDER-1", "orderTag": "CID-1", "status": 2, "filledQty": 75},
         ],
     }
     result = await broker.get_order("CID-1")
-    action, _ = broker.calls[0]
-    assert action == "orders"
     assert result.broker_order_id == "FY-ORDER-1"
     assert broker._cid_to_order_id["CID-1"] == "FY-ORDER-1"  # noqa: SLF001
 
@@ -167,7 +208,7 @@ async def test_cancel_order_resolves_order_id_via_cache(config, logger):
     await broker.cancel_order("CID-1")
     action, params = broker.calls[0]
     assert action == "cancel_order"
-    assert params["order_id"] == "FY-ORDER-1"  # FYERS's id, not our client tag.
+    assert params["id"] == "FY-ORDER-1"  # FYERS's own id, not our client tag.
 
 
 @pytest.mark.asyncio

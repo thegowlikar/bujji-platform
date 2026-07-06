@@ -1,32 +1,34 @@
 """FYERS broker adapter.
 
-Maps the broker-agnostic :class:`Broker` interface onto the real FYERS API
-surface. Network calls are isolated behind ``_call`` so the transport can be
-swapped without touching mapping logic.
+Maps the broker-agnostic :class:`Broker` interface onto the real FYERS API,
+via the official ``fyers-apiv3`` Python SDK. Network calls are isolated
+behind ``_call`` so the transport can be swapped without touching mapping
+logic.
 
-IMPORTANT — transport reality check (read before wiring ``_call``):
-MCP tools (the ``mcp__fyers__*`` names referenced in earlier revisions of this
-file) are only invokable by an LLM agent through the Claude Code tool-calling
-protocol. They are NOT a Python SDK or importable module — a standalone
-``python -m bujji.app`` process has no mechanism to call them. "Wire ``_call``
-to MCP" is therefore not something a deployed instance of this bot can ever
-do. The correct transport for a standalone deployment is FYERS's official
-REST API (or the ``fyers-apiv3`` Python SDK), authenticated with
-``app_id``/``access_token`` exactly as already threaded through this class.
+TRANSPORT: uses ``fyersModel.FyersModel`` (the official SDK), which is
+synchronous — each call is run via ``asyncio.to_thread`` so it doesn't block
+the event loop. This was verified end-to-end with a live, authenticated
+session (see ``docs/FYERS_TRANSPORT_READINESS.md``): real profile, quote,
+history, positions, orderbook, and funds calls all returned live data through
+this exact SDK from this codebase's own environment. (An earlier revision of
+this file assumed no direct network path existed and left ``_call`` as an
+unwired stub — that assumption was wrong and has been corrected; MCP tools
+were never the transport, only a verification aid used once.)
 
-``_call`` remains a placeholder for that REST/SDK integration. Every mapping
-method below it, however, has been corrected against RESPONSE SHAPES verified
-live (via an authenticated FYERS session reached through MCP tooling, used
-here purely as a verification oracle) — see
-``docs/FYERS_TRANSPORT_READINESS.md`` for the full verification record,
-per-method status, and unresolved limitations (in particular: ATM option
-contract resolution could NOT be verified against live data — see that
-method's docstring below).
+Every mapping method has been corrected against REAL response shapes and, for
+place_order/cancel_order, the real SDK parameter names (which differ from
+what an earlier revision assumed) — see
+``docs/FYERS_TRANSPORT_READINESS.md`` for the full verification record and the
+one still-unresolved limitation (ATM option contract resolution — see
+``resolve_atm_contract``'s docstring, now solved by ``instrument_master.py``).
 """
 from __future__ import annotations
 
+import asyncio
 import logging
 from typing import Any, Optional
+
+from fyers_apiv3 import fyersModel
 
 from ..core.clock import epoch_to_ist
 from ..core.config import BrokerConfig
@@ -91,6 +93,7 @@ class FyersBroker(Broker):
         self._cfg = config
         self._log = logger
         self._connected = False
+        self._client: Optional[fyersModel.FyersModel] = None
         # C3 idempotency bridge: FYERS's order-lookup tools key on FYERS's own
         # order_id, not on an arbitrary client tag (see get_order's docstring
         # for why). This in-memory map lets get_order/cancel_order resolve our
@@ -99,26 +102,49 @@ class FyersBroker(Broker):
         # relies on get_open_positions()/reconcile (C1), not this cache.
         self._cid_to_order_id: dict[str, str] = {}
 
+    def _get_client(self) -> fyersModel.FyersModel:
+        if self._client is None:
+            self._client = fyersModel.FyersModel(
+                client_id=self._cfg.app_id,
+                is_async=False,
+                token=self._cfg.access_token,
+                log_path="logs",
+            )
+        return self._client
+
+    # Dispatch table: action name -> (sdk_method_name, takes_data_arg).
+    # Verified live against a real authenticated session — see
+    # docs/FYERS_TRANSPORT_READINESS.md.
+    _NO_ARG_ACTIONS = {
+        "profile": "get_profile",
+        "positions": "positions",
+        "orders": "orderbook",
+        "funds": "funds",
+        "holdings": "holdings",
+    }
+    _DATA_ARG_ACTIONS = {
+        "ltp": "quotes",
+        "historical": "history",
+        "place_order": "place_order",
+        "cancel_order": "cancel_order",
+    }
+
     async def _call(self, action: str, **params: Any) -> dict:
         """Single choke-point for all FYERS transport.
 
-        Still unwired: this requires a real network client (FYERS REST API
-        over HTTPS, or the official ``fyers-apiv3`` SDK) that this sandboxed
-        session cannot construct and verify end-to-end (no direct network
-        egress to FYERS's REST endpoints is available here — only the
-        MCP-mediated tool calls used to verify the mappings below). Wiring
-        this is a discrete follow-up task; see
-        docs/FYERS_TRANSPORT_READINESS.md for exactly what is and isn't
-        blocked on it.
-
-        Whatever transport is wired in, its response MUST be passed through
+        Runs the synchronous ``fyers-apiv3`` SDK call in a thread so it
+        doesn't block the event loop. Every response MUST be passed through
         :meth:`_raise_if_auth_error` before being used (every call site below
         already does this) — do not bypass it for a "quick" new call site.
         """
-        raise NotImplementedError(
-            f"FYERS transport not wired: action={action} params={params}. "
-            f"See docs/FYERS_TRANSPORT_READINESS.md."
-        )
+        client = self._get_client()
+        if action in self._NO_ARG_ACTIONS:
+            method = getattr(client, self._NO_ARG_ACTIONS[action])
+            return await asyncio.to_thread(method)
+        if action in self._DATA_ARG_ACTIONS:
+            method = getattr(client, self._DATA_ARG_ACTIONS[action])
+            return await asyncio.to_thread(method, params)
+        raise ValueError(f"Unknown FYERS action: {action}")
 
     def _raise_if_auth_error(self, data: dict,
                              http_status: Optional[int] = None) -> None:
@@ -172,12 +198,19 @@ class FyersBroker(Broker):
 
     async def get_spot(self, underlying: str) -> float:
         symbol = _ltp_index_symbol(underlying)
-        # Verified live shape: LTP takes a LIST of instruments and returns a
-        # dict KEYED BY SYMBOL, e.g. {"NSE:NIFTY50-INDEX": {"last_price": ..}}
-        # — NOT the flat {"ltp": ...} this method previously assumed.
-        data = await self._call("ltp", instruments=[symbol])
+        return await self._quote(symbol)
+
+    async def _quote(self, symbol: str) -> float:
+        # Verified live against the REAL fyers-apiv3 SDK (not the MCP tool's
+        # own reshaped output, which an earlier pass mistakenly treated as
+        # the raw shape): `quotes({"symbols": "A,B"})` -> a LIST under "d",
+        # each item `{"n": symbol, "v": {"lp": price, ...}}`.
+        data = await self._call("ltp", symbols=symbol)
         self._raise_if_auth_error(data)
-        return float(data[symbol]["last_price"])
+        for row in data.get("d", []):
+            if row.get("n") == symbol:
+                return float(row["v"]["lp"])
+        raise KeyError(f"symbol {symbol} not found in quotes response: {data}")
 
     async def get_recent_candles(
         self, underlying: str, minutes: int, count: int
@@ -188,17 +221,27 @@ class FyersBroker(Broker):
         # 6th field). We therefore compute a true volume-weighted VWAP from
         # these candles. Do not swap this for the quote's volume/atp.
         #
-        # Verified live: rows are exactly [epoch, open, high, low, close,
-        # volume] (6 elements) under a top-level "candles" key, alongside
-        # "s"/"code"/"message" — matches the parsing below unchanged.
+        # The real SDK's history() has no "give me the last N candles" mode —
+        # it takes an explicit date range. Request from a few calendar days
+        # back (comfortably covers weekends/holidays for any `count` this
+        # codebase actually uses — 1, for the live candle loop) and take the
+        # tail. Verified live: rows are [epoch, open, high, low, close,
+        # volume] (6 elements) under a top-level "candles" key.
+        from datetime import timedelta
+        from ..core.clock import now_ist
+        today = now_ist().date()
+        lookback_days = max(5, (count // 75) + 3)  # ~75 five-min bars/session.
         data = await self._call(
             "historical",
             symbol=_historical_index_symbol(underlying),
             resolution=str(minutes),
-            count=count,
+            date_format="1",
+            range_from=(today - timedelta(days=lookback_days)).isoformat(),
+            range_to=today.isoformat(),
+            cont_flag="1",
         )
         self._raise_if_auth_error(data)
-        return [
+        candles = [
             Candle(
                 # D2: MUST be explicit IST — `datetime.fromtimestamp(row[0])`
                 # would interpret the epoch using the host's local timezone,
@@ -212,6 +255,7 @@ class FyersBroker(Broker):
             )
             for row in data.get("candles", [])
         ]
+        return candles[-count:] if count else candles
 
     async def resolve_atm_contract(
         self, underlying, spot, direction, strike_interval, lot_size
@@ -263,36 +307,33 @@ class FyersBroker(Broker):
         return f"NSE:{underlying}{expiry}{strike}{opt}"
 
     async def get_ltp(self, contract: OptionContract) -> float:
-        # Same verified shape correction as get_spot: list in, symbol-keyed
-        # dict out.
-        data = await self._call("ltp", instruments=[contract.symbol])
-        self._raise_if_auth_error(data)
-        return float(data[contract.symbol]["last_price"])
+        return await self._quote(contract.symbol)
 
     async def place_order(self, request: OrderRequest) -> OrderResult:
         # C3 IDEMPOTENCY REQUIREMENT: the ExecutionEngine guarantees at-most-once
         # placement per client_order_id ONLY IF this id is round-trippable —
-        # it is sent as the order `tag` here and matched back in get_order via
-        # the `_cid_to_order_id` cache / tag-scan fallback below.
+        # it is sent as `orderTag` here and matched back in get_order via the
+        # `_cid_to_order_id` cache / tag-scan fallback below.
         #
-        # Verified live: the real place-order tool takes `tradingsymbol` and
-        # `exchange` as SEPARATE fields (not a combined "NSE:SYMBOL" string),
-        # `transaction_type` as "BUY"/"SELL" (not a numeric side code), and
-        # `order_type` as "MARKET"/"LIMIT" (not a numeric code). A `product`
-        # field (CNC/MIS) is required and has no prior equivalent in this
-        # codebase — MIS (intraday) is used, matching this strategy's
-        # same-day-square-off design; this must be reviewed before go-live.
-        exchange, tradingsymbol = request.contract.symbol.split(":", 1)
+        # Verified against the real fyers-apiv3 SDK's place_order() signature
+        # (introspected directly, not guessed): combined `symbol` string,
+        # `side` as int (1=Buy, -1=Sell), `type` as int (2=Market, 1=Limit),
+        # `productType` string ("INTRADAY", not "MIS" — the SDK's own name).
+        # `orderTag`: NOT in the SDK's documented param list; passed anyway
+        # since it's a documented FYERS v3 REST field the SDK passes through
+        # verbatim. UNVERIFIED whether it's echoed back in orderbook() entries
+        # — cannot confirm without placing a real order (deliberately not
+        # done here); flagged in the readiness report.
         data = await self._call(
             "place_order",
-            tradingsymbol=tradingsymbol,
-            exchange=exchange,
-            transaction_type=request.side.value,  # "BUY" | "SELL" — matches Side enum.
-            quantity=request.quantity,
-            order_type="MARKET" if request.limit_price is None else "LIMIT",
-            price=request.limit_price or 0,
-            product="MIS",  # Intraday — see docstring note above.
-            tag=request.client_order_id,  # <-- idempotency key.
+            symbol=request.contract.symbol,
+            side=1 if request.side is Side.BUY else -1,
+            qty=request.quantity,
+            type=2 if request.limit_price is None else 1,
+            limitPrice=request.limit_price or 0,
+            productType="INTRADAY",
+            validity="DAY",
+            orderTag=request.client_order_id,  # <-- idempotency key.
         )
         self._raise_if_auth_error(data)
         result = self._map_order(request.client_order_id, data)
@@ -303,45 +344,40 @@ class FyersBroker(Broker):
     async def get_order(self, client_order_id: str) -> OrderResult:
         """Look up an order by OUR client_order_id.
 
-        FYERS has no tag-based order lookup tool — only `order_history`
-        (by FYERS's own order_id) and `orders` (all of today's orders, no
-        filter). So: if we already know the FYERS order_id for this
-        client_order_id (cached from a prior successful `place_order` in
-        this process), look it up directly. Otherwise — the exact scenario
-        C3 exists for, e.g. a crash/timeout right after placing — fetch
-        today's full order book and find the entry whose `tag` matches ours.
+        The real SDK has no separate order-history-by-id method (confirmed
+        by introspection: `fyersModel.FyersModel` defines no such method) —
+        only `orderbook()` (today's full order book, no filter). So: if we
+        already know the FYERS order id for this client_order_id (cached from
+        a prior successful `place_order` in this process), filter locally by
+        id. Otherwise — the exact scenario C3 exists for, e.g. a crash/
+        timeout right after placing — filter by `orderTag` instead.
 
-        ⚠ UNVERIFIED: whether `orders`' returned entries actually expose the
-        tag we set at placement (and under what field name) could not be
-        confirmed without placing a real order, which this codebase
-        deliberately does not do. Flagged in the readiness report.
+        ⚠ UNVERIFIED: whether `orderbook()` entries actually expose the
+        `orderTag` we set at placement (and under what response field name)
+        could not be confirmed without placing a real order, which this
+        codebase deliberately does not do. Flagged in the readiness report.
         """
         order_id = self._cid_to_order_id.get(client_order_id)
-        if order_id:
-            data = await self._call("order_history", order_id=order_id)
-            self._raise_if_auth_error(data)
-            return self._map_order(client_order_id, data)
-
-        data = await self._call("orders")  # All of today's orders.
+        data = await self._call("orders")  # orderbook() — today's orders.
         self._raise_if_auth_error(data)
         for order in data.get("orderBook", []):
-            if order.get("tag") == client_order_id:
+            matched = (order.get("id") == order_id if order_id
+                      else order.get("orderTag") == client_order_id)
+            if matched:
                 self._cid_to_order_id[client_order_id] = order.get("id", "")
                 return self._map_order(client_order_id, order)
         return OrderResult(client_order_id, OrderStatus.UNKNOWN,
                            message="not_found_in_todays_order_book")
 
     async def cancel_order(self, client_order_id: str) -> OrderResult:
-        # FYERS's cancel tool takes ITS OWN order_id, not our client tag.
+        # FYERS's cancel takes its own order `id`, not our client tag.
         order_id = self._cid_to_order_id.get(client_order_id)
         if not order_id:
-            # We don't know the FYERS order id yet — resolve it first via
-            # the same tag-scan get_order() falls back to.
             lookup = await self.get_order(client_order_id)
             order_id = self._cid_to_order_id.get(client_order_id)
             if not order_id:
                 return lookup  # Nothing to cancel; report what we found.
-        data = await self._call("cancel_order", order_id=order_id)
+        data = await self._call("cancel_order", id=order_id)
         self._raise_if_auth_error(data)
         return self._map_order(client_order_id, data)
 

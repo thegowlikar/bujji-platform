@@ -58,14 +58,19 @@ async def test_connect_fails_fast_with_only_app_id_set(config, logger):
 
 @pytest.mark.asyncio
 async def test_connect_with_credentials_reaches_transport(config, logger):
-    """With credentials present, connect() proceeds past the guard to the
-    actual transport call (still unwired, so NotImplementedError here proves
-    the guard did NOT block it — a real deployment wires `_call` to FYERS)."""
+    """With credentials present, connect() proceeds past the credential guard
+    and calls the real transport (proven here via a stubbed `_call` so the
+    test doesn't depend on live network access)."""
     config.broker.app_id = "some-app-id"
     config.broker.access_token = "some-token"
     broker = _fyers(config, logger)
-    with pytest.raises(NotImplementedError):
-        await broker.connect()
+    calls = []
+    async def fake_call(action, **params):
+        calls.append(action)
+        return {"s": "ok", "code": 200}
+    broker._call = fake_call  # noqa: SLF001
+    await broker.connect()
+    assert calls == ["profile"]  # The guard did not block it.
 
 
 def test_classifier_http_401_403(config, logger):

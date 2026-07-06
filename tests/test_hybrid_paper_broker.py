@@ -47,17 +47,18 @@ class FakeLiveFyers(FyersBroker):
         if action == "profile":
             return {"s": "ok", "code": 200}
         if action == "ltp":
-            # Matches the verified live shape: list of instruments in,
-            # symbol-keyed dict of {"last_price": ...} out.
-            symbol = params.get("instruments", [""])[0]
+            # Matches the verified-live real SDK shape: single "symbols"
+            # string in, a LIST under "d" out (not a symbol-keyed dict --
+            # that was the MCP tool's own reshaping, not the raw API).
+            symbol = params.get("symbols", "")
             price = self.spot if symbol.endswith("-INDEX") else self.premium
-            return {symbol: {"last_price": price}}
+            return {"s": "ok", "d": [{"n": symbol, "v": {"lp": price}}]}
         if action == "historical":
             base = 1_800_000_000
             candles = [
                 [base + i * 300, self.spot, self.spot + 5, self.spot - 5,
                  self.spot, 1000]
-                for i in range(params.get("count", 1))
+                for i in range(10)
             ]
             return {"s": "ok", "candles": candles}
         if action == "instruments":
