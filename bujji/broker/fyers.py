@@ -182,6 +182,28 @@ class FyersBroker(Broker):
                     f"FYERS auth failure (keyword match): {data.get('message')}"
                 )
 
+    def _raise_if_error(self, data: dict, action: str) -> None:
+        """Raise on ANY non-auth FYERS error response (e.g. rate limiting —
+        verified live: ``{"s": "error", "code": 429, "message": "request
+        limit reached"}``), rather than letting the caller silently fall
+        through to an empty/default result.
+
+        Transport-behavior fix only: `get_recent_candles` previously treated
+        an error response identically to "no candles in this window" —
+        returning an empty list instead of surfacing the failure — so a
+        rate-limited fetch was silently skipped rather than retried, unlike
+        get_spot/get_ltp (which already raise via a missing-key lookup and so
+        already get retried by ExecutionEngine). This makes that behavior
+        consistent without touching any strategy or orchestration logic —
+        the caller (ExecutionEngine._with_retry) already retries any
+        exception; this only ensures one is actually raised.
+        """
+        if str(data.get("s", "")).lower() == "error":
+            raise RuntimeError(
+                f"FYERS {action} error: code={data.get('code')} "
+                f"message={data.get('message')}"
+            )
+
     async def connect(self) -> None:
         if self._connected:
             return
@@ -247,6 +269,7 @@ class FyersBroker(Broker):
             cont_flag="1",
         )
         self._raise_if_auth_error(data)
+        self._raise_if_error(data, "historical")
         candles = [
             Candle(
                 # D2: MUST be explicit IST — `datetime.fromtimestamp(row[0])`

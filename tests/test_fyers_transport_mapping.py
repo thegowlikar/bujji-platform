@@ -122,6 +122,40 @@ async def test_get_recent_candles_truncates_to_requested_count(config, logger):
 
 
 @pytest.mark.asyncio
+async def test_get_recent_candles_raises_on_rate_limit_instead_of_silent_empty(
+    config, logger
+):
+    """Regression test for a real gap found during unattended-readiness
+    verification: a rate-limited historical response (verified live —
+    {"s": "error", "code": 429, "message": "request limit reached"}) was
+    previously indistinguishable from "no candles in this window" and
+    silently returned []. It must now raise, so ExecutionEngine's existing
+    retry/backoff actually retries it — the same behavior get_spot/get_ltp
+    already had via their own missing-key lookup."""
+    broker = RecordingFyers(_creds(config).broker, logger)
+    broker.responses["historical"] = {
+        "s": "error", "code": 429, "message": "request limit reached",
+    }
+    with pytest.raises(RuntimeError, match="429"):
+        await broker.get_recent_candles("NIFTY", 5, 1)
+
+
+@pytest.mark.asyncio
+async def test_get_recent_candles_still_raises_authentication_error_first(
+    config, logger
+):
+    """An auth-classified error must still raise AuthenticationError, not the
+    new generic RuntimeError — the two must not collide."""
+    from bujji.broker.errors import AuthenticationError
+    broker = RecordingFyers(_creds(config).broker, logger)
+    broker.responses["historical"] = {
+        "s": "error", "code": -8, "message": "Your token has expired",
+    }
+    with pytest.raises(AuthenticationError):
+        await broker.get_recent_candles("NIFTY", 5, 1)
+
+
+@pytest.mark.asyncio
 async def test_place_order_uses_verified_sdk_field_names(config, logger):
     broker = RecordingFyers(_creds(config).broker, logger)
     broker.responses["place_order"] = {
