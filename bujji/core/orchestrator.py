@@ -198,6 +198,16 @@ class Orchestrator:
         log_event(self._log, "recovery_resumed", symbol=pos.contract.symbol,
                   qty=pos.quantity, state=resume.value)
         self._persist()
+        # Restart-recovery gap fix: without this, a resumed position never
+        # re-triggers the Tick Engine's WebSocket subscription (it only
+        # listens for POSITION_OPENED), silently losing continuous tick-based
+        # MTM/stop-loss monitoring after every restart — falling back to the
+        # candle-only backstop indefinitely instead of just until reconnect.
+        await self._bus.publish(Event(EventType.POSITION_OPENED, {
+            "symbol": pos.contract.symbol, "qty": pos.quantity,
+            "entry_premium": pos.entry_price,
+            "narrative": pos.thesis.narrative if pos.thesis else "",
+        }))
 
     async def _flatten_orphan(self, live_short: dict) -> None:
         """Immediately buy back an unrecognized short — pure risk reduction."""
