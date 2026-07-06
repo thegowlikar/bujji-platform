@@ -74,6 +74,19 @@ class BrokerConfig(BaseModel):
     # Secrets are pulled from env, never committed to YAML.
     app_id: Optional[str] = None
     access_token: Optional[str] = None
+    # Verified live (docs/FYERS_TOKEN_LIFECYCLE.md): FYERS supports automatic
+    # daily access_token renewal via a refresh_token grant, valid ~15 days,
+    # requiring the account's trading PIN (not the login password/TOTP).
+    # All three optional — automatic renewal simply doesn't activate without
+    # them (falls back to requiring a manual re-login, exactly as before).
+    app_secret: Optional[str] = None
+    refresh_token: Optional[str] = None
+    pin: Optional[str] = None
+    # Where a refreshed access_token/refresh_token gets written back to, so a
+    # process restart picks up the renewed token instead of the stale one
+    # baked into the environment at process start. None disables persistence
+    # (renewal still works in-memory for the life of the process).
+    credentials_file: Optional[str] = None
     retry_attempts: int = 3
     retry_backoff_seconds: float = 1.5
     poll_interval_seconds: float = 1.0
@@ -122,6 +135,17 @@ class AppConfig(BaseModel):
         cfg.broker.app_id = os.getenv("FYERS_APP_ID", cfg.broker.app_id)
         cfg.broker.access_token = os.getenv(
             "FYERS_ACCESS_TOKEN", cfg.broker.access_token
+        )
+        # Optional — enable automatic daily token renewal (see
+        # docs/FYERS_TOKEN_LIFECYCLE.md). Absent by default; nothing changes
+        # if these aren't set.
+        cfg.broker.app_secret = os.getenv("FYERS_APP_SECRET", cfg.broker.app_secret)
+        cfg.broker.refresh_token = os.getenv(
+            "FYERS_REFRESH_TOKEN", cfg.broker.refresh_token
+        )
+        cfg.broker.pin = os.getenv("FYERS_PIN", cfg.broker.pin)
+        cfg.broker.credentials_file = os.getenv(
+            "FYERS_CREDENTIALS_FILE", cfg.broker.credentials_file
         )
         return cfg
 

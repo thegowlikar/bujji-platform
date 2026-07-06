@@ -37,6 +37,7 @@ from ..core.enums import Direction, OrderStatus, Side
 from ..core.models import Candle, OptionContract, OrderRequest, OrderResult
 from .base import Broker
 from .errors import AuthenticationError
+from .fyers_token_manager import FyersTokenManager
 
 # Best-effort FYERS error-code classification for auth/session failures
 # (E1/E2). These codes are commonly documented for FYERS API v3 as token/
@@ -102,6 +103,10 @@ class FyersBroker(Broker):
         # relies on get_open_positions()/reconcile (C1), not this cache.
         self._cid_to_order_id: dict[str, str] = {}
         self._instruments = None  # Lazily built InstrumentMaster (Phase C).
+        self._token_manager = FyersTokenManager(
+            config.app_id, config.app_secret, config.refresh_token, config.pin,
+            logger, config.credentials_file,
+        )
 
     def live_tick_credentials(self) -> Optional[tuple]:
         if not self._cfg.app_id or not self._cfg.access_token:
@@ -117,6 +122,11 @@ class FyersBroker(Broker):
                 log_path="logs",
             )
         return self._client
+
+    def _invalidate_client(self) -> None:
+        """Force _get_client() to rebuild against the current access_token —
+        used after an automatic refresh replaces it."""
+        self._client = None
 
     # Dispatch table: action name -> (sdk_method_name, takes_data_arg).
     # Verified live against a real authenticated session — see
@@ -220,8 +230,23 @@ class FyersBroker(Broker):
             )
         # Verified live shape: {"s": "ok", "code": 200, "message": "",
         # "data": {...profile fields...}}.
-        data = await self._call("profile")  # Validates the access token.
-        self._raise_if_auth_error(data)
+        try:
+            data = await self._call("profile")  # Validates the access token.
+            self._raise_if_auth_error(data)
+        except AuthenticationError as exc:
+            # The stored access_token is invalid/expired. Attempt one
+            # automatic renewal (see docs/FYERS_TOKEN_LIFECYCLE.md) before
+            # giving up — only proceeds if refresh_token/secret/pin are
+            # actually configured; otherwise raises the same clear,
+            # actionable error as before, unchanged.
+            if not self._token_manager.can_refresh:
+                raise
+            self._log.warning("fyers_access_token_invalid_attempting_refresh: %s", exc)
+            new_token = await self._token_manager.refresh()
+            self._cfg.access_token = new_token
+            self._invalidate_client()
+            data = await self._call("profile")
+            self._raise_if_auth_error(data)
         self._connected = True
 
     async def get_spot(self, underlying: str) -> float:

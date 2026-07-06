@@ -29,12 +29,20 @@ sudo systemctl stop bujji       # graceful stop (SIGTERM -> releases F4 lock)
 - **Does:** restart the process on crash, unhandled exception that escapes
   `Application.run()`, or `kill`. Restarts automatically after a VPS reboot
   (`WantedBy=multi-user.target` + `systemctl enable`).
-- **Does not:** fix the underlying cause of a crash, or automatically refresh
-  an expired broker token (E1/E2 remains detection + fail-fast alerting only —
-  the process will restart, immediately fail auth again at startup per
-  `Application.run()`'s fail-fast behavior, and keep restarting on
-  `RestartSec=5` until a human refreshes the token). Watch `journalctl -u
-  bujji` for `startup_blocked_auth_failure` if restarts are looping.
+- **Does:** automatically renew the FYERS access token daily, for up to ~15
+  days, **if** `FYERS_APP_SECRET`/`FYERS_REFRESH_TOKEN`/`FYERS_PIN` are
+  configured in the `EnvironmentFile` — see
+  [docs/FYERS_TOKEN_LIFECYCLE.md](../docs/FYERS_TOKEN_LIFECYCLE.md) for the
+  full verified lifecycle. Without those three, or once the refresh_token
+  itself expires (~15 days), token expiry is still detection + fail-fast
+  alerting only (E1/E2): the process restarts, fails auth again at startup,
+  and keeps restarting on `RestartSec=5` until a human completes the
+  interactive login again. Watch `journalctl -u bujji` for
+  `startup_blocked_auth_failure` (not configured / refresh_token expired) vs.
+  `fyers_token_refreshed_automatically` (working as intended).
+- **Does not:** fix the underlying cause of a crash, or bootstrap the
+  *first* `refresh_token` — that always requires one interactive login
+  (browser + TOTP), by design; FYERS provides no credential-only path to it.
 - **Does not:** protect against two supervised instances racing — F4's
   `ProcessLock` still enforces that independently; a `Restart=always` loop
   landing on a *still-running* prior instance (e.g. a slow shutdown) will

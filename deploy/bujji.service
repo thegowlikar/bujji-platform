@@ -13,7 +13,12 @@ User=bujji
 WorkingDirectory=/opt/bujji
 ExecStart=/opt/bujji/.venv/bin/python -m bujji.app --config /opt/bujji/config/config.yaml
 # Secrets belong in an EnvironmentFile with 0600 permissions, never in this
-# unit file or in config.yaml.
+# unit file or in config.yaml. Required: FYERS_APP_ID, FYERS_ACCESS_TOKEN.
+# Optional, enables automatic daily token renewal for ~15 days at a time
+# (see docs/FYERS_TOKEN_LIFECYCLE.md): FYERS_APP_SECRET, FYERS_REFRESH_TOKEN,
+# FYERS_PIN, FYERS_CREDENTIALS_FILE (defaults to in-memory only if unset —
+# set this to the SAME path as this EnvironmentFile so renewed tokens
+# survive a restart, e.g. FYERS_CREDENTIALS_FILE=/opt/bujji/.env).
 EnvironmentFile=/opt/bujji/.env
 # ------------------------------------------------------------------------
 
