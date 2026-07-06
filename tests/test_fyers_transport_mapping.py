@@ -85,9 +85,11 @@ async def test_get_ltp_parses_verified_list_shape(config, logger):
 async def test_get_recent_candles_uses_verified_symbol_and_parses_six_field_rows(
     config, logger
 ):
-    """The historical endpoint's verified-live symbol form is "NSE:NIFTY 50"
-    (space-separated) — confirmed DIFFERENT from the LTP endpoint's
-    "NSE:NIFTY50-INDEX" form; the two were not assumed interchangeable."""
+    """Both LTP and historical use the same canonical "NSE:NIFTY50-INDEX"
+    symbol — an earlier pass believed history() needed "NSE:NIFTY 50"
+    (space-separated) based on an MCP-mediated verification session that
+    silently normalizes that alias; calling the real SDK directly proved
+    that form is rejected outright ("Invalid symbol provided")."""
     broker = RecordingFyers(_creds(config).broker, logger)
     broker.responses["historical"] = {
         "s": "ok", "code": 200, "message": "",
@@ -96,7 +98,7 @@ async def test_get_recent_candles_uses_verified_symbol_and_parses_six_field_rows
     candles = await broker.get_recent_candles("NIFTY", 5, 1)
     action, params = broker.calls[0]
     assert action == "historical"
-    assert params["symbol"] == "NSE:NIFTY 50"
+    assert params["symbol"] == "NSE:NIFTY50-INDEX"
     assert "range_from" in params and "range_to" in params  # Real SDK: date range, not count.
     assert len(candles) == 1
     assert candles[0].open == 24375.65

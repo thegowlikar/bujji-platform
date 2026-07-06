@@ -43,7 +43,11 @@ from .errors import AuthenticationError
 # reference before go-live — treat this set as a starting point, not gospel.
 # The keyword fallback below is the more robust signal and does not depend on
 # getting the exact code list right.
-_FYERS_AUTH_ERROR_CODES: frozenset[int] = frozenset({-8, -15, -16, -17, -300})
+# NOTE: -300 was removed after live verification — it is FYERS's "Invalid
+# symbol provided" code, NOT an auth failure. Misclassifying it here caused a
+# real bug: a bad symbol in get_recent_candles raised AuthenticationError
+# instead of surfacing as the (correct) plain error it is.
+_FYERS_AUTH_ERROR_CODES: frozenset[int] = frozenset({-8, -15, -16, -17})
 _AUTH_KEYWORDS = (
     "token", "auth", "unauthoriz", "unauthenticated", "session expired",
     "login again", "invalid access", "not logged in",
@@ -64,26 +68,21 @@ _ORDER_STATUS_MAP = {
 
 # BUG FOUND DURING LIVE VERIFICATION: the index symbol is NOT simply
 # "NSE:{underlying}-INDEX" — that produces "NSE:NIFTY-INDEX", which is not a
-# real FYERS instrument. Two DIFFERENT verified-live forms exist depending on
-# the endpoint, and they were NOT assumed interchangeable — each is exactly
-# what was independently confirmed working against that specific endpoint
-# before the live session's access token expired mid-verification (see
-# docs/FYERS_TRANSPORT_READINESS.md):
-#   - LTP endpoint:        "NSE:NIFTY50-INDEX"  (confirmed via fyers_ltp)
-#   - Historical endpoint: "NSE:NIFTY 50"       (confirmed via fyers_historical)
-# Only NIFTY is mapped/verified for either — anything else falls back to the
-# old, unverified "-INDEX" construction and must not be trusted without the
-# same live check.
-_LTP_INDEX_SYMBOL = {"NIFTY": "NSE:NIFTY50-INDEX"}
-_HISTORICAL_INDEX_SYMBOL = {"NIFTY": "NSE:NIFTY 50"}
+# real FYERS instrument. The verified-live canonical symbol is
+# "NSE:NIFTY50-INDEX", confirmed directly against the real fyers-apiv3 SDK
+# for BOTH quotes() and history() (a prior pass believed these needed two
+# different forms — "NSE:NIFTY 50" for history — based on a verification
+# session mediated through an MCP tool that silently normalizes that alias;
+# calling the raw SDK directly proved "NSE:NIFTY 50" is REJECTED by history()
+# with "Invalid symbol provided". That earlier conclusion is corrected here.)
+# Only NIFTY is mapped/verified — anything else falls back to the old,
+# unverified "-INDEX" construction and must not be trusted without the same
+# live check.
+_INDEX_SYMBOL = {"NIFTY": "NSE:NIFTY50-INDEX"}
 
 
-def _ltp_index_symbol(underlying: str) -> str:
-    return _LTP_INDEX_SYMBOL.get(underlying, f"NSE:{underlying}-INDEX")
-
-
-def _historical_index_symbol(underlying: str) -> str:
-    return _HISTORICAL_INDEX_SYMBOL.get(underlying, f"NSE:{underlying}-INDEX")
+def _index_symbol(underlying: str) -> str:
+    return _INDEX_SYMBOL.get(underlying, f"NSE:{underlying}-INDEX")
 
 
 class FyersBroker(Broker):
@@ -197,7 +196,7 @@ class FyersBroker(Broker):
         self._connected = True
 
     async def get_spot(self, underlying: str) -> float:
-        symbol = _ltp_index_symbol(underlying)
+        symbol = _index_symbol(underlying)
         return await self._quote(symbol)
 
     async def _quote(self, symbol: str) -> float:
@@ -233,7 +232,7 @@ class FyersBroker(Broker):
         lookback_days = max(5, (count // 75) + 3)  # ~75 five-min bars/session.
         data = await self._call(
             "historical",
-            symbol=_historical_index_symbol(underlying),
+            symbol=_index_symbol(underlying),
             resolution=str(minutes),
             date_format="1",
             range_from=(today - timedelta(days=lookback_days)).isoformat(),
