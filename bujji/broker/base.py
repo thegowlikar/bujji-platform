@@ -83,6 +83,20 @@ class Broker(abc.ABC):
         detect and adopt/flatten live positions after a restart.
         """
 
+    def live_tick_credentials(self) -> Optional[tuple[str, str]]:
+        """(app_id, access_token) for a real FYERS WebSocket feed, or None.
+
+        Optional capability, not part of the required trading interface —
+        default is None (no live tick feed available). Only a broker with a
+        genuine live data leg overrides this (FyersBroker directly;
+        HybridPaperBroker delegates to its live leg). PaperBroker and any
+        other broker without live data simply never offers tick monitoring —
+        this is what "add the WebSocket only where it has a concrete runtime
+        purpose" means at the broker layer: no fake/synthetic tick feed is
+        ever fabricated for a broker that has no real one.
+        """
+        return None
+
     @staticmethod
     def atm_strike(spot: float, interval: int) -> int:
         """Nearest ATM strike to spot on the given interval grid."""

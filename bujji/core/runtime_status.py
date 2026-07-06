@@ -40,6 +40,14 @@ class RuntimeStatus:
     # C_D1: candle feed quality — detection only, purely observational.
     duplicate_candles_ignored: int = 0
     last_candle_gap_seconds: Optional[float] = None
+    # Tick/Health Engine — independent of Signal Engine, observational plus
+    # the tick-driven MTM/exit trigger's own visibility (never influences
+    # candle-driven entries).
+    ws_connected: bool = False
+    ws_connect_count: int = 0
+    ws_last_tick_age_seconds: Optional[float] = None
+    tick_mtm: Optional[float] = None
+    tick_last_decision: str = ""
     updated_at: str = field(default_factory=lambda: datetime.now().isoformat())
     recent_logs: list[str] = field(default_factory=list)
     # Latest VWAP audit record + a rolling history for "Market Data Health".

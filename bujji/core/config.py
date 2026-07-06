@@ -57,6 +57,11 @@ class RiskConfig(BaseModel):
     max_mtm_loss: float = 6000.0      # Rupees; positive number, treated as loss cap.
     daily_loss_limit: float = 6000.0  # Rupees.
     breakout_body_ratio: float = 0.60  # Body must be >= 60% of range.
+    # Opt-in take-profit for the tick-driven risk monitor (Tick Engine). None
+    # (the default) disables it entirely — zero behavior change from before
+    # this existed. This does not exist anywhere else in the strategy; it is
+    # a new, explicitly-opt-in safety knob, not an inferred/invented default.
+    max_mtm_profit: Optional[float] = None
 
 
 class StrategyConfig(BaseModel):

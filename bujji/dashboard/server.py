@@ -30,6 +30,8 @@ pre{{background:#12151c;padding:10px;border-radius:8px;max-height:240px;overflow
 </style></head><body>
 <h1>Bujji ORB-VWAP ATM Seller &nbsp; <span class='state' id='state'></span></h1>
 <div class='grid' id='cards'></div>
+<h3>Tick / WebSocket Health</h3>
+<div class='grid' id='tick_health'></div>
 <h3>Market Data Health</h3>
 <div id='mdh_banner'></div>
 <div class='grid' id='mdh'></div>
@@ -50,6 +52,15 @@ async function tick(){{
   ['Health',s.health_detail]
  ].map(([k,v])=>`<div class='card'><div class='k'>${{k}}</div><div class='v'>${{v}}</div></div>`).join('')
  +`<div class='card'><div class='k'>MTM</div><div class='v ${{cls}}'>${{mtm}}</div></div>`;
+ // Tick/Health Engine — independent of the candle-driven fields above.
+ const tickCls=(s.tick_mtm||0)>=0?'pos':'neg';
+ document.getElementById('tick_health').innerHTML=[
+  ['WS Connected',s.ws_connected?'yes':'no'],
+  ['Reconnect count',s.ws_connect_count],
+  ['Last tick age (s)',s.ws_last_tick_age_seconds==null?'-':s.ws_last_tick_age_seconds],
+  ['Tick decision',s.tick_last_decision||'-'],
+ ].map(([k,v])=>`<div class='card'><div class='k'>${{k}}</div><div class='v'>${{v}}</div></div>`).join('')
+ +`<div class='card'><div class='k'>Tick MTM</div><div class='v ${{tickCls}}'>${{s.tick_mtm==null?'-':s.tick_mtm}}</div></div>`;
  // Market Data Health section.
  const mdh=s.market_data_health;
  if(mdh){{const q=mdh.quality||{{}};

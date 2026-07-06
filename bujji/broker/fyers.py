@@ -103,6 +103,11 @@ class FyersBroker(Broker):
         self._cid_to_order_id: dict[str, str] = {}
         self._instruments = None  # Lazily built InstrumentMaster (Phase C).
 
+    def live_tick_credentials(self) -> Optional[tuple]:
+        if not self._cfg.app_id or not self._cfg.access_token:
+            return None
+        return (self._cfg.app_id, self._cfg.access_token)
+
     def _get_client(self) -> fyersModel.FyersModel:
         if self._client is None:
             self._client = fyersModel.FyersModel(

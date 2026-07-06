@@ -13,6 +13,7 @@ from typing import Optional
 
 from .broker.errors import AuthenticationError
 from .broker.factory import build_broker
+from .broker.fyers_ws import FyersTickFeed
 from .core.banner import render_startup_banner
 from .core.clock import ClockGuard, now_ist
 from .core.config import AppConfig
@@ -26,6 +27,8 @@ from .dashboard.server import DashboardServer
 from .execution.engine import ExecutionEngine
 from .journal.journal import TradeJournal
 from .signal.engine import SignalEngine
+from .tick.engine import TickEngine
+from .tick.health import HealthEngine
 from .trade.manager import TradeManager
 
 
@@ -65,6 +68,24 @@ class Application:
             config, self._log, self._signal, self._trade, self._exec,
             self._journal, self._store, self._status, self._bus,
         )
+
+        # Tick/Health Engines: separate from candle-driven Signal Engine by
+        # design. Only constructed with a real feed when the broker actually
+        # has live tick credentials (fyers/fyers_paper) — plain `paper` mode
+        # gets no WebSocket at all, since there's nothing real to subscribe to.
+        tick_creds = broker.live_tick_credentials()
+        self._tick_feed = (
+            FyersTickFeed(tick_creds[0], tick_creds[1], self._log,
+                         log_path=str(config.paths.log_dir))
+            if tick_creds else None
+        )
+        self._tick_engine = TickEngine(
+            self._orch, self._tick_feed, config, self._log, self._bus, self._status,
+        )
+        self._health_engine = HealthEngine(
+            self._tick_feed, self._orch, self._status, self._log,
+        )
+
         self._wire_event_subscribers()
         self._dashboard = DashboardServer(
             self._status, self._journal, config.dashboard.host,
@@ -136,6 +157,7 @@ class Application:
             self._status.healthy = False
             self._status.health_detail = f"auth_expired (startup): {exc}"
             raise
+        self._health_engine.start()
         self._log.info("Bujji started | broker=%s", self._cfg.broker.name)
 
         try:
@@ -235,6 +257,8 @@ class Application:
 
     async def _shutdown(self) -> None:
         self._log.info("Shutting down gracefully")
+        await self._tick_engine.stop()
+        await self._health_engine.stop()
         self._dashboard.stop()
         self._lock.release()
 

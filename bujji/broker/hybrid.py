@@ -65,6 +65,12 @@ class HybridPaperBroker(Broker):
         await self._live_data.connect()
         await self._ledger.connect()
 
+    def live_tick_credentials(self):
+        # Delegates to the live data leg — this is exactly the "live data,
+        # paper execution" split: tick monitoring is market data, so it comes
+        # from the real broker, same as candles/quotes do.
+        return self._live_data.live_tick_credentials()
+
     async def get_spot(self, underlying: str) -> float:
         return await self._live_data.get_spot(underlying)
 

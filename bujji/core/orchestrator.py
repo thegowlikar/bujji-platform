@@ -584,6 +584,16 @@ class Orchestrator:
     def has_open_position(self) -> bool:
         return self._trade.position is not None
 
+    @property
+    def position(self) -> Optional[Position]:
+        """Read-only accessor for the current position, if any.
+
+        Added for the Tick Engine (continuous tick-driven MTM/risk
+        monitoring) so it doesn't need to reach into TradeManager's private
+        state. Read-only — nothing about position management changes.
+        """
+        return self._trade.position
+
     def _journal_trade(self, pos: Position, exit_time: datetime, exit_spot: float,
                        exit_premium: float, reason: str) -> None:
         holding_min = (exit_time - pos.entry_time).total_seconds() / 60.0
