@@ -47,9 +47,11 @@ class FakeLiveFyers(FyersBroker):
         if action == "profile":
             return {"s": "ok", "code": 200}
         if action == "ltp":
-            symbol = params.get("symbol", "")
+            # Matches the verified live shape: list of instruments in,
+            # symbol-keyed dict of {"last_price": ...} out.
+            symbol = params.get("instruments", [""])[0]
             price = self.spot if symbol.endswith("-INDEX") else self.premium
-            return {"s": "ok", "ltp": price}
+            return {symbol: {"last_price": price}}
         if action == "historical":
             base = 1_800_000_000
             candles = [
