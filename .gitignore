@@ -5,3 +5,4 @@ logs/
 data/
 .pytest_cache/
 .env
+.env*
