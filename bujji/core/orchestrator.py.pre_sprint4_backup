@@ -1,0 +1,1055 @@
+"""Orchestrator — wires the three modules together via the state machine.
+
+The orchestrator owns NO trading logic of its own. It:
+  * pulls completed candles from the Execution Engine (broker),
+  * feeds them to the Signal Engine (Module 1),
+  * hands accepted signals to the Execution Engine (Module 3) to open a position,
+  * and on every subsequent candle asks the Trade Manager (Module 2) to
+    reassess, executing an exit when told to.
+
+All branching is expressed as FSM transitions, not nested ifs.
+"""
+from __future__ import annotations
+
+import asyncio
+import logging
+import os
+from collections import deque
+from datetime import datetime, timedelta
+from typing import Optional
+
+from ..broker.base import Broker
+from ..broker.errors import AuthenticationError
+from ..capital.engine import CapitalManagementEngine
+from ..capital.exceptions import CapitalRejectedError
+from ..execution.engine import ExecutionEngine, ExecutionError
+from ..journal.journal import TradeJournal, TradeRecord
+from ..intelligence.runner import run_intelligence
+from . import evidence_assembly, execution_adapter, execution_decision, market_observation, order_planning
+from ..journal.decision_journal import DecisionJournal
+from ..ops.alerts import evaluate as evaluate_alerts
+from ..ops.health_monitor import HealthMonitor
+from ..ops.incident_log import IncidentLog
+from ..ops.models import HealthState
+from ..signal.engine import SignalEngine
+from ..signal.vwap_audit import VwapAuditRecord
+from ..trade.manager import TradeManager
+from .clock import now_ist
+from .config import AppConfig
+from .enums import Direction, OptionType, Side, State
+from .event_bus import Event, EventBus, EventType
+from .logging_setup import log_event
+from .pipeline_stages import stage
+from .models import Candle, DecisionSnapshot, ExecutionPlan, OptionContract, OrderRequest, Position, Signal, TradeIntention
+from .position_codec import PositionSchemaError, position_from_dict, position_to_dict
+from .runtime_status import RuntimeStatus
+from .session_state import SessionSnapshot, SessionStore
+from .state_machine import StateMachine
+
+
+class Orchestrator:
+    """Drives one trading day through the finite state machine."""
+
+    def __init__(
+        self,
+        config: AppConfig,
+        logger: logging.Logger,
+        signal_engine: SignalEngine,
+        trade_manager: TradeManager,
+        execution: ExecutionEngine,
+        journal: TradeJournal,
+        session_store: SessionStore,
+        status: RuntimeStatus,
+        event_bus: Optional[EventBus] = None,
+        capital_engine: Optional[CapitalManagementEngine] = None,
+        decision_journal: Optional[DecisionJournal] = None,
+        health_monitor: Optional[HealthMonitor] = None,
+        incident_log: Optional[IncidentLog] = None,
+    ) -> None:
+        self._cfg = config
+        self._log = logger
+        self._signal = signal_engine
+        self._trade = trade_manager
+        self._exec = execution
+        self._journal = journal
+        self._store = session_store
+        self._status = status
+        # Decision Journal foundation (Sprint 2) -- same optional-with-
+        # auto-construct pattern as capital_engine/event_bus above.
+        self._decision_journal = decision_journal or DecisionJournal(
+            config.paths.decision_journal, logger,
+        )
+        # Operations Layer (Sprint 4) -- observes only, never decides.
+        self._health_monitor = health_monitor or HealthMonitor(
+            logger, config.paths.ops_restart_count, config.paths.decision_journal,
+        )
+        self._incident_log = incident_log or IncidentLog(config.paths.incident_log, logger)
+        self._ops_previous_state: Optional[HealthState] = None
+        self._bus = event_bus or EventBus(logger)
+        # Capital Management Engine (platform subsystem, strategy-
+        # independent) -- auto-constructed against this Orchestrator's own
+        # broker if the caller doesn't inject one explicitly, exactly like
+        # event_bus above. No strategy code in this class calculates a
+        # quantity directly; _enter() below always asks this engine.
+        self._capital = capital_engine or CapitalManagementEngine(
+            execution._broker, logger,  # noqa: SLF001 - composition root.
+            safety_buffer=config.risk.margin_safety_buffer,
+            configured_max_lots=config.risk.lots,
+        )
+        self._fsm = StateMachine(logger, on_transition=self._on_transition)
+        self._trades_taken = 0
+        self._last_candle_ts: Optional[datetime] = None
+        self._cycle_decision = ""  # Decision label for the current audit cycle.
+        # Idempotency keys for in-flight orders (C3), persisted for recovery.
+        self._entry_cid: Optional[str] = None
+        self._exit_cid: Optional[str] = None
+        # How many times to re-attempt flattening a residual before giving up.
+        self._flatten_attempts = max(1, config.broker.retry_attempts)
+        # D1: whether the wall clock is currently trusted. When False, new
+        # entries are blocked (capital-safety gate); existing positions are
+        # still managed/exited normally — distrust of the clock must never
+        # strand a position.
+        self._clock_trusted = True
+        self._clock_distrust_detail = ""
+        # Market Intelligence Core (observation-only, read-only dashboard
+        # view -- see bujji/intelligence/). A bounded real spot-candle
+        # history purely for the Regime Brain; never read by any trading
+        # logic. Per-leg premiums are captured opportunistically in
+        # _handle_in_position (only when the real per-candle-volume path is
+        # used) and cleared on entry/exit so a closed trade's numbers can
+        # never leak into the next cycle's intelligence reading.
+        self._spot_candle_history: deque = deque(maxlen=80)
+        self._last_ce_premium: Optional[float] = None
+        self._last_pe_premium: Optional[float] = None
+        # Production Pipeline Entry 11, item 4 -- purely additive, never
+        # read back into any decision; last entry's pre-execution snapshot.
+        self._last_decision_snapshot: Optional[DecisionSnapshot] = None
+
+    # ------------------------------------------------------------------ #
+    # Lifecycle
+    # ------------------------------------------------------------------ #
+    async def startup(self) -> None:
+        await self._exec.connect()
+        await self._recover()
+
+    async def _recover(self) -> None:
+        """Rebuild session state after a restart and reconcile with the broker.
+
+        Capital-protection contract (C1): an open position is NEVER abandoned.
+        We cross-check the persisted snapshot against live broker positions and
+        take the safe action for every combination:
+
+          parsed + live   -> resume management of the known position
+          parsed + flat    -> the position already closed; finalize
+          none   + live    -> an orphan (or an unparseable snapshot, see below)
+                              we don't recognize; flatten immediately
+          none   + flat    -> clean start; honor trade count only
+
+        C_D2 (schema safety): ``snap.position`` is operator-editable JSON and
+        may be corrupt or schema-mismatched even though the file itself parsed
+        as valid JSON (a missing/renamed key, wrong nesting, a garbage value).
+        We NEVER let that crash startup or silently build a broken Position.
+        If it can't be reconstructed, we treat it exactly like "no saved
+        position" — broker reconciliation is the ground truth and still finds
+        (and flattens) any real live position via the orphan path below.
+        """
+        snap = self._store.load()
+        self._trades_taken = snap.trades_taken
+        self._entry_cid = snap.entry_client_order_id
+        self._exit_cid = snap.exit_client_order_id
+
+        parsed_pos = self._safe_parse_position(snap.position)
+        # Only use the saved dict to *prefer-match* a broker position when it
+        # parsed successfully; a corrupt dict must not influence matching.
+        match_hint = snap.position if parsed_pos is not None else None
+
+        broker_positions = await self._exec.reconcile()
+        live_short = self._find_live_short(broker_positions, match_hint)
+
+        if parsed_pos is not None and live_short:
+            await self._resume_position(parsed_pos, snap, live_short)
+            return
+        if parsed_pos is not None and not live_short:
+            log_event(self._log, "recovery_position_already_flat",
+                      symbol=parsed_pos.contract.symbol)
+            self._fsm.restore(State.DONE_FOR_DAY, "position_already_closed")
+            self._persist()
+            return
+        if live_short:  # No usable saved position, but a live short exists.
+            log_event(self._log, "recovery_orphan_position", position=live_short)
+            self._status.healthy = False
+            # Preserve a prior corrupt-snapshot detail (set by
+            # _safe_parse_position) instead of clobbering it — both facts
+            # matter for the operator investigating this incident.
+            prior = self._status.health_detail
+            corrupt_note = f"{prior}; " if prior and "corrupt" in prior else ""
+            self._status.health_detail = f"{corrupt_note}orphan_position_flattening"
+            # A straddle can leave two live shorts (CE + PE) behind a single
+            # corrupted/unparseable snapshot — flatten every one of them, not
+            # just the first match, or a leg silently survives unmanaged.
+            for short in self._find_all_live_shorts(broker_positions):
+                await self._flatten_orphan(short)
+            self._fsm.restore(State.DONE_FOR_DAY, "orphan_flattened")
+            self._persist()
+            return
+
+        # Clean slate: only carry forward the trade count (never re-open).
+        if snap.trades_taken >= self._cfg.strategy.max_trades_per_day:
+            self._fsm.restore(State.DONE_FOR_DAY, "recovered_max_trades")
+            self._persist()
+
+    def _safe_parse_position(self, data: Optional[dict]) -> Optional[Position]:
+        """Parse a saved position dict, never raising (C_D2).
+
+        Returns ``None`` — and marks the session unhealthy so an operator
+        notices — instead of propagating a schema mismatch out of startup.
+        """
+        if not data:
+            return None
+        try:
+            return position_from_dict(data)
+        except PositionSchemaError as exc:
+            log_event(self._log, "recovery_snapshot_position_corrupt", err=str(exc))
+            self._status.healthy = False
+            self._status.health_detail = f"snapshot_position_corrupt: {exc}"
+            return None
+
+    def _find_live_short(self, broker_positions: list[dict],
+                         saved: Optional[dict]) -> Optional[dict]:
+        """Return the broker short position we own, if any.
+
+        Prefers an exact symbol match with the saved position; otherwise falls
+        back to any open short (side SELL, qty > 0) so an unexpected position is
+        still surfaced for safety handling.
+        """
+        shorts = self._find_all_live_shorts(broker_positions)
+        if saved:
+            want = saved.get("contract", {}).get("symbol")
+            for p in shorts:
+                if p.get("symbol") == want:
+                    return p
+        return shorts[0] if shorts else None
+
+    def _find_all_live_shorts(self, broker_positions: list[dict]) -> list[dict]:
+        """Return every open short on the broker (both straddle legs, if any)."""
+        return [
+            p for p in broker_positions
+            if str(p.get("side")) == Side.SELL.value and int(p.get("qty", 0)) > 0
+        ]
+
+    async def _resume_position(self, pos: Position, snap: SessionSnapshot,
+                               live_short: dict) -> None:
+        """Reinstate a known open position and resume managing it."""
+        broker_qty = int(live_short.get("qty", pos.quantity))
+        if broker_qty != pos.quantity:
+            # Trust the broker's actual size (covers partial-fill drift).
+            log_event(self._log, "recovery_qty_adjusted",
+                      saved=pos.quantity, broker=broker_qty)
+            pos.quantity = broker_qty
+        # A synthetic flat candle at the entry gives the momentum check a base.
+        synth = Candle(pos.entry_time, pos.entry_spot, pos.entry_spot,
+                       pos.entry_spot, pos.entry_spot, 0.0)
+        self._trade.open_position(pos, synth)
+        resume = State.EXITING if snap.state == State.EXITING.value else State.IN_POSITION
+        self._fsm.restore(resume, "resume_open_position")
+        self._update_status_position(pos.entry_price, pos.entry_price)
+        log_event(self._log, "recovery_resumed", symbol=pos.contract.symbol,
+                  qty=pos.quantity, state=resume.value)
+        self._persist()
+        # Restart-recovery gap fix: without this, a resumed position never
+        # re-triggers the Tick Engine's WebSocket subscription (it only
+        # listens for POSITION_OPENED), silently losing continuous tick-based
+        # MTM/stop-loss monitoring after every restart — falling back to the
+        # candle-only backstop indefinitely instead of just until reconnect.
+        await self._bus.publish(Event(EventType.POSITION_OPENED, {
+            "symbol": pos.contract.symbol, "qty": pos.quantity,
+            "entry_premium": pos.entry_price,
+            "narrative": pos.thesis.narrative if pos.thesis else "",
+        }))
+
+    async def _flatten_orphan(self, live_short: dict) -> None:
+        """Immediately buy back an unrecognized short — pure risk reduction."""
+        symbol = str(live_short["symbol"])
+        qty = int(live_short["qty"])
+        opt = OptionType.CE if symbol.endswith("CE") else OptionType.PE
+        contract = OptionContract(
+            symbol=symbol, underlying=self._cfg.market.underlying, strike=0,
+            option_type=opt, expiry="", lot_size=self._cfg.market.lot_size,
+        )
+        # Symbol-qualified so two legs (CE + PE) flattened in the same second
+        # get distinct client order ids instead of the second being silently
+        # adopted as a duplicate of the first (idempotent-submit behavior).
+        cid = f"ORPHAN-EXIT-{now_ist().strftime('%Y%m%d%H%M%S')}-{symbol}"
+        request = OrderRequest(contract=contract, side=Side.BUY, quantity=qty,
+                               client_order_id=cid, tag="orphan_exit")
+        try:
+            await self._exec.submit_and_confirm(request)
+            self._clear_auth_flag()
+            log_event(self._log, "orphan_flattened", symbol=symbol, qty=qty)
+        except AuthenticationError as exc:
+            self._mark_auth_expired("orphan_flatten", exc)
+        except ExecutionError as exc:
+            # Could not flatten — keep unhealthy so operators are alerted.
+            log_event(self._log, "orphan_flatten_failed", symbol=symbol,
+                      err=str(exc))
+            self._status.health_detail = f"orphan_flatten_failed: {exc}"
+
+    # ------------------------------------------------------------------ #
+    # Auth/session failure handling (E1/E2) — detection + alerting only.
+    # Resolving an expired/invalidated session (refreshing the token) is a
+    # human action; nothing here attempts to obtain new credentials.
+    # ------------------------------------------------------------------ #
+    def _mark_auth_expired(self, context: str, exc: Exception) -> None:
+        """Flag a distinct, human-actionable auth failure.
+
+        Deliberately separate from the generic ``healthy``/``health_detail``
+        churn other failure classes cause, so an operator (or the dashboard)
+        can tell at a glance "this needs a token refresh and a restart" apart
+        from "something else went wrong."
+        """
+        log_event(self._log, "auth_expired_detected", context=context, err=str(exc))
+        self._status.healthy = False
+        self._status.auth_expired = True
+        self._status.health_detail = f"auth_expired ({context}): {exc}"
+
+    def _clear_auth_flag(self) -> None:
+        """Self-heal the distinct auth flag once a broker call succeeds again.
+
+        Only touches this specific flag/detail — never overwrites an unrelated
+        unhealthy condition another failure class may have set — so a resolved
+        auth issue (token refreshed, process restarted) or a one-off
+        misclassification doesn't linger as a false alarm.
+        """
+        if self._status.auth_expired:
+            self._status.auth_expired = False
+            if self._status.health_detail.startswith("auth_expired"):
+                self._status.healthy = True
+                self._status.health_detail = "ok"
+
+    # ------------------------------------------------------------------ #
+    # Clock trust (D1) — driven by the app run loop's ClockGuard
+    # ------------------------------------------------------------------ #
+    def set_clock_trust(self, trusted: bool, detail: str = "") -> None:
+        """Update whether the wall clock is currently trusted.
+
+        Called once per loop boundary by the app run loop after checking for
+        drift. Only gates NEW entries (see ``_handle_pre_position``) — it
+        never interferes with managing or exiting an existing position, and
+        never overrides the wall-clock EOD square-off, since distrust of the
+        clock must never be used as a reason to strand a position.
+        """
+        if trusted and not self._clock_trusted:
+            log_event(self._log, "clock_trust_restored")
+        self._clock_trusted = trusted
+        self._clock_distrust_detail = detail
+        self._status.clock_trusted = trusted
+        self._status.clock_drift_detail = detail
+
+    @property
+    def bus(self) -> EventBus:
+        return self._bus
+
+    def _on_transition(self, previous: State, target: State) -> None:
+        self._status.state = target.value
+        self._persist()
+        self._bus.publish_nowait(Event(
+            EventType.STATE_CHANGED,
+            {"from": previous.value, "to": target.value},
+        ))
+
+    def _persist(self) -> None:
+        pos = self._trade.position
+        snap = SessionSnapshot(
+            state=self._fsm.state.value,
+            trades_taken=self._trades_taken,
+            position=position_to_dict(pos) if pos else None,
+            entry_client_order_id=self._entry_cid,
+            exit_client_order_id=self._exit_cid,
+        )
+        self._store.save(snap)
+
+    # ------------------------------------------------------------------ #
+    # Per-candle driver
+    # ------------------------------------------------------------------ #
+    async def on_candle(self, candle: Candle) -> None:
+        """Main entry point — process exactly one completed candle.
+
+        C_D1 (detection only, no remediation): a duplicate/stale candle
+        (timestamp at or before the last processed one) is ignored outright so
+        it can never double-count momentum/excursion or trigger a spurious
+        re-evaluation. A gap larger than expected is logged and surfaced for
+        operator visibility — it does not halt trading or attempt to backfill.
+        """
+        if self._fsm.is_terminal():
+            return
+
+        # --- Stage 1: Market Observation ------------------------------- #
+        # Candle admission: duplicate/stale detection, gap detection, and
+        # publication onto the event bus. Identical to before this sprint
+        # -- only wrapped with start/finish/duration/outcome logging.
+        with stage(self._log, "market_observation", candle_ts=candle.timestamp.isoformat()):
+            # Production Engineering Sprint 3 (Stage Interface Extraction):
+            # the duplicate/stale/gap CLASSIFICATION is now a pure function
+            # (market_observation.classify_candle) -- identical thresholds
+            # and outcomes to the prior inline code. All side effects
+            # (counters, logging, early return) stay here, unchanged.
+            admission = market_observation.classify_candle(
+                candle.timestamp, self._last_candle_ts, self._cfg.timing.candle_minutes,
+            )
+            if admission.action == market_observation.DUPLICATE_OR_STALE:
+                self._status.duplicate_candles_ignored += 1
+                log_event(
+                    self._log, "duplicate_or_stale_candle_ignored",
+                    candle_ts=candle.timestamp.isoformat(),
+                    last_ts=self._last_candle_ts.isoformat(),
+                )
+                return
+            if admission.action == market_observation.GAP_DETECTED:
+                self._status.last_candle_gap_seconds = admission.gap_seconds
+                log_event(
+                    self._log, "candle_gap_detected",
+                    expected_minutes=self._cfg.timing.candle_minutes,
+                    actual_gap_seconds=admission.gap_seconds,
+                    previous_ts=self._last_candle_ts.isoformat(),
+                    current_ts=candle.timestamp.isoformat(),
+                )
+            self._last_candle_ts = candle.timestamp
+            self._spot_candle_history.append(candle)  # MIC: observation-only, never read by trading logic.
+
+            await self._bus.publish(Event(
+                EventType.CANDLE_CLOSED,
+                {"timestamp": candle.timestamp, "close": candle.close},
+            ))
+
+        # --- Stage 3: Strategy Evaluation -------------------------------- #
+        # Module 1 (VWAP/ORB Signal Engine) always runs to keep state
+        # current, then the FSM dispatches to the entry or in-position
+        # path exactly as before. (There is no separate "Stage 2: Market
+        # Intelligence" boundary here -- see Stage Documentation for why
+        # the MIC brains run at the end of the cycle instead, unchanged
+        # from prior behaviour.)
+        with stage(self._log, "strategy_evaluation", candle_ts=candle.timestamp.isoformat()):
+            signal = self._signal.on_candle(candle)
+            self._update_status_market(candle)
+            self._cycle_decision = f"NO_TRADE:{signal.reason}"
+
+            if self._fsm.state in (State.WAITING, State.READY):
+                await self._handle_pre_position(candle, signal)
+            elif self._fsm.state is State.IN_POSITION:
+                await self._handle_in_position(candle)
+
+        # Audit runs LAST and reads state only — never affects trading logic.
+        self._emit_vwap_audit(candle)
+        # --- Stage 2: Market Intelligence --------------------------------- #
+        # The 8 MIC brains. Deliberately positioned here, unchanged from
+        # before this sprint: they observe the state THIS candle already
+        # produced, for the dashboard/journal/next-candle context -- they
+        # do not feed back into this candle's own Strategy Evaluation.
+        with stage(self._log, "market_intelligence", candle_ts=candle.timestamp.isoformat()):
+            await self._update_intelligence(candle)
+        self._update_ops_health()
+
+    async def _handle_pre_position(self, candle: Candle, signal: Signal) -> None:
+        if self._signal.orb_ready and self._fsm.state is State.WAITING:
+            self._fsm.transition(State.READY, "orb_complete")
+
+        if not signal.is_trade:
+            return
+        if self._trades_taken >= self._cfg.strategy.max_trades_per_day:
+            self._fsm.transition(State.DONE_FOR_DAY, "max_trades_reached")
+            return
+        if not self._clock_trusted:
+            # D1: refuse to open a NEW position while the wall clock is not
+            # trusted (a drift/jump was just detected). This never affects an
+            # existing position — only new-entry capital is gated.
+            log_event(self._log, "entry_blocked_clock_untrusted",
+                      detail=self._clock_distrust_detail)
+            return
+
+        await self._bus.publish(Event(EventType.SIGNAL_GENERATED, {
+            "direction": signal.direction.value if signal.direction else None,
+            "narrative": signal.thesis.narrative if signal.thesis else "",
+        }))
+        self._fsm.transition(State.CONFIRMED, "signal_confirmed")
+        # Evidence Assembly boundary (Production Pipeline Entry 11, Layer 3):
+        # the Strategy Layer's only output is this TradeIntention -- a
+        # lossless reframing of `signal`, never a broker/order object.
+        # decision_id (Sprint 2, Decision Lineage) is generated here, once,
+        # from the same candle timestamp _enter() already uses for its
+        # idempotency keys -- every downstream artifact shares this value.
+        decision_id = f"DEC-{candle.timestamp.strftime('%Y%m%d%H%M%S')}"
+        intention = evidence_assembly.build_trade_intention(signal, decision_id)
+        try:
+            await self._enter(candle, intention)
+        except AuthenticationError as exc:
+            # E1/E2: distinct from a generic failure — the broker session/
+            # token is invalid. Retrying won't help; a human must refresh
+            # credentials and restart. Safe outcome: no position was created.
+            self._mark_auth_expired("entry", exc)
+            self._fsm.transition(State.READY, "entry_failed_auth")
+        except ExecutionError as exc:
+            log_event(self._log, "entry_failed", err=str(exc))
+            self._status.healthy = False
+            self._status.health_detail = f"entry_failed: {exc}"
+            # Roll back to READY; do not consume the day on a broker glitch.
+            self._fsm.transition(State.READY, "entry_failed_rollback")
+        except CapitalRejectedError as exc:
+            # Capital Management Engine refused the trade -- insufficient
+            # margin, unverifiable funds/margin response, or the configured
+            # ceiling combined with available capital yields zero safe
+            # lots. No order was ever placed (the CME is consulted before
+            # any OrderRequest is built). Roll back to READY, not
+            # DONE_FOR_DAY -- a capital condition can change intraday (e.g.
+            # a transient margin-API failure), though the Signal Engine's
+            # one-shot latch means today's entry will not retry regardless.
+            log_event(self._log, "entry_blocked_capital", err=str(exc))
+            self._status.healthy = False
+            self._status.health_detail = f"entry_blocked_capital: {exc}"
+            self._fsm.transition(State.READY, "entry_blocked_capital_rollback")
+        except Exception as exc:  # noqa: BLE001 - see below.
+            # Contract resolution (_exec_resolve -> resolve_atm_contract) is
+            # called directly against the broker, bypassing ExecutionEngine's
+            # retry/error-normalization wrapper entirely — so a missing
+            # strike/expiry/instrument (LookupError), a symbol-master
+            # download failure, or any other resolution-time fault surfaces
+            # here as a raw, unclassified exception, not an ExecutionError.
+            # Without this handler it fell through both except clauses above
+            # and left the FSM wedged at CONFIRMED (neither READY nor
+            # DONE_FOR_DAY) for the rest of the day: _handle_pre_position only
+            # dispatches from WAITING/READY, and _handle_in_position only
+            # from IN_POSITION, so CONFIRMED is a dead end no other code path
+            # ever revisits — every subsequent candle would silently no-op.
+            log_event(self._log, "entry_failed_contract_resolution", err=str(exc))
+            self._status.healthy = False
+            self._status.health_detail = f"entry_failed_contract_resolution: {exc}"
+            self._fsm.transition(State.READY, "entry_failed_resolution_rollback")
+
+    async def _enter(self, candle: Candle, intention: TradeIntention) -> None:
+        # --- Stage 4: Risk Validation ------------------------------------ #
+        # Order Planning Layer (Production Pipeline Entry 11, Layer 6):
+        # identical resolve_atm_contract + approve_trade calls, now made
+        # through the extracted module instead of inline -- same order,
+        # same CapitalRejectedError semantics, no behavioural change. The
+        # Capital Management Engine's approve_trade() call inside
+        # plan_straddle() IS the risk/capital validation gate -- a
+        # CapitalRejectedError here is Risk Validation's rejection outcome,
+        # logged by the stage() context manager itself, then re-raised
+        # unchanged for _handle_pre_position's existing except clause.
+        with stage(self._log, "risk_validation", decision_id=intention.decision_id):
+            planned = await order_planning.plan_straddle(
+                self._exec_resolve, self._capital, self._status, candle.close,
+            )
+        ce_contract, pe_contract = planned.ce_contract, planned.pe_contract
+        capital_decision = planned.capital_decision
+        requested_qty = planned.quantity
+
+        # `ts` is still needed later in this method (the partial-leg-unwind
+        # idempotency key f"ENTRY-UNWIND-{ts}") -- kept here unchanged even
+        # though build_execution_decision() below also derives it internally
+        # from the same candle.timestamp, since both computations are pure
+        # and deterministic, this duplication cannot cause any divergence.
+        ts = candle.timestamp.strftime('%Y%m%d%H%M%S')
+
+        # --- Stage 5: Execution Decision ---------------------------------- #
+        # Production Engineering Sprint 2 (Stage Interface Extraction): the
+        # DecisionSnapshot + ExecutionPlan construction is now a standalone,
+        # independently unit-testable pure function
+        # (execution_decision.build_execution_decision) -- identical field
+        # values and computation order to the prior inline code, only moved,
+        # not rewritten.
+        with stage(self._log, "execution_decision", decision_id=(intention.decision_id or "")):
+            decision = execution_decision.build_execution_decision(
+                candle, intention, ce_contract, pe_contract, requested_qty,
+                dict(self._status.intelligence), self._exec._broker.name,  # noqa: SLF001
+            )
+            snapshot, plan = decision.snapshot, decision.plan
+            decision_id, ce_cid, pe_cid = decision.decision_id, decision.ce_cid, decision.pe_cid
+            log_event(self._log, "decision_snapshot", decision_id=snapshot.decision_id,
+                      strategy_version=snapshot.strategy_version,
+                      planned_contracts=snapshot.planned_contracts)
+            self._last_decision_snapshot = snapshot
+
+        # --- Stage 7: Journal Recording (decision half) ------------------- #
+        # Decision Journal foundation (Sprint 2): persisted separately from
+        # TradeJournal, keyed by decision_id, best-effort -- a write
+        # failure here is logged and never blocks or alters the trade.
+        with stage(self._log, "journal_recording_decision", decision_id=decision_id):
+            self._decision_journal.record(snapshot)
+
+        # --- Stage 6: Order Dispatch --------------------------------------- #
+        # Execution Adapter (Sprint 2): the ONLY translation from
+        # ExecutionPlan to Broker OrderRequest -- purely mechanical, same
+        # field values the inline construction used before.
+        with stage(self._log, "order_dispatch", decision_id=decision_id):
+            ce_request, pe_request = execution_adapter.translate(plan)
+
+            self._entry_cid = ce_cid
+            self._persist()
+
+            ce_result = await self._exec.submit_and_confirm(ce_request)
+            self._clear_auth_flag()
+
+            try:
+                pe_result = await self._exec.submit_and_confirm(pe_request)
+                self._clear_auth_flag()
+            except (AuthenticationError, ExecutionError):
+                # The CE leg above already landed a real fill at the broker — if
+                # we simply let this propagate, the caller rolls the FSM back to
+                # READY believing nothing was opened, while a naked CE short sits
+                # live and completely unmonitored (no Tick Engine, no candle
+                # reassessment) until the *next process restart's* orphan-flatten
+                # path finds it. That gap can last the rest of the trading day.
+                # Buy back the CE leg immediately, same-cycle, instead of waiting.
+                log_event(self._log, "entry_partial_leg_failure",
+                          filled_leg=ce_contract.symbol, failed_leg=pe_contract.symbol)
+                unwound = await self._exit_leg(
+                    ce_contract, ce_result.filled_quantity,
+                    f"ENTRY-UNWIND-{ts}",
+                )
+                if unwound:
+                    log_event(self._log, "entry_partial_leg_auto_flattened",
+                              symbol=ce_contract.symbol)
+                else:
+                    # Could not even flatten the naked leg automatically — this is
+                    # the one scenario that genuinely needs a human right now, not
+                    # at the next restart. Surface it as loudly as auth failures.
+                    self._status.healthy = False
+                    self._status.health_detail = (
+                        f"entry_partial_leg_UNFLATTENED: {ce_contract.symbol} qty="
+                        f"{ce_result.filled_quantity} is naked at the broker and "
+                        f"automatic unwind failed — flatten manually immediately."
+                    )
+                    log_event(self._log, "entry_partial_leg_auto_flatten_failed",
+                              symbol=ce_contract.symbol, qty=ce_result.filled_quantity)
+                raise
+
+        filled_qty = min(ce_result.filled_quantity, pe_result.filled_quantity)
+        ce_price = ce_result.average_price or 0.0
+        pe_price = pe_result.average_price or 0.0
+        combined_entry_premium = ce_price + pe_price
+
+        position = Position(
+            contract=ce_contract,       # CE as primary for recovery matching.
+            ce_contract=ce_contract,
+            pe_contract=pe_contract,
+            direction=Direction.NEUTRAL,
+            entry_side=Side.SELL,
+            quantity=filled_qty,
+            entry_price=combined_entry_premium,
+            entry_spot=candle.close,
+            entry_time=candle.timestamp,
+            orb=None,
+            capital_decision=capital_decision.to_dashboard(),
+            decision_id=decision_id,
+        )
+        self._cycle_decision = "ENTER:STRADDLE"
+        self._trade.open_position(position, candle)
+        self._trades_taken += 1
+        self._fsm.transition(State.IN_POSITION, "straddle_filled")
+        self._update_status_position(combined_entry_premium, combined_entry_premium)
+        await self._bus.publish(Event(EventType.POSITION_OPENED, {
+            "symbol": ce_contract.symbol,
+            "qty": filled_qty,
+            "entry_premium": combined_entry_premium,
+            "narrative": f"ATM straddle strike={ce_contract.strike}",
+        }))
+
+    async def _exec_resolve(self, direction: Direction, spot: float):
+        # Broker resolution is a broker-only concern; the Execution Engine's
+        # broker is used directly here for contract resolution.
+        return await self._exec._broker.resolve_atm_contract(  # noqa: SLF001
+            self._cfg.market.underlying, spot, direction,
+            self._cfg.market.strike_interval, self._cfg.market.lot_size,
+        )
+
+    async def _handle_in_position(self, candle: Candle) -> None:
+        pos = self._trade.position
+        if pos is None:
+            self._fsm.transition(State.DONE_FOR_DAY, "no_position_in_state")
+            return
+        combined_volume = 1.0  # Equal-weight fallback unless real volume is fetched below.
+        try:
+            if pos.ce_contract and pos.pe_contract:
+                # Prefer real per-candle OHLCV (with volume) over a bare LTP
+                # snapshot -- this is what makes the Premium VWAP genuinely
+                # volume-weighted rather than equal-weight. A broker that
+                # hasn't implemented get_option_candles() returns an empty
+                # list; that is treated as "volume unavailable this cycle"
+                # and falls back to a plain LTP fetch with equal weight,
+                # never a crash and never a fabricated volume figure.
+                minutes = self._cfg.timing.candle_minutes
+                ce_candles = await self._exec.get_option_candles(pos.ce_contract, minutes, 1)
+                pe_candles = await self._exec.get_option_candles(pos.pe_contract, minutes, 1)
+                if ce_candles and pe_candles:
+                    ce_close, ce_vol = ce_candles[-1].close, ce_candles[-1].volume
+                    pe_close, pe_vol = pe_candles[-1].close, pe_candles[-1].volume
+                    combined_premium = ce_close + pe_close
+                    combined_volume = (ce_vol or 0.0) + (pe_vol or 0.0)
+                    self._last_ce_premium, self._last_pe_premium = ce_close, pe_close
+                else:
+                    ce_ltp = await self._exec.get_ltp(pos.ce_contract)
+                    pe_ltp = await self._exec.get_ltp(pos.pe_contract)
+                    combined_premium = ce_ltp + pe_ltp
+                    self._last_ce_premium, self._last_pe_premium = ce_ltp, pe_ltp
+            else:
+                combined_premium = await self._exec.get_ltp(pos.contract)
+            self._clear_auth_flag()
+        except AuthenticationError as exc:
+            self._mark_auth_expired("in_position_get_ltp", exc)
+            return
+        except ExecutionError as exc:
+            log_event(self._log, "get_ltp_failed", err=str(exc))
+            self._status.healthy = False
+            self._status.health_detail = f"get_ltp_failed: {exc}"
+            return
+        decision = self._trade.reassess(candle, combined_premium, combined_volume)
+        self._cycle_decision = f"{decision.decision.value}:{decision.reason}"
+        # Show premium VWAP (from trade manager) on the dashboard.
+        self._status.vwap = round(self._trade.premium_vwap, 2)
+        self._update_status_position(pos.entry_price, combined_premium,
+                                     decision.reason, decision.decision.value)
+        await self._bus.publish(Event(EventType.DECISION_MADE, {
+            "decision": decision.decision.value, "reason": decision.reason,
+        }))
+
+        if decision.should_exit:
+            self._fsm.transition(State.EXITING, decision.reason)
+            ok = await self._do_exit(candle.timestamp, candle.close, combined_premium,
+                                     decision.reason)
+            if ok:
+                self._fsm.transition(State.DONE_FOR_DAY, "trade_closed")
+            else:
+                # Not flat — retry on the next candle / EOD square-off.
+                self._fsm.transition(State.IN_POSITION, "exit_retry")
+
+    # ------------------------------------------------------------------ #
+    # Exit / square-off — guarantees we end flat (C2, C4)
+    # ------------------------------------------------------------------ #
+    async def _do_exit(self, exit_time: datetime, exit_spot: float,
+                       combined_premium: float, reason: str) -> bool:
+        """Flatten the straddle position (CE + PE legs).
+
+        Returns True only when both legs are flat and the trade is journaled.
+        """
+        pos = self._trade.position
+        if pos is None:
+            return True
+        if self._exit_cid is None:
+            self._exit_cid = f"EXIT-{exit_time.strftime('%Y%m%d%H%M%S')}"
+            self._persist()
+
+        qty = pos.quantity
+        if pos.ce_contract and pos.pe_contract:
+            ce_ok = await self._exit_leg(pos.ce_contract, qty, f"{self._exit_cid}-CE")
+            pe_ok = await self._exit_leg(pos.pe_contract, qty, f"{self._exit_cid}-PE")
+            if not (ce_ok and pe_ok):
+                return False
+        else:
+            ok = await self._exit_leg(pos.contract, qty, f"{self._exit_cid}-{qty}")
+            if not ok:
+                return False
+
+        self._journal_trade(pos, exit_time, exit_spot, combined_premium, reason)
+        await self._bus.publish(Event(EventType.POSITION_CLOSED, {
+            "symbol": pos.contract.symbol, "exit_premium": combined_premium,
+            "pnl": round(pos.mtm(combined_premium), 2), "reason": reason,
+        }))
+        self._trade.close_position()
+        self._exit_cid = None
+        self._persist()
+        return True
+
+    async def _exit_leg(self, contract, qty: int, cid_base: str) -> bool:
+        """Buy back one option leg; returns True when fully flat."""
+        remaining = qty
+        for _ in range(self._flatten_attempts):
+            request = OrderRequest(
+                contract=contract, side=Side.BUY, quantity=remaining,
+                client_order_id=f"{cid_base}-{remaining}", tag="exit",
+            )
+            try:
+                result = await self._exec.submit_and_confirm(request)
+                self._clear_auth_flag()
+            except AuthenticationError as exc:
+                self._mark_auth_expired("exit", exc)
+                return False
+            except ExecutionError as exc:
+                log_event(self._log, "exit_failed", err=str(exc), remaining=remaining)
+                self._status.healthy = False
+                self._status.health_detail = f"exit_failed: {exc}"
+                return False
+            remaining -= result.filled_quantity
+            if remaining <= 0:
+                break
+            log_event(self._log, "exit_partial_remaining", remaining=remaining)
+        if remaining > 0:
+            self._status.healthy = False
+            self._status.health_detail = f"exit_incomplete_remaining_{remaining}"
+            log_event(self._log, "exit_incomplete", remaining=remaining)
+            return False
+        return True
+
+    async def square_off(self, reason: str) -> bool:
+        """Force-flatten any open position (used by the EOD hard exit, C2).
+
+        This is capital protection, not strategy: it does not consult entry or
+        exit rules — it simply ensures we are flat.
+        """
+        pos = self._trade.position
+        if pos is None:
+            return True
+        if self._fsm.state is State.IN_POSITION:
+            self._fsm.transition(State.EXITING, reason)
+        try:
+            if pos.ce_contract and pos.pe_contract:
+                ce_ltp = await self._exec.get_ltp(pos.ce_contract)
+                pe_ltp = await self._exec.get_ltp(pos.pe_contract)
+                premium = ce_ltp + pe_ltp
+            else:
+                premium = await self._exec.get_ltp(pos.contract)
+            self._clear_auth_flag()
+        except AuthenticationError as exc:
+            self._mark_auth_expired("square_off_get_ltp", exc)
+            premium = pos.entry_price
+        except ExecutionError:
+            premium = pos.entry_price
+        try:
+            spot = await self._exec.get_spot(self._cfg.market.underlying)
+            self._clear_auth_flag()
+        except AuthenticationError as exc:
+            self._mark_auth_expired("square_off_get_spot", exc)
+            spot = pos.entry_spot
+        except ExecutionError:
+            spot = pos.entry_spot
+        # D2: must be tz-aware IST, matching pos.entry_time's timezone-awareness
+        # in production — a naive datetime here would raise on the holding-time
+        # subtraction in `_journal_trade` once entry_time is IST-aware.
+        ok = await self._do_exit(now_ist(), spot, premium, reason)
+        if ok:
+            self._fsm.transition(State.DONE_FOR_DAY, "squared_off")
+        return ok
+
+    async def end_of_day(self) -> bool:
+        """Terminate the session safely: flatten if needed, else mark done."""
+        if self._trade.position is not None:
+            return await self.square_off("eod_hard_exit")
+        if not self._fsm.is_terminal():
+            self._fsm.transition(State.DONE_FOR_DAY, "eod_no_position")
+        return True
+
+    def has_open_position(self) -> bool:
+        return self._trade.position is not None
+
+    @property
+    def position(self) -> Optional[Position]:
+        """Read-only accessor for the current position, if any.
+
+        Added for the Tick Engine (continuous tick-driven MTM/risk
+        monitoring) so it doesn't need to reach into TradeManager's private
+        state. Read-only — nothing about position management changes.
+        """
+        return self._trade.position
+
+    def _journal_trade(self, pos: Position, exit_time: datetime, exit_spot: float,
+                       exit_premium: float, reason: str) -> None:
+        # --- Stage 7: Journal Recording (trade/exit half) ----------------- #
+        with stage(self._log, "journal_recording_trade", decision_id=pos.decision_id):
+            self._journal_trade_impl(pos, exit_time, exit_spot, exit_premium, reason)
+
+    def _journal_trade_impl(self, pos: Position, exit_time: datetime, exit_spot: float,
+                            exit_premium: float, reason: str) -> None:
+        holding_min = (exit_time - pos.entry_time).total_seconds() / 60.0
+        record = TradeRecord(
+            date=pos.entry_time.date().isoformat(),
+            direction=pos.direction.value,
+            orb_high=pos.orb.high if pos.orb else 0.0,
+            orb_low=pos.orb.low if pos.orb else 0.0,
+            entry_time=pos.entry_time.isoformat(),
+            entry_spot=pos.entry_spot,
+            atm_strike=pos.contract.strike,
+            entry_premium=pos.entry_price,
+            exit_time=exit_time.isoformat(),
+            exit_premium=exit_premium,
+            exit_spot=exit_spot,
+            exit_reason=reason,
+            holding_time_min=round(holding_min, 1),
+            max_profit_seen=round(pos.max_profit_seen, 2),
+            max_loss_seen=round(pos.max_loss_seen, 2),
+            max_favourable_excursion=round(pos.max_favourable_excursion, 2),
+            max_adverse_excursion=round(pos.max_adverse_excursion, 2),
+            total_candles_held=pos.candles_held,
+            daily_result=round(pos.mtm(exit_premium), 2),
+            thesis=pos.thesis.narrative if pos.thesis else "",
+            # Actual traded contract identity — preserved permanently so a
+            # historical trade can be traced back to the exact contracts
+            # sold, not just the derived strike number (the live/transient
+            # SessionSnapshot has this too, but it is reset every trading
+            # day; the journal is the only PERMANENT record).
+            trade_id=f"{pos.entry_time.strftime('%Y%m%d%H%M%S')}-{pos.contract.symbol}",
+            decision_id=pos.decision_id,
+            ce_symbol=pos.ce_contract.symbol if pos.ce_contract else pos.contract.symbol,
+            pe_symbol=pos.pe_contract.symbol if pos.pe_contract else "",
+            expiry=pos.contract.expiry,
+            capital_status=(pos.capital_decision or {}).get("status", ""),
+            approved_lots=(pos.capital_decision or {}).get("approved_lots", 0),
+            capital_utilization=str((pos.capital_decision or {}).get("capital_utilization", "")),
+        )
+        self._journal.record(record)
+        log_event(self._log, "trade_journaled", **{"pnl": record.daily_result,
+                                                    "reason": reason})
+
+    # ------------------------------------------------------------------ #
+    # VWAP Audit — production auditability, never affects trading logic
+    # ------------------------------------------------------------------ #
+    def _emit_vwap_audit(self, candle: Candle) -> None:
+        """Log and publish VWAP quality metadata for the completed cycle.
+
+        Read-only: it observes VWAP quality, FSM state, trade state, and the
+        decision already made this cycle. It changes nothing.
+        """
+        record = VwapAuditRecord(
+            timestamp=candle.timestamp,
+            strategy_state=self._fsm.state.value,
+            trade_state="IN_POSITION" if self._trade.position else "FLAT",
+            decision=self._cycle_decision,
+            quality=self._trade.premium_vwap_quality(),
+        )
+        log_event(self._log, "vwap_audit", **record.to_log())
+        self._status.market_data_health = record.to_dashboard()
+        self._status.push_audit(record.to_dashboard())
+
+    # ------------------------------------------------------------------ #
+    # Status updates for the dashboard
+    # ------------------------------------------------------------------ #
+    def _update_status_market(self, candle: Candle) -> None:
+        s = self._status
+        s.spot = candle.close
+        s.vwap = round(self._signal.vwap, 2)
+        s.vwap_real = self._signal.vwap_is_real
+        s.last_candle_ts = candle.timestamp.isoformat()  # Observability only (P4).
+        orb = self._signal.opening_range
+        if orb:
+            s.orb_high, s.orb_low = orb.high, orb.low
+        s.touch()
+
+    async def _update_intelligence(self, candle: Candle) -> None:
+        """Market Intelligence Core -- observation-only, read-only dashboard
+        view (see bujji/intelligence/). Computes all eight brains' readings
+        from whatever real data is on hand this cycle and stores the result
+        on RuntimeStatus for the dashboard to display. Never reads back into
+        any trading decision; every fetch below is best-effort (the
+        ExecutionEngine wrappers never raise) and the whole block is wrapped
+        in try/except so a failure here can never affect the state machine
+        or an open position -- exactly the same isolation the VWAP audit
+        above already gets.
+        """
+        pos = self._trade.position
+        ce_premium = self._last_ce_premium if pos is not None else None
+        pe_premium = self._last_pe_premium if pos is not None else None
+
+        # Liquidity: real bid/ask for the open straddle's two legs, when
+        # there is one -- best-effort, single attempt (see
+        # ExecutionEngine.get_quote's docstring for why this is never
+        # retried like a critical trading call).
+        ce_bid = ce_ask = pe_bid = pe_ask = None
+        if pos is not None and pos.ce_contract is not None and pos.pe_contract is not None:
+            ce_quote = await self._exec.get_quote(pos.ce_contract)
+            pe_quote = await self._exec.get_quote(pos.pe_contract)
+            if ce_quote:
+                ce_bid, ce_ask = ce_quote.get("bid"), ce_quote.get("ask")
+            if pe_quote:
+                pe_bid, pe_ask = pe_quote.get("bid"), pe_quote.get("ask")
+
+        # Structure: real option-chain OI around current spot -- useful
+        # whether or not a position is open (it's about where spot is
+        # relative to real market positioning, not about the straddle
+        # itself), so this is fetched every cycle regardless of state.
+        oi_strikes = await self._exec.get_option_chain(
+            self._cfg.market.underlying, candle.close, strike_count=5,
+        )
+
+        # Event Brain's VIX half: real India VIX, fetched every cycle
+        # regardless of position state (it's a market-wide signal, not
+        # specific to the open straddle).
+        vix = await self._exec.get_vix()
+        vix_level = vix.get("level") if vix else None
+        vix_prev_close = vix.get("prev_close") if vix else None
+
+        try:
+            self._status.intelligence = run_intelligence(
+                spot_candles=list(self._spot_candle_history),
+                position=pos,
+                now=candle.timestamp,
+                ce_premium=ce_premium,
+                pe_premium=pe_premium,
+                trade_rows=self._journal.all_trades(),
+                ce_bid=ce_bid, ce_ask=ce_ask, pe_bid=pe_bid, pe_ask=pe_ask,
+                oi_strikes=oi_strikes,
+                vix_level=vix_level, vix_prev_close=vix_prev_close,
+            )
+        except Exception as exc:  # noqa: BLE001 - must never affect trading.
+            log_event(self._log, "intelligence_update_failed", err=str(exc))
+        self._status.touch()
+
+    def _update_ops_health(self) -> None:
+        """Operations Layer (Sprint 4) -- observation only. Computes the
+        current OpsSnapshot, evaluates alerts on state transitions,
+        opens/resolves Incident Log entries, and stores the result on
+        RuntimeStatus for the dashboard. Never reads a trading decision,
+        never writes one -- symmetrical isolation to _update_intelligence.
+        """
+        journal_write_ok = True
+        try:
+            journal_write_ok = os.access(self._cfg.paths.journal_csv.parent, os.W_OK)
+        except Exception:  # noqa: BLE001 - observational, must never block.
+            journal_write_ok = False
+
+        trades = self._journal.all_trades()
+        latest_trade_id = trades[0].get("trade_id") if trades else None
+        latest_decision_id = (self._last_decision_snapshot.decision_id
+                              if self._last_decision_snapshot else None)
+
+        try:
+            snapshot = self._health_monitor.observe(
+                self._status, journal_write_ok, latest_decision_id, latest_trade_id,
+            )
+            alerts = evaluate_alerts(snapshot, self._ops_previous_state)
+            for alert in alerts:
+                log_event(self._log, "ops_alert", category=alert.category,
+                          severity=alert.severity.value, subsystem=alert.subsystem,
+                          message=alert.message)
+            if snapshot.health_state in (HealthState.CRITICAL, HealthState.DEGRADED):
+                for reason in snapshot.reasons:
+                    subsystem = reason.split("=")[0] if "=" in reason else reason
+                    self._incident_log.open_incident(snapshot.health_state.value, reason, subsystem)
+            else:
+                for incident in list(self._incident_log.open_incidents()):
+                    self._incident_log.resolve_incident(
+                        incident.affected_subsystem, "health signal cleared",
+                    )
+            self._ops_previous_state = snapshot.health_state
+            self._status.ops = snapshot.to_dashboard()
+        except Exception as exc:  # noqa: BLE001 - must never affect trading.
+            log_event(self._log, "ops_health_update_failed", err=str(exc))
+
+    def _update_status_position(self, entry: Optional[float],
+                                current: Optional[float],
+                                reason: str = "", decision: str = "") -> None:
+        s = self._status
+        pos = self._trade.position
+        if pos:
+            s.direction = pos.direction.value
+            s.position_symbol = pos.contract.symbol
+            s.entry_premium = entry
+            s.current_premium = current
+            if entry is not None and current is not None:
+                s.mtm = round((entry - current) * pos.quantity, 2)
+        if reason:
+            s.last_reason = reason
+        if decision:
+            s.last_decision = decision
+        s.touch()
+
+    @property
+    def state(self) -> State:
+        return self._fsm.state

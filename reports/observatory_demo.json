@@ -1,0 +1,745 @@
+{
+  "generated_at": "2026-07-24T00:00:00",
+  "corpus_a": {
+    "label": "41-day corpus (2026-05-25 to 2026-07-22)",
+    "source": "reports/historical_campaign_v2_1_full_corpus.json",
+    "session_count": 41
+  },
+  "corpus_b": {
+    "label": "81-day corpus (2026-03-23 to 2026-07-22)",
+    "source": "reports/historical_campaign_broadened_corpus.json",
+    "session_count": 81
+  },
+  "total_sessions_compared": 41,
+  "sessions_with_no_change": 5,
+  "sessions_with_change": 36,
+  "focus_session": {
+    "id": "NIFTY-2026-07-09",
+    "narrative": "NIFTY-2026-07-09:\n  market_context: SIDEWAYS -> TRANSITION\n  strategy: PREMIUM_VWAP_STRADDLE -> None\n  outcome: COMPLETED -> FAILED\n  first_divergence: market_context\n  downstream_impact: market_context SIDEWAYS -> TRANSITION; strategy PREMIUM_VWAP_STRADDLE -> None; outcome COMPLETED -> FAILED",
+    "diff": {
+      "session_id": "NIFTY-2026-07-09",
+      "unchanged_fields": [
+        "governance"
+      ],
+      "changed_fields": {
+        "market_context": {
+          "before": "SIDEWAYS",
+          "after": "TRANSITION"
+        },
+        "strategy": {
+          "before": "PREMIUM_VWAP_STRADDLE",
+          "after": null
+        },
+        "outcome": {
+          "before": "COMPLETED",
+          "after": "FAILED"
+        }
+      },
+      "first_divergence": "market_context",
+      "threshold_crossings": [
+        {
+          "field_name": "market_context",
+          "previous_classification": "SIDEWAYS",
+          "new_classification": "TRANSITION",
+          "threshold_name": "UNKNOWN",
+          "previous_value": "UNKNOWN",
+          "new_value": "UNKNOWN",
+          "crossing_direction": "UNKNOWN"
+        }
+      ],
+      "downstream_impact": "market_context SIDEWAYS -> TRANSITION; strategy PREMIUM_VWAP_STRADDLE -> None; outcome COMPLETED -> FAILED"
+    },
+    "explanation_corpus_a": [
+      {
+        "field_name": "market_context",
+        "value": "SIDEWAYS",
+        "originating_module": "mic_v2.context.engine.derive_context",
+        "upstream_chain": [
+          "evidence",
+          "qualification",
+          "trace",
+          "memory",
+          "quality"
+        ],
+        "evidence_used": [],
+        "confidence": null,
+        "reasoning_summary": null,
+        "publication_id": null
+      },
+      {
+        "field_name": "governance",
+        "value": "APPROVED",
+        "originating_module": "mic_v2.governance.engine.derive_governance",
+        "upstream_chain": [
+          "calibration",
+          "context_stability",
+          "quality",
+          "consistency",
+          "certification"
+        ],
+        "evidence_used": [],
+        "confidence": null,
+        "reasoning_summary": null,
+        "publication_id": null
+      }
+    ],
+    "explanation_corpus_b": [
+      {
+        "field_name": "market_context",
+        "value": "TRANSITION",
+        "originating_module": "mic_v2.context.engine.derive_context",
+        "upstream_chain": [
+          "evidence",
+          "qualification",
+          "trace",
+          "memory",
+          "quality"
+        ],
+        "evidence_used": [],
+        "confidence": null,
+        "reasoning_summary": null,
+        "publication_id": null
+      },
+      {
+        "field_name": "governance",
+        "value": "APPROVED",
+        "originating_module": "mic_v2.governance.engine.derive_governance",
+        "upstream_chain": [
+          "calibration",
+          "context_stability",
+          "quality",
+          "consistency",
+          "certification"
+        ],
+        "evidence_used": [],
+        "confidence": null,
+        "reasoning_summary": null,
+        "publication_id": null
+      }
+    ],
+    "timeline_corpus_a": {
+      "session_id": "NIFTY-2026-07-09",
+      "steps": [
+        {
+          "stage": "evidence",
+          "summary": "No Evidence records supplied for this session -- not recorded, never fabricated.",
+          "detail": {
+            "evidence": []
+          }
+        },
+        {
+          "stage": "mic_classification",
+          "summary": "market_context=SIDEWAYS, governance=APPROVED",
+          "detail": {
+            "market_context": "SIDEWAYS",
+            "governance": "APPROVED"
+          }
+        },
+        {
+          "stage": "trading_brain_interpretation",
+          "summary": "Strategy Selector evaluated market_context=SIDEWAYS / market_opinion=UNKNOWN.",
+          "detail": {
+            "market_context": "SIDEWAYS",
+            "market_opinion": null
+          }
+        },
+        {
+          "stage": "strategy_selection",
+          "summary": "Selected: PREMIUM_VWAP_STRADDLE",
+          "detail": {
+            "strategy": "PREMIUM_VWAP_STRADDLE"
+          }
+        },
+        {
+          "stage": "runtime_outcome",
+          "summary": "Runtime outcome: COMPLETED",
+          "detail": {
+            "outcome": "COMPLETED",
+            "governance": "APPROVED"
+          }
+        }
+      ]
+    },
+    "timeline_corpus_b": {
+      "session_id": "NIFTY-2026-07-09",
+      "steps": [
+        {
+          "stage": "evidence",
+          "summary": "No Evidence records supplied for this session -- not recorded, never fabricated.",
+          "detail": {
+            "evidence": []
+          }
+        },
+        {
+          "stage": "mic_classification",
+          "summary": "market_context=TRANSITION, governance=APPROVED",
+          "detail": {
+            "market_context": "TRANSITION",
+            "governance": "APPROVED"
+          }
+        },
+        {
+          "stage": "trading_brain_interpretation",
+          "summary": "Strategy Selector evaluated market_context=TRANSITION / market_opinion=UNKNOWN.",
+          "detail": {
+            "market_context": "TRANSITION",
+            "market_opinion": null
+          }
+        },
+        {
+          "stage": "strategy_selection",
+          "summary": "NO_STRATEGY -- Strategy Selector declined.",
+          "detail": {
+            "strategy": null
+          }
+        },
+        {
+          "stage": "runtime_outcome",
+          "summary": "Runtime outcome: FAILED",
+          "detail": {
+            "outcome": "FAILED",
+            "governance": "APPROVED"
+          }
+        }
+      ]
+    }
+  },
+  "all_changed_sessions": [
+    {
+      "session_id": "NIFTY-2026-05-25",
+      "changed_fields": {
+        "market_context": {
+          "before": "UNKNOWN",
+          "after": "TRANSITION"
+        },
+        "governance": {
+          "before": "APPROVED_WITH_WARNINGS",
+          "after": "APPROVED"
+        }
+      },
+      "first_divergence": "market_context",
+      "downstream_impact": "Classification changed but no recorded downstream strategy/outcome change was observed."
+    },
+    {
+      "session_id": "NIFTY-2026-05-26",
+      "changed_fields": {
+        "market_context": {
+          "before": "UNKNOWN",
+          "after": "TRANSITION"
+        },
+        "governance": {
+          "before": "APPROVED_WITH_WARNINGS",
+          "after": "APPROVED"
+        }
+      },
+      "first_divergence": "market_context",
+      "downstream_impact": "Classification changed but no recorded downstream strategy/outcome change was observed."
+    },
+    {
+      "session_id": "NIFTY-2026-05-27",
+      "changed_fields": {
+        "market_context": {
+          "before": "TRENDING_DOWN",
+          "after": "TRANSITION"
+        },
+        "governance": {
+          "before": "APPROVED_WITH_WARNINGS",
+          "after": "APPROVED"
+        }
+      },
+      "first_divergence": "market_context",
+      "downstream_impact": "Classification changed but no recorded downstream strategy/outcome change was observed."
+    },
+    {
+      "session_id": "NIFTY-2026-05-29",
+      "changed_fields": {
+        "market_context": {
+          "before": "TRENDING_DOWN",
+          "after": "TRANSITION"
+        },
+        "governance": {
+          "before": "APPROVED_WITH_WARNINGS",
+          "after": "APPROVED"
+        },
+        "strategy": {
+          "before": "COVERED_CALL",
+          "after": null
+        }
+      },
+      "first_divergence": "market_context",
+      "downstream_impact": "market_context TRENDING_DOWN -> TRANSITION; strategy COVERED_CALL -> None"
+    },
+    {
+      "session_id": "NIFTY-2026-06-01",
+      "changed_fields": {
+        "governance": {
+          "before": "APPROVED_WITH_WARNINGS",
+          "after": "APPROVED"
+        }
+      },
+      "first_divergence": "governance",
+      "downstream_impact": "Classification changed but no recorded downstream strategy/outcome change was observed."
+    },
+    {
+      "session_id": "NIFTY-2026-06-02",
+      "changed_fields": {
+        "governance": {
+          "before": "APPROVED_WITH_WARNINGS",
+          "after": "APPROVED"
+        }
+      },
+      "first_divergence": "governance",
+      "downstream_impact": "Classification changed but no recorded downstream strategy/outcome change was observed."
+    },
+    {
+      "session_id": "NIFTY-2026-06-03",
+      "changed_fields": {
+        "governance": {
+          "before": "APPROVED_WITH_WARNINGS",
+          "after": "APPROVED"
+        }
+      },
+      "first_divergence": "governance",
+      "downstream_impact": "Classification changed but no recorded downstream strategy/outcome change was observed."
+    },
+    {
+      "session_id": "NIFTY-2026-06-04",
+      "changed_fields": {
+        "market_context": {
+          "before": "TRANSITION",
+          "after": "TRENDING_DOWN"
+        },
+        "strategy": {
+          "before": "DIRECTIONAL_PUT_SPREAD",
+          "after": "COVERED_CALL"
+        },
+        "outcome": {
+          "before": "COMPLETED",
+          "after": "FAILED"
+        }
+      },
+      "first_divergence": "market_context",
+      "downstream_impact": "market_context TRANSITION -> TRENDING_DOWN; strategy DIRECTIONAL_PUT_SPREAD -> COVERED_CALL; outcome COMPLETED -> FAILED"
+    },
+    {
+      "session_id": "NIFTY-2026-06-11",
+      "changed_fields": {
+        "strategy": {
+          "before": "DIRECTIONAL_PUT_SPREAD",
+          "after": null
+        },
+        "outcome": {
+          "before": "COMPLETED",
+          "after": "FAILED"
+        }
+      },
+      "first_divergence": "strategy",
+      "downstream_impact": "strategy DIRECTIONAL_PUT_SPREAD -> None; outcome COMPLETED -> FAILED"
+    },
+    {
+      "session_id": "NIFTY-2026-06-12",
+      "changed_fields": {
+        "strategy": {
+          "before": "DIRECTIONAL_PUT_SPREAD",
+          "after": null
+        },
+        "outcome": {
+          "before": "COMPLETED",
+          "after": "FAILED"
+        }
+      },
+      "first_divergence": "strategy",
+      "downstream_impact": "strategy DIRECTIONAL_PUT_SPREAD -> None; outcome COMPLETED -> FAILED"
+    },
+    {
+      "session_id": "NIFTY-2026-06-15",
+      "changed_fields": {
+        "strategy": {
+          "before": "DIRECTIONAL_PUT_SPREAD",
+          "after": null
+        },
+        "outcome": {
+          "before": "COMPLETED",
+          "after": "FAILED"
+        }
+      },
+      "first_divergence": "strategy",
+      "downstream_impact": "strategy DIRECTIONAL_PUT_SPREAD -> None; outcome COMPLETED -> FAILED"
+    },
+    {
+      "session_id": "NIFTY-2026-06-16",
+      "changed_fields": {
+        "strategy": {
+          "before": "DIRECTIONAL_PUT_SPREAD",
+          "after": null
+        },
+        "outcome": {
+          "before": "COMPLETED",
+          "after": "FAILED"
+        }
+      },
+      "first_divergence": "strategy",
+      "downstream_impact": "strategy DIRECTIONAL_PUT_SPREAD -> None; outcome COMPLETED -> FAILED"
+    },
+    {
+      "session_id": "NIFTY-2026-06-17",
+      "changed_fields": {
+        "strategy": {
+          "before": "DIRECTIONAL_PUT_SPREAD",
+          "after": null
+        },
+        "outcome": {
+          "before": "COMPLETED",
+          "after": "FAILED"
+        }
+      },
+      "first_divergence": "strategy",
+      "downstream_impact": "strategy DIRECTIONAL_PUT_SPREAD -> None; outcome COMPLETED -> FAILED"
+    },
+    {
+      "session_id": "NIFTY-2026-06-18",
+      "changed_fields": {
+        "strategy": {
+          "before": "DIRECTIONAL_PUT_SPREAD",
+          "after": null
+        },
+        "outcome": {
+          "before": "COMPLETED",
+          "after": "FAILED"
+        }
+      },
+      "first_divergence": "strategy",
+      "downstream_impact": "strategy DIRECTIONAL_PUT_SPREAD -> None; outcome COMPLETED -> FAILED"
+    },
+    {
+      "session_id": "NIFTY-2026-06-19",
+      "changed_fields": {
+        "strategy": {
+          "before": "DIRECTIONAL_PUT_SPREAD",
+          "after": null
+        },
+        "outcome": {
+          "before": "COMPLETED",
+          "after": "FAILED"
+        }
+      },
+      "first_divergence": "strategy",
+      "downstream_impact": "strategy DIRECTIONAL_PUT_SPREAD -> None; outcome COMPLETED -> FAILED"
+    },
+    {
+      "session_id": "NIFTY-2026-06-22",
+      "changed_fields": {
+        "strategy": {
+          "before": "DIRECTIONAL_CALL_SPREAD",
+          "after": "COVERED_CALL"
+        },
+        "outcome": {
+          "before": "COMPLETED",
+          "after": "FAILED"
+        }
+      },
+      "first_divergence": "strategy",
+      "downstream_impact": "strategy DIRECTIONAL_CALL_SPREAD -> COVERED_CALL; outcome COMPLETED -> FAILED"
+    },
+    {
+      "session_id": "NIFTY-2026-06-23",
+      "changed_fields": {
+        "strategy": {
+          "before": "DIRECTIONAL_CALL_SPREAD",
+          "after": "COVERED_CALL"
+        },
+        "outcome": {
+          "before": "COMPLETED",
+          "after": "FAILED"
+        }
+      },
+      "first_divergence": "strategy",
+      "downstream_impact": "strategy DIRECTIONAL_CALL_SPREAD -> COVERED_CALL; outcome COMPLETED -> FAILED"
+    },
+    {
+      "session_id": "NIFTY-2026-06-24",
+      "changed_fields": {
+        "strategy": {
+          "before": "DIRECTIONAL_CALL_SPREAD",
+          "after": "COVERED_CALL"
+        },
+        "outcome": {
+          "before": "COMPLETED",
+          "after": "FAILED"
+        }
+      },
+      "first_divergence": "strategy",
+      "downstream_impact": "strategy DIRECTIONAL_CALL_SPREAD -> COVERED_CALL; outcome COMPLETED -> FAILED"
+    },
+    {
+      "session_id": "NIFTY-2026-06-25",
+      "changed_fields": {
+        "strategy": {
+          "before": "DIRECTIONAL_PUT_SPREAD",
+          "after": null
+        },
+        "outcome": {
+          "before": "COMPLETED",
+          "after": "FAILED"
+        }
+      },
+      "first_divergence": "strategy",
+      "downstream_impact": "strategy DIRECTIONAL_PUT_SPREAD -> None; outcome COMPLETED -> FAILED"
+    },
+    {
+      "session_id": "NIFTY-2026-06-29",
+      "changed_fields": {
+        "strategy": {
+          "before": "DIRECTIONAL_PUT_SPREAD",
+          "after": null
+        },
+        "outcome": {
+          "before": "COMPLETED",
+          "after": "FAILED"
+        }
+      },
+      "first_divergence": "strategy",
+      "downstream_impact": "strategy DIRECTIONAL_PUT_SPREAD -> None; outcome COMPLETED -> FAILED"
+    },
+    {
+      "session_id": "NIFTY-2026-06-30",
+      "changed_fields": {
+        "strategy": {
+          "before": "DIRECTIONAL_PUT_SPREAD",
+          "after": null
+        },
+        "outcome": {
+          "before": "COMPLETED",
+          "after": "FAILED"
+        }
+      },
+      "first_divergence": "strategy",
+      "downstream_impact": "strategy DIRECTIONAL_PUT_SPREAD -> None; outcome COMPLETED -> FAILED"
+    },
+    {
+      "session_id": "NIFTY-2026-07-01",
+      "changed_fields": {
+        "strategy": {
+          "before": "DIRECTIONAL_PUT_SPREAD",
+          "after": null
+        },
+        "outcome": {
+          "before": "COMPLETED",
+          "after": "FAILED"
+        }
+      },
+      "first_divergence": "strategy",
+      "downstream_impact": "strategy DIRECTIONAL_PUT_SPREAD -> None; outcome COMPLETED -> FAILED"
+    },
+    {
+      "session_id": "NIFTY-2026-07-02",
+      "changed_fields": {
+        "strategy": {
+          "before": "DIRECTIONAL_PUT_SPREAD",
+          "after": null
+        },
+        "outcome": {
+          "before": "COMPLETED",
+          "after": "FAILED"
+        }
+      },
+      "first_divergence": "strategy",
+      "downstream_impact": "strategy DIRECTIONAL_PUT_SPREAD -> None; outcome COMPLETED -> FAILED"
+    },
+    {
+      "session_id": "NIFTY-2026-07-03",
+      "changed_fields": {
+        "strategy": {
+          "before": "DIRECTIONAL_PUT_SPREAD",
+          "after": null
+        },
+        "outcome": {
+          "before": "COMPLETED",
+          "after": "FAILED"
+        }
+      },
+      "first_divergence": "strategy",
+      "downstream_impact": "strategy DIRECTIONAL_PUT_SPREAD -> None; outcome COMPLETED -> FAILED"
+    },
+    {
+      "session_id": "NIFTY-2026-07-06",
+      "changed_fields": {
+        "strategy": {
+          "before": "DIRECTIONAL_PUT_SPREAD",
+          "after": null
+        },
+        "outcome": {
+          "before": "COMPLETED",
+          "after": "FAILED"
+        }
+      },
+      "first_divergence": "strategy",
+      "downstream_impact": "strategy DIRECTIONAL_PUT_SPREAD -> None; outcome COMPLETED -> FAILED"
+    },
+    {
+      "session_id": "NIFTY-2026-07-07",
+      "changed_fields": {
+        "strategy": {
+          "before": "DIRECTIONAL_PUT_SPREAD",
+          "after": null
+        },
+        "outcome": {
+          "before": "COMPLETED",
+          "after": "FAILED"
+        }
+      },
+      "first_divergence": "strategy",
+      "downstream_impact": "strategy DIRECTIONAL_PUT_SPREAD -> None; outcome COMPLETED -> FAILED"
+    },
+    {
+      "session_id": "NIFTY-2026-07-08",
+      "changed_fields": {
+        "strategy": {
+          "before": "DIRECTIONAL_PUT_SPREAD",
+          "after": null
+        },
+        "outcome": {
+          "before": "COMPLETED",
+          "after": "FAILED"
+        }
+      },
+      "first_divergence": "strategy",
+      "downstream_impact": "strategy DIRECTIONAL_PUT_SPREAD -> None; outcome COMPLETED -> FAILED"
+    },
+    {
+      "session_id": "NIFTY-2026-07-09",
+      "changed_fields": {
+        "market_context": {
+          "before": "SIDEWAYS",
+          "after": "TRANSITION"
+        },
+        "strategy": {
+          "before": "PREMIUM_VWAP_STRADDLE",
+          "after": null
+        },
+        "outcome": {
+          "before": "COMPLETED",
+          "after": "FAILED"
+        }
+      },
+      "first_divergence": "market_context",
+      "downstream_impact": "market_context SIDEWAYS -> TRANSITION; strategy PREMIUM_VWAP_STRADDLE -> None; outcome COMPLETED -> FAILED"
+    },
+    {
+      "session_id": "NIFTY-2026-07-10",
+      "changed_fields": {
+        "strategy": {
+          "before": "DIRECTIONAL_PUT_SPREAD",
+          "after": null
+        },
+        "outcome": {
+          "before": "COMPLETED",
+          "after": "FAILED"
+        }
+      },
+      "first_divergence": "strategy",
+      "downstream_impact": "strategy DIRECTIONAL_PUT_SPREAD -> None; outcome COMPLETED -> FAILED"
+    },
+    {
+      "session_id": "NIFTY-2026-07-13",
+      "changed_fields": {
+        "strategy": {
+          "before": "DIRECTIONAL_PUT_SPREAD",
+          "after": null
+        },
+        "outcome": {
+          "before": "COMPLETED",
+          "after": "FAILED"
+        }
+      },
+      "first_divergence": "strategy",
+      "downstream_impact": "strategy DIRECTIONAL_PUT_SPREAD -> None; outcome COMPLETED -> FAILED"
+    },
+    {
+      "session_id": "NIFTY-2026-07-14",
+      "changed_fields": {
+        "strategy": {
+          "before": "DIRECTIONAL_PUT_SPREAD",
+          "after": null
+        },
+        "outcome": {
+          "before": "COMPLETED",
+          "after": "FAILED"
+        }
+      },
+      "first_divergence": "strategy",
+      "downstream_impact": "strategy DIRECTIONAL_PUT_SPREAD -> None; outcome COMPLETED -> FAILED"
+    },
+    {
+      "session_id": "NIFTY-2026-07-15",
+      "changed_fields": {
+        "strategy": {
+          "before": "DIRECTIONAL_PUT_SPREAD",
+          "after": null
+        },
+        "outcome": {
+          "before": "COMPLETED",
+          "after": "FAILED"
+        }
+      },
+      "first_divergence": "strategy",
+      "downstream_impact": "strategy DIRECTIONAL_PUT_SPREAD -> None; outcome COMPLETED -> FAILED"
+    },
+    {
+      "session_id": "NIFTY-2026-07-16",
+      "changed_fields": {
+        "strategy": {
+          "before": "PREMIUM_VWAP_STRADDLE",
+          "after": "IRON_CONDOR"
+        }
+      },
+      "first_divergence": "strategy",
+      "downstream_impact": "strategy PREMIUM_VWAP_STRADDLE -> IRON_CONDOR"
+    },
+    {
+      "session_id": "NIFTY-2026-07-20",
+      "changed_fields": {
+        "strategy": {
+          "before": "DIRECTIONAL_PUT_SPREAD",
+          "after": null
+        },
+        "outcome": {
+          "before": "COMPLETED",
+          "after": "FAILED"
+        }
+      },
+      "first_divergence": "strategy",
+      "downstream_impact": "strategy DIRECTIONAL_PUT_SPREAD -> None; outcome COMPLETED -> FAILED"
+    },
+    {
+      "session_id": "NIFTY-2026-07-21",
+      "changed_fields": {
+        "strategy": {
+          "before": "DIRECTIONAL_PUT_SPREAD",
+          "after": null
+        },
+        "outcome": {
+          "before": "COMPLETED",
+          "after": "FAILED"
+        }
+      },
+      "first_divergence": "strategy",
+      "downstream_impact": "strategy DIRECTIONAL_PUT_SPREAD -> None; outcome COMPLETED -> FAILED"
+    },
+    {
+      "session_id": "NIFTY-2026-07-22",
+      "changed_fields": {
+        "strategy": {
+          "before": "DIRECTIONAL_PUT_SPREAD",
+          "after": null
+        },
+        "outcome": {
+          "before": "COMPLETED",
+          "after": "FAILED"
+        }
+      },
+      "first_divergence": "strategy",
+      "downstream_impact": "strategy DIRECTIONAL_PUT_SPREAD -> None; outcome COMPLETED -> FAILED"
+    }
+  ]
+}

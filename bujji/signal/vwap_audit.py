@@ -14,7 +14,31 @@ from dataclasses import asdict, dataclass
 from datetime import datetime
 from typing import Any, Optional
 
-from .indicators import VwapTracker
+from .indicators import PremiumVwapTracker, VwapTracker
+
+
+@dataclass(frozen=True)
+class PremiumVwapQuality:
+    """Snapshot of the STRADDLE strategy's actual live indicator: the
+    volume-weighted combined-premium VWAP (changed 2026-07-19 from
+    equal-weight -- see PremiumVwapTracker's docstring). Distinct from
+    VwapQuality below, which describes the spot-index VWAP the old ORB
+    strategy used and is now dead code for this strategy.
+    """
+
+    value: float             # Current premium VWAP.
+    candles_used: int        # Data points folded in (entry seed counts as one).
+    ready: bool               # False only before the entry seed (i.e. pre-09:20).
+    cumulative_volume: float  # Sum of combined (CE+PE) volume folded in so far.
+
+    @classmethod
+    def from_tracker(cls, tracker: PremiumVwapTracker) -> "PremiumVwapQuality":
+        return cls(
+            value=round(tracker.value, 4),
+            candles_used=tracker.candle_count,
+            ready=tracker.ready,
+            cumulative_volume=tracker.cumulative_volume,
+        )
 
 
 @dataclass(frozen=True)
@@ -44,33 +68,30 @@ class VwapQuality:
 
 @dataclass(frozen=True)
 class VwapAuditRecord:
-    """A single cycle's VWAP audit entry."""
+    """A single cycle's VWAP audit entry — reports the strategy's actual
+    live indicator (PremiumVwapQuality), not the unused spot-VWAP one."""
 
     timestamp: datetime
     strategy_state: str      # FSM state, e.g. IN_POSITION.
     trade_state: str         # FLAT | IN_POSITION.
     decision: str            # The decision made this cycle.
-    quality: VwapQuality
+    quality: PremiumVwapQuality
 
     def to_log(self) -> dict[str, Any]:
         """Flat dict for structured JSON logging."""
         return {
-            "audit": "vwap",
+            "audit": "premium_vwap",
             "timestamp": self.timestamp.isoformat(),
             "strategy_state": self.strategy_state,
             "trade_state": self.trade_state,
             "decision": self.decision,
             "vwap_value": self.quality.value,
             "candles_used": self.quality.candles_used,
-            "cumulative_volume": self.quality.cumulative_volume,
-            "vwap_is_real": self.quality.is_real,
-            "vwap_using_fallback": self.quality.using_fallback,
-            "vwap_fallback_reason": self.quality.fallback_reason,
-            "trading_permitted": self.quality.trading_permitted,
+            "ready": self.quality.ready,
         }
 
     def to_dashboard(self) -> dict[str, Any]:
-        """Nested dict for the dashboard 'Market Data Health' section."""
+        """Nested dict for the dashboard 'Premium VWAP Health' section."""
         return {
             "timestamp": self.timestamp.isoformat(),
             "strategy_state": self.strategy_state,

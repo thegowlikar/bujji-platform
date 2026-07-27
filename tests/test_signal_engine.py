@@ -1,49 +1,46 @@
-from bujji.core.enums import Direction, SignalType
+"""Signal Engine tests — straddle variant (fires at 09:20, no ORB)."""
+from bujji.core.enums import SignalType
 from bujji.signal.engine import SignalEngine
 from tests.conftest import c
 
 
-def build_orb(engine):
-    # ORB window 9:15-9:20 -> single 5m candle at 9:15.
-    engine.on_candle(c(9, 15, 100, 110, 90, 105))
-
-
-def test_no_trade_before_orb(config, logger):
+def test_no_trade_before_trading_start(config, logger):
+    """Candles before 09:20 must not generate a signal."""
     eng = SignalEngine(config, logger)
-    sig = eng.on_candle(c(9, 15, 100, 110, 90, 105))
+    sig = eng.on_candle(c(9, 15, 22000, 22010, 21990, 22005))
     assert sig.type is SignalType.NO_TRADE
-    assert eng.orb_ready
+    assert sig.reason == "before_trading_start"
 
 
-def test_bullish_breakout(config, logger):
+def test_enter_straddle_at_trading_start(config, logger):
+    """First candle at or after 09:20 emits ENTER_STRADDLE."""
     eng = SignalEngine(config, logger)
-    build_orb(eng)
-    # Strong bullish candle closing above ORB high (110) and above VWAP.
-    sig = eng.on_candle(c(9, 20, 111, 130, 110, 129))
+    sig = eng.on_candle(c(9, 20, 22000, 22010, 21990, 22005))
+    assert sig.type is SignalType.ENTER_STRADDLE
     assert sig.is_trade
-    assert sig.direction is Direction.BULLISH
+    assert sig.spot == 22005
 
 
-def test_bearish_breakdown(config, logger):
+def test_orb_ready_always_true(config, logger):
+    """No ORB is needed — orb_ready is always True from the first candle."""
     eng = SignalEngine(config, logger)
-    build_orb(eng)
-    sig = eng.on_candle(c(9, 20, 89, 90, 60, 61))
-    assert sig.is_trade
-    assert sig.direction is Direction.BEARISH
-
-
-def test_weak_body_rejected(config, logger):
-    eng = SignalEngine(config, logger)
-    build_orb(eng)
-    # Closes above ORB high but body is a small fraction of the range.
-    sig = eng.on_candle(c(9, 20, 111, 140, 100, 112))
-    assert sig.type is SignalType.NO_TRADE
+    assert eng.orb_ready is True
+    eng.on_candle(c(9, 15, 22000, 22010, 21990, 22005))
+    assert eng.orb_ready is True
 
 
 def test_one_signal_per_day(config, logger):
+    """Only the first 09:20 candle fires; subsequent candles are NO_TRADE."""
     eng = SignalEngine(config, logger)
-    build_orb(eng)
-    first = eng.on_candle(c(9, 20, 111, 130, 110, 129))
-    second = eng.on_candle(c(9, 25, 130, 150, 129, 149))
+    first = eng.on_candle(c(9, 20, 22000, 22010, 21990, 22005))
+    second = eng.on_candle(c(9, 25, 22005, 22015, 21995, 22010))
     assert first.is_trade
     assert second.type is SignalType.NO_TRADE
+    assert second.reason == "already_signalled"
+
+
+def test_no_trade_at_or_after_hard_exit(config, logger):
+    """Candles at or after hard_exit must not trigger a signal."""
+    eng = SignalEngine(config, logger)
+    sig = eng.on_candle(c(15, 5, 22000, 22010, 21990, 22005))
+    assert sig.type is SignalType.NO_TRADE

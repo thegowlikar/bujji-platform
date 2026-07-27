@@ -1,5 +1,8 @@
 # Tier 1 — Capital-Protection Fixes (C1–C4)
 
+> **Staleness notice:** this document predates the VWAP Premium Straddle Seller strategy and describes the earlier ORB-VWAP breakout strategy in places. For the current strategy/architecture, see ARCHITECTURE.md; for the current bug/fix history, see AUDIT_LOG.md; for current operational procedures, see OPERATIONS_RUNBOOK.md.
+
+
 These changes address the four **critical** findings from the production-readiness
 audit that could cause capital loss. They touch **only** execution safety,
 recovery, and reconciliation. **No entry or exit rule was changed** — the

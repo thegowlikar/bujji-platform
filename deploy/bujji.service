@@ -1,5 +1,5 @@
 [Unit]
-Description=Bujji ORB-VWAP ATM Seller
+Description=Bujji VWAP Premium Straddle Seller
 # Wait for real network/DNS before starting — the broker connection at
 # startup will otherwise fail fast (by design) on every boot.
 After=network-online.target

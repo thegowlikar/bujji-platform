@@ -1,0 +1,431 @@
+{
+  "campaign": "Historical Qualification Campaign v2",
+  "status": "COMPLETE",
+  "corpus_manifest": {
+    "corpus_id": "CORPUS-de6e1ad72ef28aa1",
+    "source_description": "NSE official F&O Bhavcopy, NIFTY index options, 13 real trading days 2026-07-06 to 2026-07-22",
+    "trading_dates": [
+      "2026-07-06",
+      "2026-07-07",
+      "2026-07-08",
+      "2026-07-09",
+      "2026-07-10",
+      "2026-07-13",
+      "2026-07-14",
+      "2026-07-15",
+      "2026-07-16",
+      "2026-07-17",
+      "2026-07-20",
+      "2026-07-21",
+      "2026-07-22"
+    ],
+    "session_count": 13,
+    "checksum": "5fcd01b20fb9df8a5963282f6d55d4f868c93d04586e5d6da4824a66fbab7cce",
+    "generation_timestamp": "2026-07-23T00:00:00",
+    "schema_version": "1.0.0"
+  },
+  "validation": {
+    "total": 13,
+    "valid": 13,
+    "invalid": 0,
+    "invalid_details": []
+  },
+  "compatibility": [
+    {
+      "id": "NIFTY-2026-07-06",
+      "compatible": true,
+      "missing": [],
+      "unrecognized": {}
+    },
+    {
+      "id": "NIFTY-2026-07-07",
+      "compatible": true,
+      "missing": [],
+      "unrecognized": {}
+    },
+    {
+      "id": "NIFTY-2026-07-08",
+      "compatible": true,
+      "missing": [],
+      "unrecognized": {}
+    },
+    {
+      "id": "NIFTY-2026-07-09",
+      "compatible": true,
+      "missing": [],
+      "unrecognized": {}
+    },
+    {
+      "id": "NIFTY-2026-07-10",
+      "compatible": true,
+      "missing": [],
+      "unrecognized": {}
+    },
+    {
+      "id": "NIFTY-2026-07-13",
+      "compatible": true,
+      "missing": [],
+      "unrecognized": {}
+    },
+    {
+      "id": "NIFTY-2026-07-14",
+      "compatible": true,
+      "missing": [],
+      "unrecognized": {}
+    },
+    {
+      "id": "NIFTY-2026-07-15",
+      "compatible": true,
+      "missing": [],
+      "unrecognized": {}
+    },
+    {
+      "id": "NIFTY-2026-07-16",
+      "compatible": true,
+      "missing": [],
+      "unrecognized": {}
+    },
+    {
+      "id": "NIFTY-2026-07-17",
+      "compatible": true,
+      "missing": [],
+      "unrecognized": {}
+    },
+    {
+      "id": "NIFTY-2026-07-20",
+      "compatible": true,
+      "missing": [],
+      "unrecognized": {}
+    },
+    {
+      "id": "NIFTY-2026-07-21",
+      "compatible": true,
+      "missing": [],
+      "unrecognized": {}
+    },
+    {
+      "id": "NIFTY-2026-07-22",
+      "compatible": true,
+      "missing": [],
+      "unrecognized": {}
+    }
+  ],
+  "sessions": [
+    {
+      "id": "NIFTY-2026-07-06",
+      "timestamp": "2026-07-06T15:30:00",
+      "outcome": "FAILED",
+      "strategy": null,
+      "strategy_status": "NO_STRATEGY",
+      "health": "HEALTHY",
+      "circuit": "CLOSED",
+      "rate_limit": "PERMITTED",
+      "market_context": "UNKNOWN",
+      "market_opinion": "INSUFFICIENT_EVIDENCE",
+      "context_stability": "INSUFFICIENT_HISTORY",
+      "calibration": "INSUFFICIENT_HISTORY",
+      "governance": "REJECTED",
+      "lifecycle": "UNKNOWN",
+      "contract": "UNKNOWN"
+    },
+    {
+      "id": "NIFTY-2026-07-07",
+      "timestamp": "2026-07-07T15:30:00",
+      "outcome": "FAILED",
+      "strategy": null,
+      "strategy_status": "NO_STRATEGY",
+      "health": "HEALTHY",
+      "circuit": "CLOSED",
+      "rate_limit": "PERMITTED",
+      "market_context": "UNKNOWN",
+      "market_opinion": "INSUFFICIENT_EVIDENCE",
+      "context_stability": "STABLE",
+      "calibration": "INSUFFICIENT_HISTORY",
+      "governance": "REJECTED",
+      "lifecycle": "UNKNOWN",
+      "contract": "UNKNOWN"
+    },
+    {
+      "id": "NIFTY-2026-07-08",
+      "timestamp": "2026-07-08T15:30:00",
+      "outcome": "FAILED",
+      "strategy": null,
+      "strategy_status": "NO_STRATEGY",
+      "health": "HEALTHY",
+      "circuit": "CLOSED",
+      "rate_limit": "PERMITTED",
+      "market_context": "TRENDING_DOWN",
+      "market_opinion": "BEARISH",
+      "context_stability": "TRANSITIONING",
+      "calibration": "INSUFFICIENT_HISTORY",
+      "governance": "REJECTED",
+      "lifecycle": "UNKNOWN",
+      "contract": "UNKNOWN"
+    },
+    {
+      "id": "NIFTY-2026-07-09",
+      "timestamp": "2026-07-09T15:30:00",
+      "outcome": "FAILED",
+      "strategy": "COVERED_CALL",
+      "strategy_status": "SELECTED",
+      "health": "HEALTHY",
+      "circuit": "CLOSED",
+      "rate_limit": "PERMITTED",
+      "market_context": "TRENDING_DOWN",
+      "market_opinion": "BEARISH",
+      "context_stability": "MOSTLY_STABLE",
+      "calibration": "INSUFFICIENT_HISTORY",
+      "governance": "REJECTED",
+      "lifecycle": "UNKNOWN",
+      "contract": "UNKNOWN"
+    },
+    {
+      "id": "NIFTY-2026-07-10",
+      "timestamp": "2026-07-10T15:30:00",
+      "outcome": "FAILED",
+      "strategy": null,
+      "strategy_status": "NO_STRATEGY",
+      "health": "HEALTHY",
+      "circuit": "CLOSED",
+      "rate_limit": "PERMITTED",
+      "market_context": "TRANSITION",
+      "market_opinion": "INSUFFICIENT_EVIDENCE",
+      "context_stability": "TRANSITIONING",
+      "calibration": "INSUFFICIENT_HISTORY",
+      "governance": "REJECTED",
+      "lifecycle": "UNKNOWN",
+      "contract": "UNKNOWN"
+    },
+    {
+      "id": "NIFTY-2026-07-13",
+      "timestamp": "2026-07-13T15:30:00",
+      "outcome": "FAILED",
+      "strategy": null,
+      "strategy_status": "NO_STRATEGY",
+      "health": "HEALTHY",
+      "circuit": "CLOSED",
+      "rate_limit": "PERMITTED",
+      "market_context": "TRANSITION",
+      "market_opinion": "NEUTRAL",
+      "context_stability": "TRANSITIONING",
+      "calibration": "INSUFFICIENT_HISTORY",
+      "governance": "REJECTED",
+      "lifecycle": "UNKNOWN",
+      "contract": "UNKNOWN"
+    },
+    {
+      "id": "NIFTY-2026-07-14",
+      "timestamp": "2026-07-14T15:30:00",
+      "outcome": "FAILED",
+      "strategy": null,
+      "strategy_status": "NO_STRATEGY",
+      "health": "HEALTHY",
+      "circuit": "CLOSED",
+      "rate_limit": "PERMITTED",
+      "market_context": "SIDEWAYS",
+      "market_opinion": "NEUTRAL",
+      "context_stability": "TRANSITIONING",
+      "calibration": "INSUFFICIENT_HISTORY",
+      "governance": "REJECTED",
+      "lifecycle": "UNKNOWN",
+      "contract": "UNKNOWN"
+    },
+    {
+      "id": "NIFTY-2026-07-15",
+      "timestamp": "2026-07-15T15:30:00",
+      "outcome": "FAILED",
+      "strategy": null,
+      "strategy_status": "NO_STRATEGY",
+      "health": "HEALTHY",
+      "circuit": "CLOSED",
+      "rate_limit": "PERMITTED",
+      "market_context": "SIDEWAYS",
+      "market_opinion": "NEUTRAL",
+      "context_stability": "TRANSITIONING",
+      "calibration": "CALIBRATED",
+      "governance": "REJECTED",
+      "lifecycle": "UNKNOWN",
+      "contract": "UNKNOWN"
+    },
+    {
+      "id": "NIFTY-2026-07-16",
+      "timestamp": "2026-07-16T15:30:00",
+      "outcome": "FAILED",
+      "strategy": null,
+      "strategy_status": "NO_STRATEGY",
+      "health": "HEALTHY",
+      "circuit": "CLOSED",
+      "rate_limit": "PERMITTED",
+      "market_context": "SIDEWAYS",
+      "market_opinion": "NEUTRAL",
+      "context_stability": "TRANSITIONING",
+      "calibration": "CALIBRATED",
+      "governance": "REJECTED",
+      "lifecycle": "UNKNOWN",
+      "contract": "UNKNOWN"
+    },
+    {
+      "id": "NIFTY-2026-07-17",
+      "timestamp": "2026-07-17T15:30:00",
+      "outcome": "FAILED",
+      "strategy": null,
+      "strategy_status": "NO_STRATEGY",
+      "health": "HEALTHY",
+      "circuit": "CLOSED",
+      "rate_limit": "PERMITTED",
+      "market_context": "SIDEWAYS",
+      "market_opinion": "NEUTRAL",
+      "context_stability": "TRANSITIONING",
+      "calibration": "CALIBRATED",
+      "governance": "REJECTED",
+      "lifecycle": "UNKNOWN",
+      "contract": "UNKNOWN"
+    },
+    {
+      "id": "NIFTY-2026-07-20",
+      "timestamp": "2026-07-20T15:30:00",
+      "outcome": "FAILED",
+      "strategy": null,
+      "strategy_status": "NO_STRATEGY",
+      "health": "HEALTHY",
+      "circuit": "CLOSED",
+      "rate_limit": "PERMITTED",
+      "market_context": "TRANSITION",
+      "market_opinion": "INSUFFICIENT_EVIDENCE",
+      "context_stability": "TRANSITIONING",
+      "calibration": "CALIBRATED",
+      "governance": "REJECTED",
+      "lifecycle": "UNKNOWN",
+      "contract": "UNKNOWN"
+    },
+    {
+      "id": "NIFTY-2026-07-21",
+      "timestamp": "2026-07-21T15:30:00",
+      "outcome": "FAILED",
+      "strategy": null,
+      "strategy_status": "NO_STRATEGY",
+      "health": "HEALTHY",
+      "circuit": "CLOSED",
+      "rate_limit": "PERMITTED",
+      "market_context": "TRANSITION",
+      "market_opinion": "BULLISH",
+      "context_stability": "TRANSITIONING",
+      "calibration": "CALIBRATED",
+      "governance": "REJECTED",
+      "lifecycle": "UNKNOWN",
+      "contract": "UNKNOWN"
+    },
+    {
+      "id": "NIFTY-2026-07-22",
+      "timestamp": "2026-07-22T15:30:00",
+      "outcome": "FAILED",
+      "strategy": null,
+      "strategy_status": "NO_STRATEGY",
+      "health": "HEALTHY",
+      "circuit": "CLOSED",
+      "rate_limit": "PERMITTED",
+      "market_context": "TRANSITION",
+      "market_opinion": "INSUFFICIENT_EVIDENCE",
+      "context_stability": "TRANSITIONING",
+      "calibration": "CALIBRATED",
+      "governance": "REJECTED",
+      "lifecycle": "UNKNOWN",
+      "contract": "UNKNOWN"
+    }
+  ],
+  "qualification_report": {
+    "report_id": "QREPORT-bbe021ca1cfcc16f",
+    "total_replay_sessions": 13,
+    "completed_runs": 0,
+    "rejected_runs": 0,
+    "runtime_failures": 13,
+    "health_state_counts": {
+      "HEALTHY": 13
+    },
+    "circuit_state_counts": {
+      "CLOSED": 13
+    },
+    "rate_limit_state_counts": {
+      "PERMITTED": 13
+    },
+    "insufficient_data_occurrences": 0,
+    "replay_identifiers": [
+      "NIFTY-2026-07-06",
+      "NIFTY-2026-07-07",
+      "NIFTY-2026-07-08",
+      "NIFTY-2026-07-09",
+      "NIFTY-2026-07-10",
+      "NIFTY-2026-07-13",
+      "NIFTY-2026-07-14",
+      "NIFTY-2026-07-15",
+      "NIFTY-2026-07-16",
+      "NIFTY-2026-07-17",
+      "NIFTY-2026-07-20",
+      "NIFTY-2026-07-21",
+      "NIFTY-2026-07-22"
+    ],
+    "qualification_fingerprints": [
+      "RFP-0000000000000000",
+      "RFP-0000000000000000",
+      "RFP-0000000000000000",
+      "RFP-0000000000000000",
+      "RFP-0000000000000000",
+      "RFP-0000000000000000",
+      "RFP-0000000000000000",
+      "RFP-0000000000000000",
+      "RFP-0000000000000000",
+      "RFP-0000000000000000",
+      "RFP-0000000000000000",
+      "RFP-0000000000000000",
+      "RFP-0000000000000000"
+    ],
+    "timestamp": "2026-07-23T00:00:00",
+    "version": "1.0.0"
+  },
+  "determinism": {
+    "runs_compared": 2,
+    "identical": true,
+    "lifecycle_id_exception_affects_this_campaign": false,
+    "note": "lifecycle_id (internal MIC v2 publication identifier) is not surfaced into ReplayScenario/PipelineInput/QualificationRecord; only the lifecycle classification string is consumed, and it was identical across both runs for every session."
+  },
+  "production_qualification_fingerprint": {
+    "file": "/opt/bujji/qualification/baselines.json",
+    "md5": "2328e0f77ec312eeca318946df293d91",
+    "mtime": "2026-07-20T23:43:00",
+    "unchanged": true
+  },
+  "analysis_categories": {
+    "architectural_failures": [
+      {
+        "session": "NIFTY-2026-07-09",
+        "finding": "Strategy Selector chose COVERED_CALL; NIFTY Contract Builder has no leg template for it (contract_construction_result.failure_reason=UNKNOWN_STRATEGY). Genuine, newly discovered gap between Series 34 strategy vocabulary and Series 42 leg-template coverage."
+      }
+    ],
+    "data_quality_limitations": [
+      "governance=REJECTED on 100% of sessions: no certification input wired into Series 62 publication replay bridge.",
+      "All OptionChainLevel objects have ce_oi=pe_oi=0 and all bid/ask=None (Series 61 disclosed Bhavcopy limitation) -- open_interest/option_premium MIC v2 modules contributed no evidence.",
+      "No VIX data supplied to any session.",
+      "9/13 sessions remained in INSUFFICIENT_HISTORY/UNKNOWN territory -- calibration matured to CALIBRATED only from session 8 onward."
+    ],
+    "expected_conservative_decisions": [
+      "12/13 NO_STRATEGY outcomes -- Strategy Selector correctly declining on UNKNOWN/thin-evidence market states.",
+      "runtime_authorization.decision=DENY on empty/incomplete ExecutionSessions -- Safety Gate correctly refusing to authorize sessions with no real orders.",
+      "governance=REJECTED given no certification evidence is a conservative, correct default, not a false rejection."
+    ],
+    "runtime_defects": []
+  },
+  "known_limitations": [
+    "governance=REJECTED is an artifact of a missing certification input, not miscalibrated governance logic.",
+    "Option-chain OI/bid-ask entirely absent from this corpus.",
+    "No VIX data.",
+    "13 trading days is short for calibration/stability windows (observed ~8 sessions to mature).",
+    "COVERED_CALL strategy selection will continue to fail at Contract Construction until Series 42 leg-template registry is extended."
+  ],
+  "recommendations": [
+    "Do not proceed to live qualification staging yet -- zero COMPLETED sessions this campaign.",
+    "File the COVERED_CALL / UNKNOWN_STRATEGY gap as a defect against Series 42 leg-template registry.",
+    "Source real option OI/bid-ask and VIX data before the next campaign.",
+    "Extend the corpus beyond 13 sessions (a month or more).",
+    "Wire a real certification input into Series 62 publication replay bridge if a source becomes available."
+  ]
+}

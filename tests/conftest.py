@@ -15,6 +15,7 @@ def config() -> AppConfig:
     cfg.timing.orb_end = time(9, 20)
     cfg.timing.trading_start = time(9, 20)
     cfg.timing.trading_end = time(15, 15)
+    cfg.timing.hard_exit = time(15, 5)
     return cfg
 
 

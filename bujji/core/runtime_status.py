@@ -57,6 +57,20 @@ class RuntimeStatus:
     # Latest VWAP audit record + a rolling history for "Market Data Health".
     market_data_health: Optional[dict[str, Any]] = None
     vwap_audit_history: list[dict[str, Any]] = field(default_factory=list)
+    # Capital Management Engine: latest pre-trade sizing decision, purely
+    # observational for the dashboard.
+    capital_health: Optional[dict[str, Any]] = None
+    # Market Intelligence Core: latest readings from all eight brains
+    # (bujji/intelligence/), keyed by brain name. Read-only observation
+    # layer -- never written to by any trading logic, never read back by
+    # any trading logic. A brain's key is simply absent from this dict when
+    # there is no real data available to it this cycle (see
+    # bujji/intelligence/runner.py) -- never a fabricated placeholder.
+    intelligence: dict[str, Any] = field(default_factory=dict)
+    # Operations Layer (Sprint 4): latest health/alerts snapshot, purely
+    # observational for the dashboard -- never read by any trading logic,
+    # never written to by any trading logic.
+    ops: dict[str, Any] = field(default_factory=dict)
 
     def touch(self) -> None:
         self.updated_at = datetime.now().isoformat()

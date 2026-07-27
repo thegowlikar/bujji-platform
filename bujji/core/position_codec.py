@@ -86,13 +86,30 @@ def position_to_dict(pos: Position) -> dict[str, Any]:
             "low": pos.orb.low,
             "start": pos.orb.start.isoformat(),
             "end": pos.orb.end.isoformat(),
-        },
+        } if pos.orb else None,
+        "ce_contract": {
+            "symbol": pos.ce_contract.symbol,
+            "underlying": pos.ce_contract.underlying,
+            "strike": pos.ce_contract.strike,
+            "option_type": pos.ce_contract.option_type.value,
+            "expiry": pos.ce_contract.expiry,
+            "lot_size": pos.ce_contract.lot_size,
+        } if pos.ce_contract else None,
+        "pe_contract": {
+            "symbol": pos.pe_contract.symbol,
+            "underlying": pos.pe_contract.underlying,
+            "strike": pos.pe_contract.strike,
+            "option_type": pos.pe_contract.option_type.value,
+            "expiry": pos.pe_contract.expiry,
+            "lot_size": pos.pe_contract.lot_size,
+        } if pos.pe_contract else None,
         "max_favourable_excursion": pos.max_favourable_excursion,
         "max_adverse_excursion": pos.max_adverse_excursion,
         "max_profit_seen": pos.max_profit_seen,
         "max_loss_seen": pos.max_loss_seen,
         "candles_held": pos.candles_held,
         "thesis": _thesis_to_dict(pos.thesis) if pos.thesis else None,
+        "capital_decision": pos.capital_decision,
     }
 
 
@@ -113,16 +130,41 @@ def _position_from_dict_unsafe(d: dict[str, Any]) -> Position:
         expiry=str(c["expiry"]),
         lot_size=int(c["lot_size"]),
     )
-    o = d["orb"]
+    o = d.get("orb")
     orb = OpeningRange(
         high=float(o["high"]),
         low=float(o["low"]),
         start=datetime.fromisoformat(o["start"]),
         end=datetime.fromisoformat(o["end"]),
-    )
+    ) if o else None
     thesis: Optional[TradeThesis] = (
         _thesis_from_dict(d["thesis"], orb) if d.get("thesis") else None
     )
+    def _load_opt_contract(cd):
+        if not cd:
+            return None
+        return OptionContract(
+            symbol=str(cd["symbol"]),
+            underlying=str(cd["underlying"]),
+            strike=int(cd["strike"]),
+            option_type=OptionType(cd["option_type"]),
+            expiry=str(cd["expiry"]),
+            lot_size=int(cd["lot_size"]),
+        )
+    ce_contract = _load_opt_contract(d.get("ce_contract"))
+    pe_contract = _load_opt_contract(d.get("pe_contract"))
+    if (ce_contract is None) != (pe_contract is None):
+        # A straddle position must have BOTH legs or NEITHER — one leg
+        # present and the other missing/corrupted is never a legitimate
+        # state. Silently accepting it would resume live management with
+        # only one leg's LTP observable while entry_price/VWAP still assume
+        # a combined-premium baseline, and would buy back only the visible
+        # leg on exit, permanently orphaning the other at the broker.
+        raise ValueError(
+            "straddle position has exactly one of ce_contract/pe_contract "
+            "present — this is never valid; both legs must be present "
+            "together or both absent"
+        )
     return Position(
         contract=contract,
         direction=Direction(d["direction"]),
@@ -136,12 +178,15 @@ def _position_from_dict_unsafe(d: dict[str, Any]) -> Position:
         entry_spot=float(d["entry_spot"]),
         entry_time=datetime.fromisoformat(d["entry_time"]),
         orb=orb,
+        ce_contract=ce_contract,
+        pe_contract=pe_contract,
         max_favourable_excursion=float(d.get("max_favourable_excursion", 0.0)),
         max_adverse_excursion=float(d.get("max_adverse_excursion", 0.0)),
         max_profit_seen=float(d.get("max_profit_seen", 0.0)),
         max_loss_seen=float(d.get("max_loss_seen", 0.0)),
         candles_held=int(d.get("candles_held", 0)),
         thesis=thesis,
+        capital_decision=d.get("capital_decision"),
     )
 
 

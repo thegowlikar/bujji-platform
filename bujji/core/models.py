@@ -90,7 +90,7 @@ class Signal:
 
     @property
     def is_trade(self) -> bool:
-        return self.type is SignalType.ENTER_LONG_PREMIUM_SELL
+        return self.type in (SignalType.ENTER_LONG_PREMIUM_SELL, SignalType.ENTER_STRADDLE)
 
 
 @dataclass(frozen=True)
@@ -148,7 +148,10 @@ class Position:
     entry_price: float
     entry_spot: float
     entry_time: datetime
-    orb: OpeningRange
+    orb: Optional[OpeningRange]
+    # Straddle legs (None for single-leg positions)
+    ce_contract: Optional[OptionContract] = None
+    pe_contract: Optional[OptionContract] = None
     # Excursion tracking (in rupees of premium P&L for the whole position).
     max_favourable_excursion: float = 0.0
     max_adverse_excursion: float = 0.0
@@ -156,6 +159,15 @@ class Position:
     max_loss_seen: float = 0.0
     candles_held: int = 0
     thesis: Optional["TradeThesis"] = None
+    # Capital Management Engine's entry-time sizing decision, kept on the
+    # position purely for the permanent journal/audit trail (see
+    # Orchestrator._journal_trade) -- never re-consulted for anything else.
+    capital_decision: Optional[dict] = None
+    # Decision Lineage (Sprint 2): same decision_id as this position's
+    # originating TradeIntention/DecisionSnapshot/ExecutionPlan -- carried
+    # through to the journal row at exit. Never re-consulted for anything
+    # else, same discipline as capital_decision above.
+    decision_id: str = ""
 
     def mtm(self, current_premium: float) -> float:
         """Mark-to-market P&L in rupees.
@@ -199,3 +211,71 @@ class TradeDecision:
     @property
     def should_exit(self) -> bool:
         return self.decision is Decision.EXIT
+
+
+@dataclass(frozen=True)
+class TradeIntention:
+    """Strategy Layer's ONLY output (Production Pipeline Entry 11, Layer 3).
+
+    Deliberately thin and broker-free: direction and thesis only, never a
+    strike, quantity, order, or margin figure. This is a pure, lossless
+    reframing of the Signal Engine's existing broker-free `Signal` output
+    into the Production Pipeline's formal boundary object -- it introduces
+    no new decision, no new field the strategy didn't already produce.
+    """
+
+    direction: Optional[Direction]
+    strategy_type: str          # e.g. "PREMIUM_VWAP_STRADDLE" -- descriptive only.
+    thesis: str                 # Narrative from the existing TradeThesis, if any.
+    evidence_refs: dict         # Pointers to the evidence this was built from (spot, vwap, orb) -- not the evidence itself.
+    as_of: datetime
+    # Decision Lineage (Sprint 2): ties this intention to the decision_id
+    # every downstream artifact (DecisionSnapshot, ExecutionPlan, Position,
+    # TradeJournal row) will also carry. Defaulted for backward
+    # compatibility with any existing construction that predates lineage.
+    decision_id: str = ""
+
+
+@dataclass(frozen=True)
+class DecisionSnapshot:
+    """Immutable record of decision state BEFORE the first broker order is
+    sent (Production Pipeline Entry 11, item 4). NOT a journal entry --
+    the journal records what happened; this records what was believed and
+    planned at the moment of acting, for later replay/audit comparison.
+    Captured, logged, and never read back into any live decision -- purely
+    additive, cannot change trading behaviour by construction.
+    """
+
+    decision_id: str
+    as_of: datetime
+    strategy_version: str
+    market_observations: dict       # candle OHLCV at decision time.
+    intelligence_snapshot: dict     # MIC's run_intelligence() output at this instant.
+    intention: TradeIntention
+    planned_contracts: dict         # {"ce": symbol, "pe": symbol, "strike": int}.
+    planned_structure: str          # e.g. "ATM_STRADDLE".
+    broker_session: str             # broker.name -- which broker/mode executed this.
+    replay_reference: str           # candle timestamp isoformat, the replay-session anchor.
+
+
+@dataclass(frozen=True)
+class ExecutionPlan:
+    """Order Planning Layer's final output (Production Pipeline Entry 11,
+    between Layer 6 and Layer 7). Represents exactly what will be executed
+    -- and nothing that happened yet. Contains NO broker response, no
+    fill price, no order status. The Broker Layer receives only this,
+    never a TradeIntention.
+    """
+
+    execution_id: str
+    decision_id: str          # Ties this plan back to its TradeIntention/DecisionSnapshot.
+    strategy_type: str
+    structure_type: str       # e.g. "ATM_STRADDLE".
+    contracts: dict           # {"ce": OptionContract, "pe": OptionContract}.
+    side_per_leg: dict        # {"ce": Side, "pe": Side}.
+    quantities: dict          # {"ce": int, "pe": int}.
+    execution_sequence: list  # Order legs are submitted in, e.g. ["ce", "pe"].
+    idempotency_keys: dict    # {"ce": client_order_id, "pe": client_order_id}.
+    broker_account: str       # broker.name -- which broker/mode will execute this.
+    execution_constraints: dict = field(default_factory=dict)
+    as_of: Optional[datetime] = None

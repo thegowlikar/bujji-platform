@@ -46,9 +46,8 @@ def build_orch(config, logger, broker, tmp_path):
 
 
 async def _enter_position(orch):
-    """Drive ORB + a strong bullish breakout so a position opens."""
-    await orch.on_candle(c(9, 15, 22000, 22010, 21990, 22005, vol=1000))
-    await orch.on_candle(c(9, 20, 22006, 22080, 22005, 22079, vol=1000))
+    """Drive the straddle entry at 09:20 (no ORB required)."""
+    await orch.on_candle(c(9, 20, 22000, 22010, 21990, 22005, vol=1000))
 
 
 # ---------------------------------------------------------------------- #
@@ -66,8 +65,9 @@ async def test_position_codec_roundtrip(config, logger, tmp_path):
     assert restored.quantity == pos.quantity
     assert restored.direction == pos.direction
     assert restored.entry_price == pos.entry_price
-    assert restored.orb.high == pos.orb.high
-    assert restored.thesis is not None and "BULLISH" in restored.thesis.narrative
+    assert restored.orb is None                 # Straddle has no opening range.
+    assert restored.ce_contract is not None  # CE leg serialized and restored.
+    assert restored.pe_contract is not None  # PE leg serialized and restored.
 
 
 # ---------------------------------------------------------------------- #
@@ -217,3 +217,91 @@ async def test_c4_exit_flattens_fully_through_partials(config, logger, tmp_path)
     assert ok and orch.state is State.DONE_FOR_DAY
     assert not orch.has_open_position()
     assert not await broker.get_open_positions()  # fully flattened.
+
+
+# ---------------------------------------------------------------------- #
+# One-leg entry failure — the CE leg fills but the PE leg's placement
+# raises. Must never leave a naked, unmonitored short sitting at the broker
+# for the rest of the day; the filled leg is bought back same-cycle.
+# ---------------------------------------------------------------------- #
+@pytest.mark.asyncio
+async def test_partial_entry_failure_auto_flattens_the_filled_leg(
+    config, logger, tmp_path
+):
+    _fast_broker_cfg(config)
+
+    class PeFailsBroker(PaperBroker):
+        """CE sells fine; the PE leg's place_order always raises."""
+
+        async def place_order(self, request):
+            if request.contract.option_type.value == "PE" and request.side.value == "SELL":
+                raise RuntimeError("simulated PE leg rejection")
+            return await super().place_order(request)
+
+    broker = PeFailsBroker()
+    orch, status = build_orch(config, logger, broker, tmp_path)
+    await orch.startup()
+
+    await orch.on_candle(c(9, 20, 22000, 22010, 21990, 22005, vol=1000))
+
+    # Entry must NOT be considered open — the PE leg never filled.
+    assert not orch.has_open_position()
+    assert orch.state is State.READY  # Rolled back, not stuck IN_POSITION.
+
+    # The CE leg that DID fill must have been bought back immediately —
+    # not left naked at the broker until the next restart's reconciliation.
+    assert not await broker.get_open_positions()
+    # Two SELLs (CE, rejected PE never recorded) + one BUY unwind = 2 recorded
+    # broker-side placements (the failed PE raise never reaches place_calls
+    # bookkeeping since it raises before returning a result).
+    assert broker.place_calls == 2  # CE sell + CE unwind buy.
+
+
+# ---------------------------------------------------------------------- #
+# ATM contract resolution — CE/PE pairing and failure handling.
+# ---------------------------------------------------------------------- #
+@pytest.mark.asyncio
+async def test_ce_and_pe_always_resolve_to_the_same_strike(config, logger, tmp_path):
+    """The two legs must never drift to different strikes — both are
+    resolved from the SAME candle close, through the SAME atm_strike()
+    formula, in the same entry cycle."""
+    _fast_broker_cfg(config)
+    broker = PaperBroker()
+    orch, status = build_orch(config, logger, broker, tmp_path)
+    await orch.startup()
+    await _enter_position(orch)
+
+    pos = orch._trade.position  # noqa: SLF001
+    assert pos.ce_contract is not None and pos.pe_contract is not None
+    assert pos.ce_contract.strike == pos.pe_contract.strike
+    # And both must be genuinely ATM to the entry candle's spot (22005 close,
+    # 50-point grid -> 22000).
+    assert pos.ce_contract.strike == 22000
+    assert pos.pe_contract.strike == 22000
+
+
+@pytest.mark.asyncio
+async def test_contract_resolution_failure_rolls_back_to_ready_not_stuck(
+    config, logger, tmp_path
+):
+    """A missing-contract/missing-strike failure during resolve_atm_contract
+    raises LookupError, NOT ExecutionError/AuthenticationError — it must
+    still roll the FSM back to READY (not get wedged at CONFIRMED with no
+    other code path ever revisiting it for the rest of the day)."""
+    _fast_broker_cfg(config)
+
+    class NoContractsBroker(PaperBroker):
+        async def resolve_atm_contract(self, underlying, spot, direction,
+                                       strike_interval, lot_size):
+            raise LookupError("simulated: no contracts found at this expiry")
+
+    broker = NoContractsBroker()
+    orch, status = build_orch(config, logger, broker, tmp_path)
+    await orch.startup()
+
+    await orch.on_candle(c(9, 20, 22000, 22010, 21990, 22005, vol=1000))
+
+    assert not orch.has_open_position()
+    assert orch.state is State.READY  # Not stuck at CONFIRMED.
+    assert status.healthy is False
+    assert "entry_failed_contract_resolution" in status.health_detail

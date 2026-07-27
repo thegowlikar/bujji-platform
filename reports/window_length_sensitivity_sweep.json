@@ -1,0 +1,107 @@
+{
+  "sweep": "Window-Length Sensitivity Sweep",
+  "status": "COMPLETE",
+  "method": "5 real corpora, real NSE Bhavcopy, all ending 2026-07-22, window lengths 13/31/51/71/81 trading days",
+  "results": [
+    {
+      "window_length": 13,
+      "total_sessions": 13,
+      "completed_runs": 3,
+      "completion_rate_pct": 23.1,
+      "governance_distribution": {
+        "APPROVED_WITH_WARNINGS": 7,
+        "APPROVED": 6
+      },
+      "market_context_distribution": {
+        "UNKNOWN": 2,
+        "TRENDING_DOWN": 2,
+        "TRANSITION": 5,
+        "SIDEWAYS": 4
+      },
+      "corpus_id": "CORPUS-40c59996f73becae",
+      "checksum": "5fcd01b20fb9df8a5963282f6d55d4f868c93d04586e5d6da4824a66fbab7cce"
+    },
+    {
+      "window_length": 31,
+      "total_sessions": 31,
+      "completed_runs": 4,
+      "completion_rate_pct": 12.9,
+      "governance_distribution": {
+        "APPROVED_WITH_WARNINGS": 6,
+        "APPROVED": 25
+      },
+      "market_context_distribution": {
+        "UNKNOWN": 2,
+        "TRENDING_DOWN": 1,
+        "TRANSITION": 23,
+        "TRENDING_UP": 3,
+        "SIDEWAYS": 2
+      },
+      "corpus_id": "CORPUS-5a33f6d68a1567de",
+      "checksum": "e6617e046029a0be980f5b1996fae0ecae5e8df8e2532c9d7fb31a463ce9aa1c"
+    },
+    {
+      "window_length": 51,
+      "total_sessions": 51,
+      "completed_runs": 42,
+      "completion_rate_pct": 82.4,
+      "governance_distribution": {
+        "APPROVED_WITH_WARNINGS": 9,
+        "APPROVED": 42
+      },
+      "market_context_distribution": {
+        "UNKNOWN": 2,
+        "SIDEWAYS": 9,
+        "TRENDING_UP": 4,
+        "TRANSITION": 33,
+        "TRENDING_DOWN": 3
+      },
+      "corpus_id": "CORPUS-f245b8196f32dd3b",
+      "checksum": "7e559ab772aecd2b8ace54945cfce279501eeab299f699ee8b21c5ef6c7eba85"
+    },
+    {
+      "window_length": 71,
+      "total_sessions": 71,
+      "completed_runs": 1,
+      "completion_rate_pct": 1.4,
+      "governance_distribution": {
+        "APPROVED_WITH_WARNINGS": 6,
+        "APPROVED": 65
+      },
+      "market_context_distribution": {
+        "UNKNOWN": 2,
+        "SIDEWAYS": 2,
+        "TRENDING_UP": 6,
+        "TRANSITION": 52,
+        "TRENDING_DOWN": 9
+      },
+      "corpus_id": "CORPUS-3b7c9efa81c372f2",
+      "checksum": "e3248f160e647fb8d2d649cbcd182bc3221b53ce8d964980c05ce66c67bad57c"
+    },
+    {
+      "window_length": 81,
+      "total_sessions": 81,
+      "completed_runs": 2,
+      "completion_rate_pct": 2.5,
+      "governance_distribution": {
+        "APPROVED_WITH_WARNINGS": 7,
+        "APPROVED": 74
+      },
+      "market_context_distribution": {
+        "UNKNOWN": 2,
+        "TRENDING_UP": 11,
+        "TRANSITION": 57,
+        "TRENDING_DOWN": 9,
+        "SIDEWAYS": 2
+      },
+      "corpus_id": "CORPUS-5887f39644624745",
+      "checksum": "df04b18faa889eeb8953eb736e771d85a75403b40bb20bbcfaecd08f61b1be25"
+    }
+  ],
+  "finding": "Completion rate is non-monotonic and highly sensitive to window length (1.4% to 82.4% swing). governance/certification remain stable (0% REJECTED, 100% CERTIFIED) at all window lengths.",
+  "production_qualification_fingerprint": {
+    "md5": "2328e0f77ec312eeca318946df293d91",
+    "unchanged": true
+  },
+  "recommendation": "Do not treat any single window completion rate as representative. Investigate why TRANSITION dominates market_context using the Series 66 Observatory before further readiness judgment."
+}

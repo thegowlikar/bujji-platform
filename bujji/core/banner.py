@@ -78,7 +78,7 @@ def render_startup_banner(config: AppConfig, mode_override: Optional[str] = None
 
     lines = [
         "=" * _WIDTH,
-        f"  Bujji ORB-VWAP ATM Seller  v{__version__}",
+        f"  Bujji VWAP Premium Straddle Seller  v{__version__}",
         f"  Mode:               {mode}",
         f"  Broker:             {broker_label}",
         f"  Market data source: {market_data}",

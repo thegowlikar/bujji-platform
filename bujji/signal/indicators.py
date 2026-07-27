@@ -138,3 +138,53 @@ class OpeningRangeBuilder:
             start=self._first.timestamp,
             end=self._last.timestamp,
         )
+
+class PremiumVwapTracker:
+    """Genuine VOLUME-WEIGHTED running average of combined straddle premium
+    (CE + PE), where the weight for each candle is that candle's combined
+    (CE volume + PE volume).
+
+    value = sum(premium_i * volume_i) / sum(volume_i)
+
+    Changed 2026-07-19 from an equal-weight running average, per explicit
+    operator request, after live verification showed real FYERS ATM option
+    5-minute candles carry genuine, non-zero, substantial volume throughout
+    the session (see docs/AUDIT_LOG.md) -- the original "options volume is
+    too noisy" justification did not hold up for ATM strikes specifically.
+
+    `update()` accepts an optional `volume` (default 1.0) so the entry-time
+    seed call -- which has no real "candle volume", just a single fill --
+    and any caller that genuinely cannot obtain volume both degrade
+    gracefully to an equal-weight contribution for that one data point,
+    rather than crashing or contributing zero weight (a volume=0 candle
+    would otherwise silently vanish from the average entirely, which is
+    worse than treating it as equal-weight).
+    """
+
+    def __init__(self) -> None:
+        self._cumulative_pv: float = 0.0   # sum(premium * volume)
+        self._cumulative_vol: float = 0.0  # sum(volume)
+        self._count: int = 0               # candles folded in (for observability only)
+
+    def update(self, premium: float, volume: float = 1.0) -> float:
+        effective_volume = volume if volume and volume > 0 else 1.0
+        self._cumulative_pv += premium * effective_volume
+        self._cumulative_vol += effective_volume
+        self._count += 1
+        return self.value
+
+    @property
+    def value(self) -> float:
+        return self._cumulative_pv / self._cumulative_vol if self._cumulative_vol > 0 else 0.0
+
+    @property
+    def ready(self) -> bool:
+        return self._count > 0
+
+    @property
+    def candle_count(self) -> int:
+        return self._count
+
+    @property
+    def cumulative_volume(self) -> float:
+        return self._cumulative_vol

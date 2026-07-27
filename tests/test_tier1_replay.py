@@ -25,9 +25,8 @@ async def test_replay_normal_exit_still_works(config, logger, tmp_path):
     """Regression: the refactored exit path still closes and journals a trade."""
     _cfg(config, tmp_path)
     candles = [
-        c(9, 15, 22000, 22010, 21990, 22005, vol=1000),   # ORB
-        c(9, 20, 22006, 22080, 22005, 22079, vol=1000),   # breakout -> enter
-        c(9, 25, 22078, 22079, 21950, 21951, vol=1000),   # lose VWAP -> exit
+        c(9, 20, 22000, 22010, 21990, 22005, vol=1000),   # entry (straddle at 09:20)
+        c(15, 5, 22000, 22010, 21990, 22005, vol=1000),   # hard_exit -> square off
     ]
     engine = ReplayEngine(config, logger)
     result = await engine.run(candles)
@@ -42,9 +41,8 @@ async def test_replay_eod_square_off_when_position_left_open(config, logger, tmp
     _cfg(config, tmp_path)
     # ORB + breakout only; the trend stays intact so no exit signal fires.
     candles = [
-        c(9, 15, 22000, 22010, 21990, 22005, vol=1000),
-        c(9, 20, 22006, 22080, 22005, 22079, vol=1000),
-        c(9, 25, 22079, 22150, 22078, 22149, vol=1000),   # keeps trending up
+        c(9, 20, 22000, 22010, 21990, 22005, vol=1000),   # straddle entered
+        c(9, 25, 22000, 22010, 21990, 22005, vol=1000),   # premium near VWAP, no exit
     ]
     engine = ReplayEngine(config, logger)
     result = await engine.run(candles)

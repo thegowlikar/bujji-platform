@@ -1,10 +1,10 @@
-"""Tick Engine — continuous, tick-driven risk monitoring.
+"""Tick Engine — continuous, tick-driven risk monitoring (straddle variant).
 
 Verifies: entries remain untouched (no interaction with SignalEngine at all),
-a stop-loss/profit-target breach on a tick triggers an immediate exit via the
-existing square_off() path (not a new exit mechanism), the tick monitor stops
-cleanly when the position closes, and a broker with no live tick credentials
-simply gets no tick monitoring (no crash, no fake data).
+a stop-loss/profit-target breach on the COMBINED (CE+PE) premium triggers an
+immediate exit via the existing square_off() path (not a new exit mechanism),
+the tick monitor stops cleanly when the position closes, and a broker with no
+live tick credentials simply gets no tick monitoring (no crash, no fake data).
 """
 import asyncio
 
@@ -56,6 +56,15 @@ async def _open_position_with_tick_engine(config, logger, tmp_path, feed=None):
     return orch, status, engine
 
 
+def _set_combined_price(feed, orch, combined_premium):
+    """Split a target combined premium evenly across CE and PE legs and
+    feed both — the tick engine now requires both legs to tick before it
+    will compute an MTM at all."""
+    half = combined_premium / 2
+    feed.set_price(orch.position.ce_contract.symbol, half)
+    feed.set_price(orch.position.pe_contract.symbol, half)
+
+
 @pytest.mark.asyncio
 async def test_no_feed_means_no_tick_monitoring(config, logger, tmp_path):
     """A broker with no live tick credentials (e.g. plain paper mode) must
@@ -68,6 +77,21 @@ async def test_no_feed_means_no_tick_monitoring(config, logger, tmp_path):
 
 
 @pytest.mark.asyncio
+async def test_subscribes_to_both_straddle_legs(config, logger, tmp_path):
+    """The tick engine must watch BOTH the CE and PE legs — subscribing to
+    only one leg (the old ORB-strategy behavior) silently blinds it to half
+    of the position's real risk."""
+    feed = FakeTickFeed()
+    orch, status, engine = await _open_position_with_tick_engine(
+        config, logger, tmp_path, feed=feed
+    )
+    assert feed.started
+    assert set(feed.subscribed) == {
+        orch.position.ce_contract.symbol, orch.position.pe_contract.symbol,
+    }
+
+
+@pytest.mark.asyncio
 async def test_stop_loss_breach_triggers_immediate_exit(config, logger, tmp_path):
     feed = FakeTickFeed()
     config.risk.max_mtm_loss = 500  # Small cap so a modest premium rise breaches it.
@@ -75,19 +99,37 @@ async def test_stop_loss_breach_triggers_immediate_exit(config, logger, tmp_path
         config, logger, tmp_path, feed=feed
     )
     assert engine._task is not None  # noqa: SLF001 - started on POSITION_OPENED.
-    assert feed.started and feed.subscribed == [orch.position.contract.symbol]
 
     entry_premium = orch.position.entry_price
-    # Premium rose enough that MTM = (entry - current) * qty breaches -500.
-    feed.set_price(orch.position.contract.symbol, entry_premium + 100)
+    # Combined premium rose enough that MTM = (entry - current) * qty breaches -500.
+    _set_combined_price(feed, orch, entry_premium + 100)
 
-    await engine._check_once(orch.position.contract.symbol)  # noqa: SLF001
+    await engine._check_once()  # noqa: SLF001
 
     assert orch.state is State.DONE_FOR_DAY
     assert not orch.has_open_position()
     trades = orch._journal.all_trades()  # noqa: SLF001
     assert len(trades) == 1
     assert "tick_stop_loss" in trades[0]["exit_reason"]
+
+
+@pytest.mark.asyncio
+async def test_only_one_leg_ticking_is_a_safe_noop(config, logger, tmp_path):
+    """A single-leg blowout must NOT be evaluated on its own — waiting for
+    both legs to tick avoids a false MTM computed from half the position."""
+    feed = FakeTickFeed()
+    config.risk.max_mtm_loss = 500
+    orch, status, engine = await _open_position_with_tick_engine(
+        config, logger, tmp_path, feed=feed
+    )
+    entry_premium = orch.position.entry_price
+    # Only the CE leg ticks — feed a value that WOULD breach if (wrongly)
+    # treated as the full combined premium.
+    feed.set_price(orch.position.ce_contract.symbol, entry_premium + 1000)
+
+    await engine._check_once()  # noqa: SLF001
+
+    assert orch.state is State.IN_POSITION  # Waits for the PE leg too.
 
 
 @pytest.mark.asyncio
@@ -100,9 +142,9 @@ async def test_profit_target_is_disabled_by_default(config, logger, tmp_path):
         config, logger, tmp_path, feed=feed
     )
     entry_premium = orch.position.entry_price
-    feed.set_price(orch.position.contract.symbol, max(0.5, entry_premium - 1000))
+    _set_combined_price(feed, orch, max(0.5, entry_premium - 1000))
 
-    await engine._check_once(orch.position.contract.symbol)  # noqa: SLF001
+    await engine._check_once()  # noqa: SLF001
 
     assert orch.state is State.IN_POSITION  # Untouched — no profit target configured.
 
@@ -117,9 +159,9 @@ async def test_profit_target_triggers_when_explicitly_configured(config, logger,
     entry_premium = orch.position.entry_price
     qty = orch.position.quantity
     # mtm = (entry - current) * qty >= 200.
-    feed.set_price(orch.position.contract.symbol, max(0.5, entry_premium - (200 / qty) - 1))
+    _set_combined_price(feed, orch, max(0.5, entry_premium - (200 / qty) - 1))
 
-    await engine._check_once(orch.position.contract.symbol)  # noqa: SLF001
+    await engine._check_once()  # noqa: SLF001
 
     assert orch.state is State.DONE_FOR_DAY
     trades = orch._journal.all_trades()  # noqa: SLF001
@@ -128,11 +170,11 @@ async def test_profit_target_triggers_when_explicitly_configured(config, logger,
 
 @pytest.mark.asyncio
 async def test_no_tick_yet_is_a_safe_noop(config, logger, tmp_path):
-    feed = FakeTickFeed()  # No price set for the symbol.
+    feed = FakeTickFeed()  # No price set for either leg.
     orch, status, engine = await _open_position_with_tick_engine(
         config, logger, tmp_path, feed=feed
     )
-    await engine._check_once(orch.position.contract.symbol)  # noqa: SLF001
+    await engine._check_once()  # noqa: SLF001
     assert orch.state is State.IN_POSITION  # No tick -> candle-driven backstop remains.
 
 

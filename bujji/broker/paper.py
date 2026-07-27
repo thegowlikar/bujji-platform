@@ -29,6 +29,16 @@ class PaperBroker(Broker):
         *,
         partial_fill_qty: Optional[int] = None,
         raise_on_place_after_record: bool = False,
+        # Capital Management Engine test/dev knobs -- generous defaults so
+        # existing callers (tests, plain paper mode) see the SAME
+        # unconstrained-entry behavior as before the CME existed. Override
+        # these to test capital-aware sizing specifically (increasing/
+        # decreasing capital, insufficient margin, etc).
+        account_equity: Optional[float] = 1_00_00_000.0,
+        available_margin: Optional[float] = 1_00_00_000.0,
+        margin_per_lot: Optional[float] = 1_00_000.0,
+        funds_unavailable: bool = False,
+        margin_unavailable: bool = False,
     ) -> None:
         self._rng = random.Random(seed)
         self._spot = base_spot
@@ -41,6 +51,58 @@ class PaperBroker(Broker):
         self._place_calls = 0
         self._auth_expired = False  # E1/E2 simulation.
         self._auth_error_calls = 0
+        # Capital Management Engine synthetic funds/margin (paper mode has
+        # no real broker account -- these are configurable so tests can
+        # simulate any capital scenario deterministically).
+        self._account_equity = account_equity
+        self._available_margin = available_margin
+        self._margin_per_lot = margin_per_lot
+        self._funds_unavailable = funds_unavailable
+        self._option_volume = 5_000_000.0  # Overridable via set_option_volume().
+        self._margin_unavailable = margin_unavailable
+
+    def set_capital(self, *, account_equity: Optional[float] = None,
+                    available_margin: Optional[float] = None,
+                    margin_per_lot: Optional[float] = None) -> None:
+        """Change simulated capital mid-test -- e.g. "capital changed
+        overnight" scenarios (increasing/decreasing between two runs)."""
+        if account_equity is not None:
+            self._account_equity = account_equity
+        if available_margin is not None:
+            self._available_margin = available_margin
+        if margin_per_lot is not None:
+            self._margin_per_lot = margin_per_lot
+
+    def set_option_volume(self, volume: float) -> None:
+        """Override the synthetic per-candle option volume returned by
+        get_option_candles() -- e.g. set to 0.0 to test the
+        volume-unavailable/equal-weight-fallback path."""
+        self._option_volume = volume
+
+    async def get_funds(self) -> Optional[dict]:
+        self._check_auth()
+        if self._funds_unavailable:
+            return None
+        return {
+            "account_equity": self._account_equity,
+            "available_funds": self._available_margin,
+            "available_margin": self._available_margin,
+            "cash_balance": self._account_equity,
+            "collateral": 0.0,
+            "used_margin": 0.0,
+            "available_exposure": self._available_margin,
+            "peak_margin": self._available_margin,
+        }
+
+    async def get_order_margin(self, ce_contract, pe_contract) -> Optional[dict]:
+        self._check_auth()
+        if self._margin_unavailable or self._margin_per_lot is None:
+            return None
+        return {
+            "margin_per_lot": self._margin_per_lot,
+            "verified": True,
+            "source": "paper_synthetic",
+        }
 
     # -- Test/inspection helpers --------------------------------------- #
     @property
@@ -119,6 +181,16 @@ class PaperBroker(Broker):
         cur = max(0.5, cur + self._rng.uniform(-3, 3))
         self._premium[contract.symbol] = round(cur, 2)
         return self._premium[contract.symbol]
+
+    async def get_option_candles(self, contract: OptionContract, minutes: int,
+                                 count: int) -> list[Candle]:
+        """Synthetic single completed candle carrying a plausible non-zero
+        volume, for tests/dev -- override `self._option_volume` per test to
+        exercise specific volume-weighting scenarios."""
+        self._check_auth()
+        price = await self.get_ltp(contract)
+        volume = self._option_volume
+        return [Candle(now_ist(), price, price, price, price, volume)]
 
     async def place_order(self, request: OrderRequest) -> OrderResult:
         self._check_auth()

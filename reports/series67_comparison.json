@@ -1,0 +1,34 @@
+{
+  "sprint": "Engineering Series 67 -- Historical Intraday Observation Expansion",
+  "status": "COMPLETE",
+  "schema_change": "Added open/high/low/close (Optional[float]=None) to HistoricalSessionRecord; SCHEMA_VERSION_V3.",
+  "files_modified": [
+    "bujji/replay/historical_session.py",
+    "bujji/replay/schema_version.py",
+    "bujji/replay/option_chain_ingestion.py",
+    "bujji/mic_replay/observation_adapter.py"
+  ],
+  "sample": {
+    "dates": ["2026-07-13","2026-07-14","2026-07-15","2026-07-16","2026-07-17","2026-07-20","2026-07-21","2026-07-22"],
+    "source": "FYERS fyers_historical NSE:NIFTY50-INDEX (reused from earlier this session; token expired mid-sprint, could not fetch a larger sample)",
+    "sessions_transporting_genuine_ohlc": 8,
+    "sessions_total": 8,
+    "pct_no_longer_degenerate": 100.0
+  },
+  "degenerate_baseline": {
+    "reasoning_cycles": 11,
+    "not_qualified_cycles": 11,
+    "market_context_distribution": {"UNKNOWN": 2, "SIDEWAYS": 1, "TRENDING_DOWN": 2, "TRANSITION": 3}
+  },
+  "real_ohlc": {
+    "reasoning_cycles": 10,
+    "not_qualified_cycles": 10,
+    "market_context_distribution": {"UNKNOWN": 3, "SIDEWAYS": 1, "TRENDING_DOWN": 2, "TRANSITION": 2}
+  },
+  "sessions_with_changed_market_context": 1,
+  "changed_session_detail": {"id": "2026-07-20", "before": "TRANSITION", "after": "UNKNOWN"},
+  "conclusion": "Richer OHLC transport alone did not materially reduce NOT_QUALIFIED (100% in both) or TRANSITION dominance (3/8 -> 2/8, marginal). Consistent with the previously-found REGIME_TRANSITION/candidate_type-persistence mechanism, which one real OHLC bar per day does not resolve.",
+  "qualification_fingerprint": {"md5": "2328e0f77ec312eeca318946df293d91", "unchanged": true},
+  "regression": {"total_tests": 2021, "passed": 2021, "failed": 0},
+  "recommendation": "Do not conclude OHLC richness is the wrong lever entirely -- this sample is small (8 sessions, FYERS re-auth blocked a larger one) and NOT_QUALIFIED's true driver is candidate-type persistence across cycles, which needs either a genuine multi-point intraday series or consumption of the already-transported OI/VIX (Series 64/65), not just a daily OHLC range. Re-authenticate FYERS and repeat at full corpus scale before drawing a firm conclusion."
+}

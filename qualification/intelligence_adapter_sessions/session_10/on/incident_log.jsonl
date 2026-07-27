@@ -1,0 +1,2 @@
+{"incident_id": "INC-000039", "opened_at": "2026-07-22T00:04:41.885066+05:30", "severity": "CRITICAL", "root_cause": "candle_age=1435482s", "affected_subsystem": "candle_age", "resolution": "", "resolved_at": "", "status": "OPEN"}
+{"incident_id": "INC-000040", "opened_at": "2026-07-22T00:04:41.885186+05:30", "severity": "CRITICAL", "root_cause": "ws_disconnected", "affected_subsystem": "ws_disconnected", "resolution": "", "resolved_at": "", "status": "OPEN"}

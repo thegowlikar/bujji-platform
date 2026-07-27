@@ -1,5 +1,8 @@
 # FYERS Authentication Lifecycle — Verified, and What It Means for Deployment
 
+> **UPDATE (2026-07-19, live-verified during Capital Management Engine span_margin certification attempt):** the refresh_token exchange this document describes as "verified live" and working is now REJECTED by FYERS in production: a live call against the deployed bot's stored refresh_token returned `code=-16, message="Refresh token API is currently disabled to comply with SEBI regulations."` This is a NEW regulatory restriction, not a bug in this codebase's implementation — automatic daily token renewal (`FyersTokenManager.refresh()`) is currently non-functional for this account and cannot be fixed by code changes. Every trading day now requires the interactive login flow (browser + TOTP/PIN) to obtain a fresh access_token manually. See AUDIT_LOG.md for the full context (this was discovered while attempting to live-certify the span_margin endpoint, which could not proceed for the same reason: no valid access token was available).
+
+
 **Bottom line: fully automatic renewal is supported, within a ~15-day
 window.** It is not "fully automatic forever" — an interactive login is
 still required once to bootstrap a `refresh_token`, and again whenever that

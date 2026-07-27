@@ -61,7 +61,30 @@ class FakeLiveFyers(FyersBroker):
                 for i in range(10)
             ]
             return {"s": "ok", "candles": candles}
+        if action == "funds":
+            # Matches FyersBroker.get_funds()'s documented (unverified)
+            # fund_limit/title shape -- large enough that the default
+            # risk.lots=1 always clears the safety-buffered available margin.
+            return {"s": "ok", "fund_limit": [
+                {"title": "Total Balance", "equityAmount": 1_00_00_000.0},
+                {"title": "Available Balance", "equityAmount": 1_00_00_000.0},
+                {"title": "Clear Cash", "equityAmount": 1_00_00_000.0},
+                {"title": "Utilized Amount", "equityAmount": 0.0},
+            ]}
         raise AssertionError(f"unexpected live call in test double: {action}")
+
+    async def get_order_margin(self, ce_contract, pe_contract):
+        # The REAL FyersBroker.get_order_margin() honestly returns None --
+        # no margin-calculator endpoint exists in the installed SDK (see its
+        # docstring: LIVE CERTIFICATION REQUIRED). This test's purpose is to
+        # verify the hybrid data/execution SPLIT (live data, paper orders,
+        # no live execution method ever reached) -- not to re-verify the
+        # Capital Management Engine's own margin-unavailable handling, which
+        # has its own dedicated test suite. Stubbing a synthetic-but-labeled
+        # figure here lets entry proceed so the rest of this test's
+        # assertions (about execution routing) remain meaningful.
+        return {"margin_per_lot": 1_000.0, "verified": True,
+                "source": "test_double_stub"}
 
     async def resolve_atm_contract(self, underlying, spot, direction, strike_interval, lot_size):
         # Phase C: resolve_atm_contract no longer goes through _call() at all
@@ -157,11 +180,10 @@ async def test_full_trading_cycle_never_calls_live_execution_actions(
     orch, status = build_orch(config, logger, hybrid, tmp_path)
     await orch.startup()
 
-    await orch.on_candle(c(9, 15, 22000, 22010, 21990, 22005, vol=1000))
-    await orch.on_candle(c(9, 20, 22006, 22080, 22005, 22079, vol=1000))
+    await orch.on_candle(c(9, 20, 22000, 22010, 21990, 22005, vol=1000))
     assert orch.state is State.IN_POSITION
 
-    await orch.on_candle(c(9, 25, 22078, 22079, 21950, 21951, vol=1000))
+    await orch.on_candle(c(15, 5, 22000, 22010, 21990, 22005, vol=1000))
     assert orch.state is State.DONE_FOR_DAY
 
     live_execution_actions = {"place_order", "cancel_order", "order_history",
@@ -187,23 +209,25 @@ async def test_paper_live_data_behaves_like_paper_mode_end_to_end(
     orch, status = build_orch(config, logger, hybrid, tmp_path)
     await orch.startup()
 
-    await orch.on_candle(c(9, 15, 22000, 22010, 21990, 22005, vol=1000))
-    await orch.on_candle(c(9, 20, 22006, 22080, 22005, 22079, vol=1000))
+    await orch.on_candle(c(9, 20, 22000, 22010, 21990, 22005, vol=1000))
 
     pos = orch._trade.position  # noqa: SLF001 - test introspection.
     assert pos is not None
-    assert pos.entry_price == 118.5          # Filled at the LIVE premium.
-    assert pos.contract.symbol.startswith("NSE:NIFTY")  # Real FYERS symbol.
+    # Straddle entry: combined premium = CE(118.5) + PE(118.5) = 237.0.
+    assert pos.entry_price == 237.0
+    assert pos.contract.symbol.startswith("NSE:NIFTY")  # CE leg uses real FYERS symbol.
+    assert pos.ce_contract is not None
+    assert pos.pe_contract is not None
     assert status.mtm is not None
 
-    await orch.on_candle(c(9, 25, 22078, 22079, 21950, 21951, vol=1000))
+    await orch.on_candle(c(15, 5, 22000, 22010, 21990, 22005, vol=1000))
     assert orch.state is State.DONE_FOR_DAY
     assert not orch.has_open_position()
 
     trades = orch._journal.all_trades()  # noqa: SLF001
     assert len(trades) == 1
-    assert trades[0]["entry_premium"] == "118.5"
-    assert "BULLISH" in trades[0]["thesis"]  # Decision Trace / thesis reused intact.
+    assert trades[0]["entry_premium"] == "237.0"
+    assert trades[0]["direction"] == "NEUTRAL"
 
 
 # ---------------------------------------------------------------------- #
@@ -229,3 +253,50 @@ def test_factory_live_fyers_mode_is_not_neutered(config, logger):
     broker = build_broker(config, logger)
     assert isinstance(broker, FyersBroker)
     assert broker.place_order.__name__ != "place_order_disabled"
+
+
+class _FakeLiveFyersWithMicData(FyersBroker):
+    """Minimal FyersBroker stand-in covering profile/ltp/optionchain --
+    just enough to exercise HybridPaperBroker's delegation of the new
+    get_quote/get_option_chain methods to the live leg."""
+
+    async def _call(self, action: str, **params) -> dict:
+        if action == "profile":
+            return {"s": "ok", "code": 200}
+        if action == "ltp" and params.get("symbols") == "NSE:INDIAVIX-INDEX":
+            return {"s": "ok", "d": [{"n": "NSE:INDIAVIX-INDEX",
+                                        "v": {"lp": 13.02, "prev_close_price": 13.15}}]}
+        if action == "ltp":
+            return {"s": "ok", "d": [{"n": params["symbols"],
+                                      "v": {"lp": 100.0, "bid": 99.8, "ask": 100.2}}]}
+        if action == "optionchain":
+            return {"s": "ok", "data": {"optionsChain": [
+                {"symbol": "NSE:NIFTY50-INDEX", "strike_price": -1, "option_type": ""},
+                {"symbol": "NSE:NIFTY22050CE", "strike_price": 22050, "option_type": "CE", "oi": 1000},
+                {"symbol": "NSE:NIFTY22050PE", "strike_price": 22050, "option_type": "PE", "oi": 2000},
+            ]}}
+        return {"s": "ok"}
+
+
+@pytest.mark.asyncio
+async def test_get_quote_and_get_option_chain_delegate_to_live_leg(config, logger):
+    """fyers_paper mode (HybridPaperBroker) must serve the Liquidity and
+    Structure Brains genuine live data, exactly like get_ltp/get_funds
+    already do -- these are read-only market data, not execution."""
+    config.broker.app_id = "test-app-id"
+    config.broker.access_token = "test-access-token"
+    live = _FakeLiveFyersWithMicData(config.broker, logger)
+    ledger = PaperBroker()
+    hybrid = HybridPaperBroker(live, ledger, logger)
+    await hybrid.connect()
+
+    contract = OptionContract(symbol="NSE:NIFTY22050CE", underlying="NIFTY",
+                              strike=22050, option_type=None, expiry="2026-07-21", lot_size=65)
+    quote = await hybrid.get_quote(contract)
+    assert quote == {"bid": 99.8, "ask": 100.2, "spread": pytest.approx(0.4, abs=1e-9)}
+
+    chain = await hybrid.get_option_chain("NIFTY", 22050.0, strike_count=3)
+    assert chain == [(22050.0, 1000.0, 2000.0)]
+
+    vix = await hybrid.get_vix()
+    assert vix == {"level": 13.02, "prev_close": 13.15}

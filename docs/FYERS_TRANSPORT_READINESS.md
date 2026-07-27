@@ -1,5 +1,8 @@
 # FYERS Transport Readiness Report
 
+> **Staleness notice:** this document predates the VWAP Premium Straddle Seller strategy and describes the earlier ORB-VWAP breakout strategy in places. For the current strategy/architecture, see ARCHITECTURE.md; for the current bug/fix history, see AUDIT_LOG.md; for current operational procedures, see OPERATIONS_RUNBOOK.md.
+
+
 **Scope:** verify and complete the FYERS transport layer (`FyersBroker._call`
 and every mapping method built on it). Not a strategy, risk, orchestration,
 replay, or dashboard change — confirmed: no file outside `bujji/broker/`

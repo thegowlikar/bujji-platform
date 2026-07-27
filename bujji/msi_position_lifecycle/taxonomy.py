@@ -1,0 +1,112 @@
+"""Position Lifecycle Intelligence taxonomy — Series 96. Plain string
+constants (house convention, never enum.Enum)."""
+from __future__ import annotations
+
+MSI_POSITION_LIFECYCLE_VERSION = "1.0.0"
+RECOGNIZED_SCHEMA_VERSIONS = ("1.0.0",)
+
+# --- Deliverable 3: lifecycle states --------------------------------------
+STATE_NEWLY_OPENED = "NEWLY_OPENED"
+STATE_HEALTHY = "HEALTHY"
+STATE_IMPROVING = "IMPROVING"
+STATE_AT_RISK = "AT_RISK"
+STATE_ADJUSTMENT_CANDIDATE = "ADJUSTMENT_CANDIDATE"
+STATE_THESIS_BROKEN = "THESIS_BROKEN"
+STATE_PROFIT_HARVEST = "PROFIT_HARVEST"
+STATE_EXIT_CANDIDATE = "EXIT_CANDIDATE"
+STATE_CLOSED = "CLOSED"
+
+ALL_POSITION_STATES = (
+    STATE_NEWLY_OPENED, STATE_HEALTHY, STATE_IMPROVING, STATE_AT_RISK,
+    STATE_ADJUSTMENT_CANDIDATE, STATE_THESIS_BROKEN, STATE_PROFIT_HARVEST,
+    STATE_EXIT_CANDIDATE, STATE_CLOSED,
+)
+
+# --- Expected lifetime (declarative label, never a numeric estimate) -----
+LIFETIME_UNTIL_EXPIRY = "UNTIL_EXPIRY"
+LIFETIME_UNTIL_THESIS_INVALIDATED = "UNTIL_THESIS_INVALIDATED"
+LIFETIME_IMMEDIATE_EXIT = "IMMEDIATE_EXIT"
+LIFETIME_NONE = "NONE"
+
+ALL_EXPECTED_LIFETIMES = (
+    LIFETIME_UNTIL_EXPIRY, LIFETIME_UNTIL_THESIS_INVALIDATED, LIFETIME_IMMEDIATE_EXIT, LIFETIME_NONE,
+)
+
+# --- Thesis-invalidation compatibility (Deliverable 5) --------------------
+# entry_thesis_type -> the set of CURRENT thesis types considered still
+# compatible with the original belief (always includes itself). Any
+# current thesis type NOT in this set means the thesis is INVALIDATED.
+# Declarative, standard market-narrative judgments, never fit to replay
+# outcomes.
+COMPATIBLE_THESIS_TRANSITIONS = {
+    "TREND_CONTINUATION": ("TREND_CONTINUATION", "BREAKOUT"),
+    "TREND_REVERSAL": ("TREND_REVERSAL", "MEAN_REVERSION"),
+    "BREAKOUT": ("BREAKOUT", "TREND_CONTINUATION"),
+    "FAILED_BREAKOUT": ("FAILED_BREAKOUT", "MEAN_REVERSION", "RANGE_PERSISTENCE"),
+    "MEAN_REVERSION": ("MEAN_REVERSION", "RANGE_PERSISTENCE"),
+    "RANGE_PERSISTENCE": ("RANGE_PERSISTENCE", "MEAN_REVERSION"),
+    "VOLATILITY_EXPANSION": ("VOLATILITY_EXPANSION", "BREAKOUT", "EVENT_RISK"),
+    "VOLATILITY_COMPRESSION": ("VOLATILITY_COMPRESSION", "RANGE_PERSISTENCE"),
+    # EVENT_RISK is genuine, resolvable uncertainty -- ANY real thesis it
+    # resolves into is a healthy development, not an invalidation. Only
+    # remaining EVENT_RISK or falling back to NO_TRADE keeps/loses the
+    # "resolved" state; handled specially in engine.py, not listed here.
+    "NO_TRADE": ("NO_TRADE",),
+}
+
+# --- Deliverable 4: adjustment triggers, by Series 95 construction_type --
+# Each entry is a tuple of (trigger_label, is_actionable_with_real_data).
+# `is_actionable_with_real_data=False` triggers are DISCLOSED MONITORING
+# REQUIREMENTS ONLY in this series -- no real chain/strike/P&L data
+# exists at this layer to evaluate them (see docs, Deliverable 1).
+TRIGGER_DELTA_DRIFT = "DELTA_DRIFT"
+TRIGGER_WING_BREACH = "WING_BREACH"
+TRIGGER_VOLATILITY_EXPANSION = "VOLATILITY_EXPANSION"
+TRIGGER_TIME_DECAY = "TIME_DECAY"
+TRIGGER_TARGET_REACHED = "TARGET_REACHED"
+TRIGGER_THETA_DETERIORATION = "THETA_DETERIORATION"
+TRIGGER_THESIS_INVALIDATION = "THESIS_INVALIDATION"
+TRIGGER_TERM_STRUCTURE_COLLAPSE = "TERM_STRUCTURE_COLLAPSE"
+TRIGGER_IV_CONTRACTION = "IV_CONTRACTION"
+
+CONSTRUCTION_TYPE_TRIGGERS = {
+    "IRON_CONDOR_SHAPE": (
+        (TRIGGER_DELTA_DRIFT, True), (TRIGGER_WING_BREACH, False),
+        (TRIGGER_VOLATILITY_EXPANSION, True), (TRIGGER_TIME_DECAY, True),
+    ),
+    "IRON_FLY_SHAPE": (
+        (TRIGGER_DELTA_DRIFT, True), (TRIGGER_WING_BREACH, False),
+        (TRIGGER_VOLATILITY_EXPANSION, True), (TRIGGER_TIME_DECAY, True),
+    ),
+    "BUTTERFLY_SHAPE": (
+        (TRIGGER_DELTA_DRIFT, True), (TRIGGER_WING_BREACH, False), (TRIGGER_TIME_DECAY, True),
+    ),
+    "VERTICAL_DEBIT_SPREAD": (
+        (TRIGGER_TARGET_REACHED, False), (TRIGGER_THETA_DETERIORATION, False), (TRIGGER_THESIS_INVALIDATION, True),
+    ),
+    "VERTICAL_CREDIT_SPREAD": (
+        (TRIGGER_TARGET_REACHED, False), (TRIGGER_THETA_DETERIORATION, False), (TRIGGER_THESIS_INVALIDATION, True),
+    ),
+    "SINGLE_LEG": (
+        (TRIGGER_TARGET_REACHED, False), (TRIGGER_THESIS_INVALIDATION, True), (TRIGGER_TIME_DECAY, True),
+    ),
+    "CALENDAR_SHAPE": (
+        (TRIGGER_TERM_STRUCTURE_COLLAPSE, False), (TRIGGER_IV_CONTRACTION, True), (TRIGGER_THESIS_INVALIDATION, True),
+    ),
+    "SHORT_STRANGLE": (
+        (TRIGGER_DELTA_DRIFT, True), (TRIGGER_VOLATILITY_EXPANSION, True), (TRIGGER_TIME_DECAY, True),
+    ),
+    "LONG_STRANGLE": ((TRIGGER_VOLATILITY_EXPANSION, True), (TRIGGER_THESIS_INVALIDATION, True)),
+    "LONG_STRADDLE": ((TRIGGER_VOLATILITY_EXPANSION, True), (TRIGGER_THESIS_INVALIDATION, True)),
+    "SHORT_STRADDLE": ((TRIGGER_DELTA_DRIFT, True), (TRIGGER_VOLATILITY_EXPANSION, True), (TRIGGER_TIME_DECAY, True)),
+    "RATIO_SHAPE": ((TRIGGER_DELTA_DRIFT, True), (TRIGGER_THESIS_INVALIDATION, True)),
+    "COVERED_SHAPE": ((TRIGGER_THESIS_INVALIDATION, True), (TRIGGER_TIME_DECAY, True)),
+    "SYNTHETIC_SHAPE": ((TRIGGER_THESIS_INVALIDATION, True),),
+}
+
+# --- Confidence/conviction vocabulary reused via pass-through comparison -
+_CONVICTION_RANK = {"NONE": 0, "LOW": 1, "MODERATE": 2, "HIGH": 3}
+
+
+def conviction_rank(level: str) -> int:
+    return _CONVICTION_RANK.get(level, 0)

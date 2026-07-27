@@ -1,0 +1,5029 @@
+{
+  "manifest_checksum": "09673a3dc182a3677df14ec3c610b427154243a9676f3c79facd4ba563b3729e",
+  "report_id": "QREPORT-1f479265179511b0",
+  "total_replay_sessions": 41,
+  "completed_runs": 29,
+  "rejected_runs": 0,
+  "runtime_failures": 12,
+  "sessions": [
+    {
+      "id": "NIFTY-2026-05-25",
+      "outcome": "FAILED",
+      "strategy": null,
+      "market_context": "UNKNOWN",
+      "market_opinion": "INSUFFICIENT_EVIDENCE",
+      "context_stability": "INSUFFICIENT_HISTORY",
+      "calibration": "INSUFFICIENT_HISTORY",
+      "governance": "APPROVED_WITH_WARNINGS",
+      "lifecycle": "UNKNOWN",
+      "contract": "UNKNOWN",
+      "market_character": "MIXED",
+      "market_phase": "UNKNOWN",
+      "confidence": "UNKNOWN",
+      "selection_status": "NO_STRATEGY",
+      "selection_confidence": "UNKNOWN",
+      "selection_reason": "No registered strategy honestly qualified under today's market state.",
+      "risk_status": "REJECTED",
+      "risk_level": "UNKNOWN",
+      "risk_approval": "DENY",
+      "risk_blocking_reason": "NO_STRATEGY",
+      "capital_intent": "NONE",
+      "capital_allocation_status": "DENIED",
+      "capital_allocation_reason": "Risk Brain denied approval; no capital may be committed.",
+      "execution_status": "NOT_PLANNED",
+      "execution_intent": "NONE",
+      "evidence_opportunity_state": "UNKNOWN",
+      "evidence_risk_state": "HIGH",
+      "stability_reasoning_summary": "context_lifetime=1 below minimum 2",
+      "stability_transition_count": 0,
+      "stability_persistence_length": 1,
+      "stability_dimension_agreement": 0.0,
+      "stability_confidence_variance": 0.0,
+      "stability_context_lifetime": 1,
+      "context_volatility": "UNKNOWN",
+      "context_liquidity": "UNKNOWN",
+      "context_regime": "UNKNOWN",
+      "context_conviction": "LOW",
+      "context_stability_dimension": "CHANGING",
+      "transition_events": []
+    },
+    {
+      "id": "NIFTY-2026-05-26",
+      "outcome": "FAILED",
+      "strategy": null,
+      "market_context": "UNKNOWN",
+      "market_opinion": "INSUFFICIENT_EVIDENCE",
+      "context_stability": "STABLE",
+      "calibration": "INSUFFICIENT_HISTORY",
+      "governance": "APPROVED_WITH_WARNINGS",
+      "lifecycle": "UNKNOWN",
+      "contract": "UNKNOWN",
+      "market_character": "MIXED",
+      "market_phase": "ESTABLISHED",
+      "confidence": "VERY_HIGH",
+      "selection_status": "NO_STRATEGY",
+      "selection_confidence": "UNKNOWN",
+      "selection_reason": "No registered strategy honestly qualified under today's market state.",
+      "risk_status": "REJECTED",
+      "risk_level": "UNKNOWN",
+      "risk_approval": "DENY",
+      "risk_blocking_reason": "NO_STRATEGY",
+      "capital_intent": "NONE",
+      "capital_allocation_status": "DENIED",
+      "capital_allocation_reason": "Risk Brain denied approval; no capital may be committed.",
+      "execution_status": "NOT_PLANNED",
+      "execution_intent": "NONE",
+      "evidence_opportunity_state": "UNKNOWN",
+      "evidence_risk_state": "HIGH",
+      "stability_reasoning_summary": "zero_transitions",
+      "stability_transition_count": 0,
+      "stability_persistence_length": 2,
+      "stability_dimension_agreement": 1.0,
+      "stability_confidence_variance": 0.0,
+      "stability_context_lifetime": 2,
+      "context_volatility": "UNKNOWN",
+      "context_liquidity": "UNKNOWN",
+      "context_regime": "UNKNOWN",
+      "context_conviction": "LOW",
+      "context_stability_dimension": "CHANGING",
+      "transition_events": []
+    },
+    {
+      "id": "NIFTY-2026-05-27",
+      "outcome": "FAILED",
+      "strategy": null,
+      "market_context": "TRENDING_DOWN",
+      "market_opinion": "BEARISH",
+      "context_stability": "TRANSITIONING",
+      "calibration": "INSUFFICIENT_HISTORY",
+      "governance": "APPROVED_WITH_WARNINGS",
+      "lifecycle": "UNKNOWN",
+      "contract": "UNKNOWN",
+      "market_character": "CONTESTED",
+      "market_phase": "EMERGING",
+      "confidence": "LOW",
+      "selection_status": "NO_STRATEGY",
+      "selection_confidence": "LOW",
+      "selection_reason": "No registered strategy honestly qualified under today's market state.",
+      "risk_status": "REJECTED",
+      "risk_level": "UNKNOWN",
+      "risk_approval": "DENY",
+      "risk_blocking_reason": "NO_STRATEGY",
+      "capital_intent": "NONE",
+      "capital_allocation_status": "DENIED",
+      "capital_allocation_reason": "Risk Brain denied approval; no capital may be committed.",
+      "execution_status": "NOT_PLANNED",
+      "execution_intent": "NONE",
+      "evidence_opportunity_state": "UNKNOWN",
+      "evidence_risk_state": "HIGH",
+      "stability_reasoning_summary": "transition_rate=0.500 at or below 0.6",
+      "stability_transition_count": 1,
+      "stability_persistence_length": 2,
+      "stability_dimension_agreement": 0.75,
+      "stability_confidence_variance": 0.0,
+      "stability_context_lifetime": 3,
+      "context_volatility": "STABLE",
+      "context_liquidity": "UNKNOWN",
+      "context_regime": "TREND",
+      "context_conviction": "LOW",
+      "context_stability_dimension": "CHANGING",
+      "transition_events": []
+    },
+    {
+      "id": "NIFTY-2026-05-29",
+      "outcome": "FAILED",
+      "strategy": "COVERED_CALL",
+      "market_context": "TRENDING_DOWN",
+      "market_opinion": "BEARISH",
+      "context_stability": "MOSTLY_STABLE",
+      "calibration": "INSUFFICIENT_HISTORY",
+      "governance": "APPROVED_WITH_WARNINGS",
+      "lifecycle": "UNKNOWN",
+      "contract": "UNKNOWN",
+      "market_character": "CONTESTED",
+      "market_phase": "ESTABLISHED",
+      "confidence": "MODERATE",
+      "selection_status": "SELECTED",
+      "selection_confidence": "LOW",
+      "selection_reason": "Market state TREND matches required states.; Market character CONTESTED meets minimum CONTESTED.; Confidence MODERATE meets required MODERATE.",
+      "risk_status": "APPROVED_WITH_WARNINGS",
+      "risk_level": "MODERATE",
+      "risk_approval": "ALLOW_WITH_CONTROLS",
+      "risk_blocking_reason": null,
+      "capital_intent": "REDUCED",
+      "capital_allocation_status": "LIMITED",
+      "capital_allocation_reason": "Risk Brain approved with controls; capital is reduced and must follow those controls.",
+      "execution_status": "PLANNED",
+      "execution_intent": "PREPARE",
+      "evidence_opportunity_state": "UNKNOWN",
+      "evidence_risk_state": "HIGH",
+      "stability_reasoning_summary": "transition_rate=0.250 at or below 0.25",
+      "stability_transition_count": 1,
+      "stability_persistence_length": 3,
+      "stability_dimension_agreement": 0.875,
+      "stability_confidence_variance": 0.0,
+      "stability_context_lifetime": 5,
+      "context_volatility": "STABLE",
+      "context_liquidity": "UNKNOWN",
+      "context_regime": "TREND",
+      "context_conviction": "LOW",
+      "context_stability_dimension": "CHANGING",
+      "transition_events": []
+    },
+    {
+      "id": "NIFTY-2026-06-01",
+      "outcome": "FAILED",
+      "strategy": null,
+      "market_context": "TRANSITION",
+      "market_opinion": "BEARISH",
+      "context_stability": "TRANSITIONING",
+      "calibration": "INSUFFICIENT_HISTORY",
+      "governance": "APPROVED_WITH_WARNINGS",
+      "lifecycle": "UNKNOWN",
+      "contract": "UNKNOWN",
+      "market_character": "CONTESTED",
+      "market_phase": "EMERGING",
+      "confidence": "LOW",
+      "selection_status": "NO_STRATEGY",
+      "selection_confidence": "LOW",
+      "selection_reason": "No registered strategy honestly qualified under today's market state.",
+      "risk_status": "REJECTED",
+      "risk_level": "UNKNOWN",
+      "risk_approval": "DENY",
+      "risk_blocking_reason": "NO_STRATEGY",
+      "capital_intent": "NONE",
+      "capital_allocation_status": "DENIED",
+      "capital_allocation_reason": "Risk Brain denied approval; no capital may be committed.",
+      "execution_status": "NOT_PLANNED",
+      "execution_intent": "NONE",
+      "evidence_opportunity_state": "UNKNOWN",
+      "evidence_risk_state": "HIGH",
+      "stability_reasoning_summary": "transition_rate=0.333 at or below 0.6",
+      "stability_transition_count": 2,
+      "stability_persistence_length": 3,
+      "stability_dimension_agreement": 0.8611,
+      "stability_confidence_variance": 0.0,
+      "stability_context_lifetime": 7,
+      "context_volatility": "STABLE",
+      "context_liquidity": "UNKNOWN",
+      "context_regime": "TRANSITION",
+      "context_conviction": "LOW",
+      "context_stability_dimension": "CHANGING",
+      "transition_events": [
+        {
+          "timestamp": "2026-06-01T15:30:00",
+          "memory_type": "REGIME_TRANSITION"
+        },
+        {
+          "timestamp": "2026-06-01T15:30:00",
+          "memory_type": "REGIME_TRANSITION"
+        }
+      ]
+    },
+    {
+      "id": "NIFTY-2026-06-02",
+      "outcome": "FAILED",
+      "strategy": null,
+      "market_context": "TRANSITION",
+      "market_opinion": "BEARISH",
+      "context_stability": "TRANSITIONING",
+      "calibration": "INSUFFICIENT_HISTORY",
+      "governance": "APPROVED_WITH_WARNINGS",
+      "lifecycle": "UNKNOWN",
+      "contract": "UNKNOWN",
+      "market_character": "CONTESTED",
+      "market_phase": "EMERGING",
+      "confidence": "LOW",
+      "selection_status": "NO_STRATEGY",
+      "selection_confidence": "LOW",
+      "selection_reason": "No registered strategy honestly qualified under today's market state.",
+      "risk_status": "REJECTED",
+      "risk_level": "UNKNOWN",
+      "risk_approval": "DENY",
+      "risk_blocking_reason": "NO_STRATEGY",
+      "capital_intent": "NONE",
+      "capital_allocation_status": "DENIED",
+      "capital_allocation_reason": "Risk Brain denied approval; no capital may be committed.",
+      "execution_status": "NOT_PLANNED",
+      "execution_intent": "NONE",
+      "evidence_opportunity_state": "UNKNOWN",
+      "evidence_risk_state": "HIGH",
+      "stability_reasoning_summary": "transition_rate=0.286 at or below 0.6",
+      "stability_transition_count": 2,
+      "stability_persistence_length": 3,
+      "stability_dimension_agreement": 0.881,
+      "stability_confidence_variance": 0.0,
+      "stability_context_lifetime": 8,
+      "context_volatility": "STABLE",
+      "context_liquidity": "UNKNOWN",
+      "context_regime": "TRANSITION",
+      "context_conviction": "LOW",
+      "context_stability_dimension": "CHANGING",
+      "transition_events": [
+        {
+          "timestamp": "2026-06-01T15:30:00",
+          "memory_type": "REGIME_TRANSITION"
+        },
+        {
+          "timestamp": "2026-06-01T15:30:00",
+          "memory_type": "REGIME_TRANSITION"
+        },
+        {
+          "timestamp": "2026-06-02T15:30:00",
+          "memory_type": "REGIME_TRANSITION"
+        }
+      ]
+    },
+    {
+      "id": "NIFTY-2026-06-03",
+      "outcome": "FAILED",
+      "strategy": null,
+      "market_context": "TRANSITION",
+      "market_opinion": "BEARISH",
+      "context_stability": "MOSTLY_STABLE",
+      "calibration": "INSUFFICIENT_HISTORY",
+      "governance": "APPROVED_WITH_WARNINGS",
+      "lifecycle": "UNKNOWN",
+      "contract": "UNKNOWN",
+      "market_character": "CONTESTED",
+      "market_phase": "ESTABLISHED",
+      "confidence": "MODERATE",
+      "selection_status": "NO_STRATEGY",
+      "selection_confidence": "MODERATE",
+      "selection_reason": "No registered strategy honestly qualified under today's market state.",
+      "risk_status": "REJECTED",
+      "risk_level": "UNKNOWN",
+      "risk_approval": "DENY",
+      "risk_blocking_reason": "NO_STRATEGY",
+      "capital_intent": "NONE",
+      "capital_allocation_status": "DENIED",
+      "capital_allocation_reason": "Risk Brain denied approval; no capital may be committed.",
+      "execution_status": "NOT_PLANNED",
+      "execution_intent": "NONE",
+      "evidence_opportunity_state": "UNKNOWN",
+      "evidence_risk_state": "HIGH",
+      "stability_reasoning_summary": "transition_rate=0.250 at or below 0.25",
+      "stability_transition_count": 2,
+      "stability_persistence_length": 4,
+      "stability_dimension_agreement": 0.8958,
+      "stability_confidence_variance": 0.0,
+      "stability_context_lifetime": 9,
+      "context_volatility": "STABLE",
+      "context_liquidity": "UNKNOWN",
+      "context_regime": "TRANSITION",
+      "context_conviction": "LOW",
+      "context_stability_dimension": "CHANGING",
+      "transition_events": [
+        {
+          "timestamp": "2026-06-01T15:30:00",
+          "memory_type": "REGIME_TRANSITION"
+        },
+        {
+          "timestamp": "2026-06-01T15:30:00",
+          "memory_type": "REGIME_TRANSITION"
+        },
+        {
+          "timestamp": "2026-06-02T15:30:00",
+          "memory_type": "REGIME_TRANSITION"
+        },
+        {
+          "timestamp": "2026-06-03T15:30:00",
+          "memory_type": "REGIME_TRANSITION"
+        }
+      ]
+    },
+    {
+      "id": "NIFTY-2026-06-04",
+      "outcome": "COMPLETED",
+      "strategy": "DIRECTIONAL_PUT_SPREAD",
+      "market_context": "TRANSITION",
+      "market_opinion": "BEARISH",
+      "context_stability": "MOSTLY_STABLE",
+      "calibration": "CALIBRATED",
+      "governance": "APPROVED",
+      "lifecycle": "UNKNOWN",
+      "contract": "UNKNOWN",
+      "market_character": "CLEAR",
+      "market_phase": "ESTABLISHED",
+      "confidence": "HIGH",
+      "selection_status": "SELECTED",
+      "selection_confidence": "HIGH",
+      "selection_reason": "Market state REVERSAL matches required states.; Market character CLEAR meets minimum CLEAR.; Confidence HIGH meets required HIGH.",
+      "risk_status": "APPROVED",
+      "risk_level": "LOW",
+      "risk_approval": "ALLOW",
+      "risk_blocking_reason": null,
+      "capital_intent": "STANDARD",
+      "capital_allocation_status": "APPROVED",
+      "capital_allocation_reason": "Risk Level is LOW under a clean ALLOW; standard capital is authorized.",
+      "execution_status": "PLANNED",
+      "execution_intent": "PREPARE",
+      "evidence_opportunity_state": "HIGH_EDGE",
+      "evidence_risk_state": "NORMAL",
+      "stability_reasoning_summary": "transition_rate=0.222 at or below 0.25",
+      "stability_transition_count": 2,
+      "stability_persistence_length": 5,
+      "stability_dimension_agreement": 0.9074,
+      "stability_confidence_variance": 0.0,
+      "stability_context_lifetime": 10,
+      "context_volatility": "STABLE",
+      "context_liquidity": "UNKNOWN",
+      "context_regime": "TRANSITION",
+      "context_conviction": "LOW",
+      "context_stability_dimension": "CHANGING",
+      "transition_events": [
+        {
+          "timestamp": "2026-06-01T15:30:00",
+          "memory_type": "REGIME_TRANSITION"
+        },
+        {
+          "timestamp": "2026-06-01T15:30:00",
+          "memory_type": "REGIME_TRANSITION"
+        },
+        {
+          "timestamp": "2026-06-02T15:30:00",
+          "memory_type": "REGIME_TRANSITION"
+        },
+        {
+          "timestamp": "2026-06-03T15:30:00",
+          "memory_type": "REGIME_TRANSITION"
+        },
+        {
+          "timestamp": "2026-06-04T15:30:00",
+          "memory_type": "REGIME_TRANSITION"
+        }
+      ]
+    },
+    {
+      "id": "NIFTY-2026-06-05",
+      "outcome": "FAILED",
+      "strategy": "COVERED_CALL",
+      "market_context": "TRENDING_DOWN",
+      "market_opinion": "BEARISH",
+      "context_stability": "TRANSITIONING",
+      "calibration": "CALIBRATED",
+      "governance": "APPROVED",
+      "lifecycle": "UNKNOWN",
+      "contract": "UNKNOWN",
+      "market_character": "CLEAR",
+      "market_phase": "EMERGING",
+      "confidence": "MODERATE",
+      "selection_status": "SELECTED",
+      "selection_confidence": "LOW",
+      "selection_reason": "Market state TREND matches required states.; Market character CLEAR meets minimum CONTESTED.; Confidence MODERATE meets required MODERATE.",
+      "risk_status": "APPROVED_WITH_WARNINGS",
+      "risk_level": "MODERATE",
+      "risk_approval": "ALLOW_WITH_CONTROLS",
+      "risk_blocking_reason": null,
+      "capital_intent": "REDUCED",
+      "capital_allocation_status": "LIMITED",
+      "capital_allocation_reason": "Risk Brain approved with controls; capital is reduced and must follow those controls.",
+      "execution_status": "PLANNED",
+      "execution_intent": "PREPARE",
+      "evidence_opportunity_state": "HIGH_EDGE",
+      "evidence_risk_state": "NORMAL",
+      "stability_reasoning_summary": "transition_rate=0.300 at or below 0.6",
+      "stability_transition_count": 3,
+      "stability_persistence_length": 5,
+      "stability_dimension_agreement": 0.8833,
+      "stability_confidence_variance": 0.0,
+      "stability_context_lifetime": 11,
+      "context_volatility": "STABLE",
+      "context_liquidity": "UNKNOWN",
+      "context_regime": "TREND",
+      "context_conviction": "LOW",
+      "context_stability_dimension": "CHANGING",
+      "transition_events": [
+        {
+          "timestamp": "2026-06-01T15:30:00",
+          "memory_type": "REGIME_TRANSITION"
+        },
+        {
+          "timestamp": "2026-06-01T15:30:00",
+          "memory_type": "REGIME_TRANSITION"
+        },
+        {
+          "timestamp": "2026-06-02T15:30:00",
+          "memory_type": "REGIME_TRANSITION"
+        },
+        {
+          "timestamp": "2026-06-03T15:30:00",
+          "memory_type": "REGIME_TRANSITION"
+        },
+        {
+          "timestamp": "2026-06-04T15:30:00",
+          "memory_type": "REGIME_TRANSITION"
+        }
+      ]
+    },
+    {
+      "id": "NIFTY-2026-06-08",
+      "outcome": "FAILED",
+      "strategy": "COVERED_CALL",
+      "market_context": "TRENDING_DOWN",
+      "market_opinion": "BEARISH",
+      "context_stability": "TRANSITIONING",
+      "calibration": "CALIBRATED",
+      "governance": "APPROVED",
+      "lifecycle": "UNKNOWN",
+      "contract": "UNKNOWN",
+      "market_character": "CLEAR",
+      "market_phase": "EMERGING",
+      "confidence": "MODERATE",
+      "selection_status": "SELECTED",
+      "selection_confidence": "LOW",
+      "selection_reason": "Market state TREND matches required states.; Market character CLEAR meets minimum CONTESTED.; Confidence MODERATE meets required MODERATE.",
+      "risk_status": "APPROVED_WITH_WARNINGS",
+      "risk_level": "MODERATE",
+      "risk_approval": "ALLOW_WITH_CONTROLS",
+      "risk_blocking_reason": null,
+      "capital_intent": "REDUCED",
+      "capital_allocation_status": "LIMITED",
+      "capital_allocation_reason": "Risk Brain approved with controls; capital is reduced and must follow those controls.",
+      "execution_status": "PLANNED",
+      "execution_intent": "PREPARE",
+      "evidence_opportunity_state": "HIGH_EDGE",
+      "evidence_risk_state": "NORMAL",
+      "stability_reasoning_summary": "transition_rate=0.273 at or below 0.6",
+      "stability_transition_count": 3,
+      "stability_persistence_length": 5,
+      "stability_dimension_agreement": 0.8939,
+      "stability_confidence_variance": 0.0,
+      "stability_context_lifetime": 12,
+      "context_volatility": "STABLE",
+      "context_liquidity": "UNKNOWN",
+      "context_regime": "TREND",
+      "context_conviction": "LOW",
+      "context_stability_dimension": "CHANGING",
+      "transition_events": [
+        {
+          "timestamp": "2026-06-01T15:30:00",
+          "memory_type": "REGIME_TRANSITION"
+        },
+        {
+          "timestamp": "2026-06-01T15:30:00",
+          "memory_type": "REGIME_TRANSITION"
+        },
+        {
+          "timestamp": "2026-06-02T15:30:00",
+          "memory_type": "REGIME_TRANSITION"
+        },
+        {
+          "timestamp": "2026-06-03T15:30:00",
+          "memory_type": "REGIME_TRANSITION"
+        },
+        {
+          "timestamp": "2026-06-04T15:30:00",
+          "memory_type": "REGIME_TRANSITION"
+        }
+      ]
+    },
+    {
+      "id": "NIFTY-2026-06-09",
+      "outcome": "FAILED",
+      "strategy": null,
+      "market_context": "TRANSITION",
+      "market_opinion": "BEARISH",
+      "context_stability": "TRANSITIONING",
+      "calibration": "CALIBRATED",
+      "governance": "APPROVED",
+      "lifecycle": "UNKNOWN",
+      "contract": "UNKNOWN",
+      "market_character": "CLEAR",
+      "market_phase": "EMERGING",
+      "confidence": "MODERATE",
+      "selection_status": "NO_STRATEGY",
+      "selection_confidence": "MODERATE",
+      "selection_reason": "No registered strategy honestly qualified under today's market state.",
+      "risk_status": "REJECTED",
+      "risk_level": "UNKNOWN",
+      "risk_approval": "DENY",
+      "risk_blocking_reason": "NO_STRATEGY",
+      "capital_intent": "NONE",
+      "capital_allocation_status": "DENIED",
+      "capital_allocation_reason": "Risk Brain denied approval; no capital may be committed.",
+      "execution_status": "NOT_PLANNED",
+      "execution_intent": "NONE",
+      "evidence_opportunity_state": "HIGH_EDGE",
+      "evidence_risk_state": "NORMAL",
+      "stability_reasoning_summary": "transition_rate=0.308 at or below 0.6",
+      "stability_transition_count": 4,
+      "stability_persistence_length": 5,
+      "stability_dimension_agreement": 0.8846,
+      "stability_confidence_variance": 0.0,
+      "stability_context_lifetime": 14,
+      "context_volatility": "STABLE",
+      "context_liquidity": "UNKNOWN",
+      "context_regime": "TRANSITION",
+      "context_conviction": "LOW",
+      "context_stability_dimension": "CHANGING",
+      "transition_events": [
+        {
+          "timestamp": "2026-06-01T15:30:00",
+          "memory_type": "REGIME_TRANSITION"
+        },
+        {
+          "timestamp": "2026-06-01T15:30:00",
+          "memory_type": "REGIME_TRANSITION"
+        },
+        {
+          "timestamp": "2026-06-02T15:30:00",
+          "memory_type": "REGIME_TRANSITION"
+        },
+        {
+          "timestamp": "2026-06-03T15:30:00",
+          "memory_type": "REGIME_TRANSITION"
+        },
+        {
+          "timestamp": "2026-06-04T15:30:00",
+          "memory_type": "REGIME_TRANSITION"
+        },
+        {
+          "timestamp": "2026-06-09T15:30:00",
+          "memory_type": "REGIME_TRANSITION"
+        }
+      ]
+    },
+    {
+      "id": "NIFTY-2026-06-10",
+      "outcome": "FAILED",
+      "strategy": null,
+      "market_context": "TRANSITION",
+      "market_opinion": "BEARISH",
+      "context_stability": "TRANSITIONING",
+      "calibration": "CALIBRATED",
+      "governance": "APPROVED",
+      "lifecycle": "UNKNOWN",
+      "contract": "UNKNOWN",
+      "market_character": "CLEAR",
+      "market_phase": "EMERGING",
+      "confidence": "MODERATE",
+      "selection_status": "NO_STRATEGY",
+      "selection_confidence": "MODERATE",
+      "selection_reason": "No registered strategy honestly qualified under today's market state.",
+      "risk_status": "REJECTED",
+      "risk_level": "UNKNOWN",
+      "risk_approval": "DENY",
+      "risk_blocking_reason": "NO_STRATEGY",
+      "capital_intent": "NONE",
+      "capital_allocation_status": "DENIED",
+      "capital_allocation_reason": "Risk Brain denied approval; no capital may be committed.",
+      "execution_status": "NOT_PLANNED",
+      "execution_intent": "NONE",
+      "evidence_opportunity_state": "HIGH_EDGE",
+      "evidence_risk_state": "NORMAL",
+      "stability_reasoning_summary": "transition_rate=0.267 at or below 0.6",
+      "stability_transition_count": 4,
+      "stability_persistence_length": 5,
+      "stability_dimension_agreement": 0.9,
+      "stability_confidence_variance": 0.0,
+      "stability_context_lifetime": 16,
+      "context_volatility": "STABLE",
+      "context_liquidity": "UNKNOWN",
+      "context_regime": "TRANSITION",
+      "context_conviction": "LOW",
+      "context_stability_dimension": "CHANGING",
+      "transition_events": [
+        {
+          "timestamp": "2026-06-01T15:30:00",
+          "memory_type": "REGIME_TRANSITION"
+        },
+        {
+          "timestamp": "2026-06-01T15:30:00",
+          "memory_type": "REGIME_TRANSITION"
+        },
+        {
+          "timestamp": "2026-06-02T15:30:00",
+          "memory_type": "REGIME_TRANSITION"
+        },
+        {
+          "timestamp": "2026-06-03T15:30:00",
+          "memory_type": "REGIME_TRANSITION"
+        },
+        {
+          "timestamp": "2026-06-04T15:30:00",
+          "memory_type": "REGIME_TRANSITION"
+        },
+        {
+          "timestamp": "2026-06-09T15:30:00",
+          "memory_type": "REGIME_TRANSITION"
+        },
+        {
+          "timestamp": "2026-06-10T15:30:00",
+          "memory_type": "REGIME_TRANSITION"
+        },
+        {
+          "timestamp": "2026-06-10T15:30:00",
+          "memory_type": "REGIME_TRANSITION"
+        }
+      ]
+    },
+    {
+      "id": "NIFTY-2026-06-11",
+      "outcome": "COMPLETED",
+      "strategy": "DIRECTIONAL_PUT_SPREAD",
+      "market_context": "TRANSITION",
+      "market_opinion": "BEARISH",
+      "context_stability": "MOSTLY_STABLE",
+      "calibration": "CALIBRATED",
+      "governance": "APPROVED",
+      "lifecycle": "UNKNOWN",
+      "contract": "UNKNOWN",
+      "market_character": "CLEAR",
+      "market_phase": "ESTABLISHED",
+      "confidence": "HIGH",
+      "selection_status": "SELECTED",
+      "selection_confidence": "HIGH",
+      "selection_reason": "Market state REVERSAL matches required states.; Market character CLEAR meets minimum CLEAR.; Confidence HIGH meets required HIGH.",
+      "risk_status": "APPROVED",
+      "risk_level": "LOW",
+      "risk_approval": "ALLOW",
+      "risk_blocking_reason": null,
+      "capital_intent": "STANDARD",
+      "capital_allocation_status": "APPROVED",
+      "capital_allocation_reason": "Risk Level is LOW under a clean ALLOW; standard capital is authorized.",
+      "execution_status": "PLANNED",
+      "execution_intent": "PREPARE",
+      "evidence_opportunity_state": "HIGH_EDGE",
+      "evidence_risk_state": "NORMAL",
+      "stability_reasoning_summary": "transition_rate=0.250 at or below 0.25",
+      "stability_transition_count": 4,
+      "stability_persistence_length": 5,
+      "stability_dimension_agreement": 0.9062,
+      "stability_confidence_variance": 0.0,
+      "stability_context_lifetime": 17,
+      "context_volatility": "STABLE",
+      "context_liquidity": "UNKNOWN",
+      "context_regime": "TRANSITION",
+      "context_conviction": "LOW",
+      "context_stability_dimension": "CHANGING",
+      "transition_events": [
+        {
+          "timestamp": "2026-06-01T15:30:00",
+          "memory_type": "REGIME_TRANSITION"
+        },
+        {
+          "timestamp": "2026-06-01T15:30:00",
+          "memory_type": "REGIME_TRANSITION"
+        },
+        {
+          "timestamp": "2026-06-02T15:30:00",
+          "memory_type": "REGIME_TRANSITION"
+        },
+        {
+          "timestamp": "2026-06-03T15:30:00",
+          "memory_type": "REGIME_TRANSITION"
+        },
+        {
+          "timestamp": "2026-06-04T15:30:00",
+          "memory_type": "REGIME_TRANSITION"
+        },
+        {
+          "timestamp": "2026-06-09T15:30:00",
+          "memory_type": "REGIME_TRANSITION"
+        },
+        {
+          "timestamp": "2026-06-10T15:30:00",
+          "memory_type": "REGIME_TRANSITION"
+        },
+        {
+          "timestamp": "2026-06-10T15:30:00",
+          "memory_type": "REGIME_TRANSITION"
+        },
+        {
+          "timestamp": "2026-06-11T15:30:00",
+          "memory_type": "REGIME_TRANSITION"
+        }
+      ]
+    },
+    {
+      "id": "NIFTY-2026-06-12",
+      "outcome": "COMPLETED",
+      "strategy": "DIRECTIONAL_PUT_SPREAD",
+      "market_context": "TRANSITION",
+      "market_opinion": "INSUFFICIENT_EVIDENCE",
+      "context_stability": "MOSTLY_STABLE",
+      "calibration": "CALIBRATED",
+      "governance": "APPROVED",
+      "lifecycle": "UNKNOWN",
+      "contract": "UNKNOWN",
+      "market_character": "CLEAR",
+      "market_phase": "ESTABLISHED",
+      "confidence": "HIGH",
+      "selection_status": "SELECTED",
+      "selection_confidence": "HIGH",
+      "selection_reason": "Market state REVERSAL matches required states.; Market character CLEAR meets minimum CLEAR.; Confidence HIGH meets required HIGH.",
+      "risk_status": "APPROVED",
+      "risk_level": "LOW",
+      "risk_approval": "ALLOW",
+      "risk_blocking_reason": null,
+      "capital_intent": "STANDARD",
+      "capital_allocation_status": "APPROVED",
+      "capital_allocation_reason": "Risk Level is LOW under a clean ALLOW; standard capital is authorized.",
+      "execution_status": "PLANNED",
+      "execution_intent": "PREPARE",
+      "evidence_opportunity_state": "HIGH_EDGE",
+      "evidence_risk_state": "NORMAL",
+      "stability_reasoning_summary": "transition_rate=0.222 at or below 0.25",
+      "stability_transition_count": 4,
+      "stability_persistence_length": 6,
+      "stability_dimension_agreement": 0.9167,
+      "stability_confidence_variance": 0.0,
+      "stability_context_lifetime": 19,
+      "context_volatility": "STABLE",
+      "context_liquidity": "UNKNOWN",
+      "context_regime": "TRANSITION",
+      "context_conviction": "LOW",
+      "context_stability_dimension": "CHANGING",
+      "transition_events": [
+        {
+          "timestamp": "2026-06-01T15:30:00",
+          "memory_type": "REGIME_TRANSITION"
+        },
+        {
+          "timestamp": "2026-06-01T15:30:00",
+          "memory_type": "REGIME_TRANSITION"
+        },
+        {
+          "timestamp": "2026-06-02T15:30:00",
+          "memory_type": "REGIME_TRANSITION"
+        },
+        {
+          "timestamp": "2026-06-03T15:30:00",
+          "memory_type": "REGIME_TRANSITION"
+        },
+        {
+          "timestamp": "2026-06-04T15:30:00",
+          "memory_type": "REGIME_TRANSITION"
+        },
+        {
+          "timestamp": "2026-06-09T15:30:00",
+          "memory_type": "REGIME_TRANSITION"
+        },
+        {
+          "timestamp": "2026-06-10T15:30:00",
+          "memory_type": "REGIME_TRANSITION"
+        },
+        {
+          "timestamp": "2026-06-10T15:30:00",
+          "memory_type": "REGIME_TRANSITION"
+        },
+        {
+          "timestamp": "2026-06-11T15:30:00",
+          "memory_type": "REGIME_TRANSITION"
+        },
+        {
+          "timestamp": "2026-06-12T15:30:00",
+          "memory_type": "REGIME_TRANSITION"
+        },
+        {
+          "timestamp": "2026-06-12T15:30:00",
+          "memory_type": "REGIME_TRANSITION"
+        }
+      ]
+    },
+    {
+      "id": "NIFTY-2026-06-15",
+      "outcome": "COMPLETED",
+      "strategy": "DIRECTIONAL_PUT_SPREAD",
+      "market_context": "TRANSITION",
+      "market_opinion": "INSUFFICIENT_EVIDENCE",
+      "context_stability": "MOSTLY_STABLE",
+      "calibration": "CALIBRATED",
+      "governance": "APPROVED",
+      "lifecycle": "UNKNOWN",
+      "contract": "UNKNOWN",
+      "market_character": "CLEAR",
+      "market_phase": "ESTABLISHED",
+      "confidence": "HIGH",
+      "selection_status": "SELECTED",
+      "selection_confidence": "HIGH",
+      "selection_reason": "Market state REVERSAL matches required states.; Market character CLEAR meets minimum CLEAR.; Confidence HIGH meets required HIGH.",
+      "risk_status": "APPROVED",
+      "risk_level": "LOW",
+      "risk_approval": "ALLOW",
+      "risk_blocking_reason": null,
+      "capital_intent": "STANDARD",
+      "capital_allocation_status": "APPROVED",
+      "capital_allocation_reason": "Risk Level is LOW under a clean ALLOW; standard capital is authorized.",
+      "execution_status": "PLANNED",
+      "execution_intent": "PREPARE",
+      "evidence_opportunity_state": "HIGH_EDGE",
+      "evidence_risk_state": "NORMAL",
+      "stability_reasoning_summary": "transition_rate=0.200 at or below 0.25",
+      "stability_transition_count": 4,
+      "stability_persistence_length": 8,
+      "stability_dimension_agreement": 0.925,
+      "stability_confidence_variance": 0.0,
+      "stability_context_lifetime": 21,
+      "context_volatility": "STABLE",
+      "context_liquidity": "UNKNOWN",
+      "context_regime": "TRANSITION",
+      "context_conviction": "LOW",
+      "context_stability_dimension": "CHANGING",
+      "transition_events": [
+        {
+          "timestamp": "2026-06-01T15:30:00",
+          "memory_type": "REGIME_TRANSITION"
+        },
+        {
+          "timestamp": "2026-06-01T15:30:00",
+          "memory_type": "REGIME_TRANSITION"
+        },
+        {
+          "timestamp": "2026-06-02T15:30:00",
+          "memory_type": "REGIME_TRANSITION"
+        },
+        {
+          "timestamp": "2026-06-03T15:30:00",
+          "memory_type": "REGIME_TRANSITION"
+        },
+        {
+          "timestamp": "2026-06-04T15:30:00",
+          "memory_type": "REGIME_TRANSITION"
+        },
+        {
+          "timestamp": "2026-06-09T15:30:00",
+          "memory_type": "REGIME_TRANSITION"
+        },
+        {
+          "timestamp": "2026-06-10T15:30:00",
+          "memory_type": "REGIME_TRANSITION"
+        },
+        {
+          "timestamp": "2026-06-10T15:30:00",
+          "memory_type": "REGIME_TRANSITION"
+        },
+        {
+          "timestamp": "2026-06-11T15:30:00",
+          "memory_type": "REGIME_TRANSITION"
+        },
+        {
+          "timestamp": "2026-06-12T15:30:00",
+          "memory_type": "REGIME_TRANSITION"
+        },
+        {
+          "timestamp": "2026-06-12T15:30:00",
+          "memory_type": "REGIME_TRANSITION"
+        },
+        {
+          "timestamp": "2026-06-15T15:30:00",
+          "memory_type": "REGIME_TRANSITION"
+        },
+        {
+          "timestamp": "2026-06-15T15:30:00",
+          "memory_type": "REGIME_TRANSITION"
+        }
+      ]
+    },
+    {
+      "id": "NIFTY-2026-06-16",
+      "outcome": "COMPLETED",
+      "strategy": "DIRECTIONAL_PUT_SPREAD",
+      "market_context": "TRANSITION",
+      "market_opinion": "BULLISH",
+      "context_stability": "MOSTLY_STABLE",
+      "calibration": "CALIBRATED",
+      "governance": "APPROVED",
+      "lifecycle": "UNKNOWN",
+      "contract": "UNKNOWN",
+      "market_character": "CLEAR",
+      "market_phase": "ESTABLISHED",
+      "confidence": "HIGH",
+      "selection_status": "SELECTED",
+      "selection_confidence": "HIGH",
+      "selection_reason": "Market state REVERSAL matches required states.; Market character CLEAR meets minimum CLEAR.; Confidence HIGH meets required HIGH.",
+      "risk_status": "APPROVED",
+      "risk_level": "LOW",
+      "risk_approval": "ALLOW",
+      "risk_blocking_reason": null,
+      "capital_intent": "STANDARD",
+      "capital_allocation_status": "APPROVED",
+      "capital_allocation_reason": "Risk Level is LOW under a clean ALLOW; standard capital is authorized.",
+      "execution_status": "PLANNED",
+      "execution_intent": "PREPARE",
+      "evidence_opportunity_state": "HIGH_EDGE",
+      "evidence_risk_state": "NORMAL",
+      "stability_reasoning_summary": "transition_rate=0.182 at or below 0.25",
+      "stability_transition_count": 4,
+      "stability_persistence_length": 10,
+      "stability_dimension_agreement": 0.9318,
+      "stability_confidence_variance": 0.0,
+      "stability_context_lifetime": 23,
+      "context_volatility": "STABLE",
+      "context_liquidity": "UNKNOWN",
+      "context_regime": "TRANSITION",
+      "context_conviction": "LOW",
+      "context_stability_dimension": "CHANGING",
+      "transition_events": [
+        {
+          "timestamp": "2026-06-01T15:30:00",
+          "memory_type": "REGIME_TRANSITION"
+        },
+        {
+          "timestamp": "2026-06-01T15:30:00",
+          "memory_type": "REGIME_TRANSITION"
+        },
+        {
+          "timestamp": "2026-06-02T15:30:00",
+          "memory_type": "REGIME_TRANSITION"
+        },
+        {
+          "timestamp": "2026-06-03T15:30:00",
+          "memory_type": "REGIME_TRANSITION"
+        },
+        {
+          "timestamp": "2026-06-04T15:30:00",
+          "memory_type": "REGIME_TRANSITION"
+        },
+        {
+          "timestamp": "2026-06-09T15:30:00",
+          "memory_type": "REGIME_TRANSITION"
+        },
+        {
+          "timestamp": "2026-06-10T15:30:00",
+          "memory_type": "REGIME_TRANSITION"
+        },
+        {
+          "timestamp": "2026-06-10T15:30:00",
+          "memory_type": "REGIME_TRANSITION"
+        },
+        {
+          "timestamp": "2026-06-11T15:30:00",
+          "memory_type": "REGIME_TRANSITION"
+        },
+        {
+          "timestamp": "2026-06-12T15:30:00",
+          "memory_type": "REGIME_TRANSITION"
+        },
+        {
+          "timestamp": "2026-06-12T15:30:00",
+          "memory_type": "REGIME_TRANSITION"
+        },
+        {
+          "timestamp": "2026-06-15T15:30:00",
+          "memory_type": "REGIME_TRANSITION"
+        },
+        {
+          "timestamp": "2026-06-15T15:30:00",
+          "memory_type": "REGIME_TRANSITION"
+        },
+        {
+          "timestamp": "2026-06-16T15:30:00",
+          "memory_type": "REGIME_TRANSITION"
+        },
+        {
+          "timestamp": "2026-06-16T15:30:00",
+          "memory_type": "REGIME_TRANSITION"
+        }
+      ]
+    },
+    {
+      "id": "NIFTY-2026-06-17",
+      "outcome": "COMPLETED",
+      "strategy": "DIRECTIONAL_PUT_SPREAD",
+      "market_context": "TRANSITION",
+      "market_opinion": "BULLISH",
+      "context_stability": "MOSTLY_STABLE",
+      "calibration": "CALIBRATED",
+      "governance": "APPROVED",
+      "lifecycle": "UNKNOWN",
+      "contract": "UNKNOWN",
+      "market_character": "CLEAR",
+      "market_phase": "ESTABLISHED",
+      "confidence": "HIGH",
+      "selection_status": "SELECTED",
+      "selection_confidence": "HIGH",
+      "selection_reason": "Market state REVERSAL matches required states.; Market character CLEAR meets minimum CLEAR.; Confidence HIGH meets required HIGH.",
+      "risk_status": "APPROVED",
+      "risk_level": "LOW",
+      "risk_approval": "ALLOW",
+      "risk_blocking_reason": null,
+      "capital_intent": "STANDARD",
+      "capital_allocation_status": "APPROVED",
+      "capital_allocation_reason": "Risk Level is LOW under a clean ALLOW; standard capital is authorized.",
+      "execution_status": "PLANNED",
+      "execution_intent": "PREPARE",
+      "evidence_opportunity_state": "HIGH_EDGE",
+      "evidence_risk_state": "NORMAL",
+      "stability_reasoning_summary": "transition_rate=0.167 at or below 0.25",
+      "stability_transition_count": 4,
+      "stability_persistence_length": 12,
+      "stability_dimension_agreement": 0.9375,
+      "stability_confidence_variance": 0.0,
+      "stability_context_lifetime": 25,
+      "context_volatility": "STABLE",
+      "context_liquidity": "UNKNOWN",
+      "context_regime": "TRANSITION",
+      "context_conviction": "LOW",
+      "context_stability_dimension": "CHANGING",
+      "transition_events": [
+        {
+          "timestamp": "2026-06-01T15:30:00",
+          "memory_type": "REGIME_TRANSITION"
+        },
+        {
+          "timestamp": "2026-06-01T15:30:00",
+          "memory_type": "REGIME_TRANSITION"
+        },
+        {
+          "timestamp": "2026-06-02T15:30:00",
+          "memory_type": "REGIME_TRANSITION"
+        },
+        {
+          "timestamp": "2026-06-03T15:30:00",
+          "memory_type": "REGIME_TRANSITION"
+        },
+        {
+          "timestamp": "2026-06-04T15:30:00",
+          "memory_type": "REGIME_TRANSITION"
+        },
+        {
+          "timestamp": "2026-06-09T15:30:00",
+          "memory_type": "REGIME_TRANSITION"
+        },
+        {
+          "timestamp": "2026-06-10T15:30:00",
+          "memory_type": "REGIME_TRANSITION"
+        },
+        {
+          "timestamp": "2026-06-10T15:30:00",
+          "memory_type": "REGIME_TRANSITION"
+        },
+        {
+          "timestamp": "2026-06-11T15:30:00",
+          "memory_type": "REGIME_TRANSITION"
+        },
+        {
+          "timestamp": "2026-06-12T15:30:00",
+          "memory_type": "REGIME_TRANSITION"
+        },
+        {
+          "timestamp": "2026-06-12T15:30:00",
+          "memory_type": "REGIME_TRANSITION"
+        },
+        {
+          "timestamp": "2026-06-15T15:30:00",
+          "memory_type": "REGIME_TRANSITION"
+        },
+        {
+          "timestamp": "2026-06-15T15:30:00",
+          "memory_type": "REGIME_TRANSITION"
+        },
+        {
+          "timestamp": "2026-06-16T15:30:00",
+          "memory_type": "REGIME_TRANSITION"
+        },
+        {
+          "timestamp": "2026-06-16T15:30:00",
+          "memory_type": "REGIME_TRANSITION"
+        },
+        {
+          "timestamp": "2026-06-17T15:30:00",
+          "memory_type": "REGIME_TRANSITION"
+        },
+        {
+          "timestamp": "2026-06-17T15:30:00",
+          "memory_type": "REGIME_TRANSITION"
+        }
+      ]
+    },
+    {
+      "id": "NIFTY-2026-06-18",
+      "outcome": "COMPLETED",
+      "strategy": "DIRECTIONAL_PUT_SPREAD",
+      "market_context": "TRANSITION",
+      "market_opinion": "BULLISH",
+      "context_stability": "MOSTLY_STABLE",
+      "calibration": "CALIBRATED",
+      "governance": "APPROVED",
+      "lifecycle": "UNKNOWN",
+      "contract": "UNKNOWN",
+      "market_character": "CLEAR",
+      "market_phase": "ESTABLISHED",
+      "confidence": "HIGH",
+      "selection_status": "SELECTED",
+      "selection_confidence": "HIGH",
+      "selection_reason": "Market state REVERSAL matches required states.; Market character CLEAR meets minimum CLEAR.; Confidence HIGH meets required HIGH.",
+      "risk_status": "APPROVED",
+      "risk_level": "LOW",
+      "risk_approval": "ALLOW",
+      "risk_blocking_reason": null,
+      "capital_intent": "STANDARD",
+      "capital_allocation_status": "APPROVED",
+      "capital_allocation_reason": "Risk Level is LOW under a clean ALLOW; standard capital is authorized.",
+      "execution_status": "PLANNED",
+      "execution_intent": "PREPARE",
+      "evidence_opportunity_state": "HIGH_EDGE",
+      "evidence_risk_state": "NORMAL",
+      "stability_reasoning_summary": "transition_rate=0.160 at or below 0.25",
+      "stability_transition_count": 4,
+      "stability_persistence_length": 13,
+      "stability_dimension_agreement": 0.94,
+      "stability_confidence_variance": 0.0,
+      "stability_context_lifetime": 26,
+      "context_volatility": "STABLE",
+      "context_liquidity": "UNKNOWN",
+      "context_regime": "TRANSITION",
+      "context_conviction": "LOW",
+      "context_stability_dimension": "CHANGING",
+      "transition_events": [
+        {
+          "timestamp": "2026-06-01T15:30:00",
+          "memory_type": "REGIME_TRANSITION"
+        },
+        {
+          "timestamp": "2026-06-01T15:30:00",
+          "memory_type": "REGIME_TRANSITION"
+        },
+        {
+          "timestamp": "2026-06-02T15:30:00",
+          "memory_type": "REGIME_TRANSITION"
+        },
+        {
+          "timestamp": "2026-06-03T15:30:00",
+          "memory_type": "REGIME_TRANSITION"
+        },
+        {
+          "timestamp": "2026-06-04T15:30:00",
+          "memory_type": "REGIME_TRANSITION"
+        },
+        {
+          "timestamp": "2026-06-09T15:30:00",
+          "memory_type": "REGIME_TRANSITION"
+        },
+        {
+          "timestamp": "2026-06-10T15:30:00",
+          "memory_type": "REGIME_TRANSITION"
+        },
+        {
+          "timestamp": "2026-06-10T15:30:00",
+          "memory_type": "REGIME_TRANSITION"
+        },
+        {
+          "timestamp": "2026-06-11T15:30:00",
+          "memory_type": "REGIME_TRANSITION"
+        },
+        {
+          "timestamp": "2026-06-12T15:30:00",
+          "memory_type": "REGIME_TRANSITION"
+        },
+        {
+          "timestamp": "2026-06-12T15:30:00",
+          "memory_type": "REGIME_TRANSITION"
+        },
+        {
+          "timestamp": "2026-06-15T15:30:00",
+          "memory_type": "REGIME_TRANSITION"
+        },
+        {
+          "timestamp": "2026-06-15T15:30:00",
+          "memory_type": "REGIME_TRANSITION"
+        },
+        {
+          "timestamp": "2026-06-16T15:30:00",
+          "memory_type": "REGIME_TRANSITION"
+        },
+        {
+          "timestamp": "2026-06-16T15:30:00",
+          "memory_type": "REGIME_TRANSITION"
+        },
+        {
+          "timestamp": "2026-06-17T15:30:00",
+          "memory_type": "REGIME_TRANSITION"
+        },
+        {
+          "timestamp": "2026-06-17T15:30:00",
+          "memory_type": "REGIME_TRANSITION"
+        },
+        {
+          "timestamp": "2026-06-18T15:30:00",
+          "memory_type": "REGIME_TRANSITION"
+        }
+      ]
+    },
+    {
+      "id": "NIFTY-2026-06-19",
+      "outcome": "COMPLETED",
+      "strategy": "DIRECTIONAL_PUT_SPREAD",
+      "market_context": "TRANSITION",
+      "market_opinion": "BULLISH",
+      "context_stability": "MOSTLY_STABLE",
+      "calibration": "CALIBRATED",
+      "governance": "APPROVED",
+      "lifecycle": "UNKNOWN",
+      "contract": "UNKNOWN",
+      "market_character": "CLEAR",
+      "market_phase": "ESTABLISHED",
+      "confidence": "HIGH",
+      "selection_status": "SELECTED",
+      "selection_confidence": "HIGH",
+      "selection_reason": "Market state REVERSAL matches required states.; Market character CLEAR meets minimum CLEAR.; Confidence HIGH meets required HIGH.",
+      "risk_status": "APPROVED",
+      "risk_level": "LOW",
+      "risk_approval": "ALLOW",
+      "risk_blocking_reason": null,
+      "capital_intent": "STANDARD",
+      "capital_allocation_status": "APPROVED",
+      "capital_allocation_reason": "Risk Level is LOW under a clean ALLOW; standard capital is authorized.",
+      "execution_status": "PLANNED",
+      "execution_intent": "PREPARE",
+      "evidence_opportunity_state": "HIGH_EDGE",
+      "evidence_risk_state": "NORMAL",
+      "stability_reasoning_summary": "transition_rate=0.154 at or below 0.25",
+      "stability_transition_count": 4,
+      "stability_persistence_length": 14,
+      "stability_dimension_agreement": 0.9423,
+      "stability_confidence_variance": 0.0,
+      "stability_context_lifetime": 27,
+      "context_volatility": "STABLE",
+      "context_liquidity": "UNKNOWN",
+      "context_regime": "TRANSITION",
+      "context_conviction": "LOW",
+      "context_stability_dimension": "CHANGING",
+      "transition_events": [
+        {
+          "timestamp": "2026-06-01T15:30:00",
+          "memory_type": "REGIME_TRANSITION"
+        },
+        {
+          "timestamp": "2026-06-01T15:30:00",
+          "memory_type": "REGIME_TRANSITION"
+        },
+        {
+          "timestamp": "2026-06-02T15:30:00",
+          "memory_type": "REGIME_TRANSITION"
+        },
+        {
+          "timestamp": "2026-06-03T15:30:00",
+          "memory_type": "REGIME_TRANSITION"
+        },
+        {
+          "timestamp": "2026-06-04T15:30:00",
+          "memory_type": "REGIME_TRANSITION"
+        },
+        {
+          "timestamp": "2026-06-09T15:30:00",
+          "memory_type": "REGIME_TRANSITION"
+        },
+        {
+          "timestamp": "2026-06-10T15:30:00",
+          "memory_type": "REGIME_TRANSITION"
+        },
+        {
+          "timestamp": "2026-06-10T15:30:00",
+          "memory_type": "REGIME_TRANSITION"
+        },
+        {
+          "timestamp": "2026-06-11T15:30:00",
+          "memory_type": "REGIME_TRANSITION"
+        },
+        {
+          "timestamp": "2026-06-12T15:30:00",
+          "memory_type": "REGIME_TRANSITION"
+        },
+        {
+          "timestamp": "2026-06-12T15:30:00",
+          "memory_type": "REGIME_TRANSITION"
+        },
+        {
+          "timestamp": "2026-06-15T15:30:00",
+          "memory_type": "REGIME_TRANSITION"
+        },
+        {
+          "timestamp": "2026-06-15T15:30:00",
+          "memory_type": "REGIME_TRANSITION"
+        },
+        {
+          "timestamp": "2026-06-16T15:30:00",
+          "memory_type": "REGIME_TRANSITION"
+        },
+        {
+          "timestamp": "2026-06-16T15:30:00",
+          "memory_type": "REGIME_TRANSITION"
+        },
+        {
+          "timestamp": "2026-06-17T15:30:00",
+          "memory_type": "REGIME_TRANSITION"
+        },
+        {
+          "timestamp": "2026-06-17T15:30:00",
+          "memory_type": "REGIME_TRANSITION"
+        },
+        {
+          "timestamp": "2026-06-18T15:30:00",
+          "memory_type": "REGIME_TRANSITION"
+        },
+        {
+          "timestamp": "2026-06-19T15:30:00",
+          "memory_type": "REGIME_TRANSITION"
+        }
+      ]
+    },
+    {
+      "id": "NIFTY-2026-06-22",
+      "outcome": "COMPLETED",
+      "strategy": "DIRECTIONAL_CALL_SPREAD",
+      "market_context": "TRENDING_UP",
+      "market_opinion": "BULLISH",
+      "context_stability": "MOSTLY_STABLE",
+      "calibration": "CALIBRATED",
+      "governance": "APPROVED",
+      "lifecycle": "UNKNOWN",
+      "contract": "UNKNOWN",
+      "market_character": "CLEAR",
+      "market_phase": "ESTABLISHED",
+      "confidence": "HIGH",
+      "selection_status": "SELECTED",
+      "selection_confidence": "MODERATE",
+      "selection_reason": "Market state TREND matches required states.; Market character CLEAR meets minimum CLEAR.; Confidence HIGH meets required HIGH.",
+      "risk_status": "APPROVED",
+      "risk_level": "LOW",
+      "risk_approval": "ALLOW",
+      "risk_blocking_reason": null,
+      "capital_intent": "STANDARD",
+      "capital_allocation_status": "APPROVED",
+      "capital_allocation_reason": "Risk Level is LOW under a clean ALLOW; standard capital is authorized.",
+      "execution_status": "PLANNED",
+      "execution_intent": "PREPARE",
+      "evidence_opportunity_state": "HIGH_EDGE",
+      "evidence_risk_state": "NORMAL",
+      "stability_reasoning_summary": "transition_rate=0.185 at or below 0.25",
+      "stability_transition_count": 5,
+      "stability_persistence_length": 14,
+      "stability_dimension_agreement": 0.9321,
+      "stability_confidence_variance": 0.0,
+      "stability_context_lifetime": 28,
+      "context_volatility": "STABLE",
+      "context_liquidity": "UNKNOWN",
+      "context_regime": "TREND",
+      "context_conviction": "LOW",
+      "context_stability_dimension": "CHANGING",
+      "transition_events": [
+        {
+          "timestamp": "2026-06-01T15:30:00",
+          "memory_type": "REGIME_TRANSITION"
+        },
+        {
+          "timestamp": "2026-06-01T15:30:00",
+          "memory_type": "REGIME_TRANSITION"
+        },
+        {
+          "timestamp": "2026-06-02T15:30:00",
+          "memory_type": "REGIME_TRANSITION"
+        },
+        {
+          "timestamp": "2026-06-03T15:30:00",
+          "memory_type": "REGIME_TRANSITION"
+        },
+        {
+          "timestamp": "2026-06-04T15:30:00",
+          "memory_type": "REGIME_TRANSITION"
+        },
+        {
+          "timestamp": "2026-06-09T15:30:00",
+          "memory_type": "REGIME_TRANSITION"
+        },
+        {
+          "timestamp": "2026-06-10T15:30:00",
+          "memory_type": "REGIME_TRANSITION"
+        },
+        {
+          "timestamp": "2026-06-10T15:30:00",
+          "memory_type": "REGIME_TRANSITION"
+        },
+        {
+          "timestamp": "2026-06-11T15:30:00",
+          "memory_type": "REGIME_TRANSITION"
+        },
+        {
+          "timestamp": "2026-06-12T15:30:00",
+          "memory_type": "REGIME_TRANSITION"
+        },
+        {
+          "timestamp": "2026-06-12T15:30:00",
+          "memory_type": "REGIME_TRANSITION"
+        },
+        {
+          "timestamp": "2026-06-15T15:30:00",
+          "memory_type": "REGIME_TRANSITION"
+        },
+        {
+          "timestamp": "2026-06-15T15:30:00",
+          "memory_type": "REGIME_TRANSITION"
+        },
+        {
+          "timestamp": "2026-06-16T15:30:00",
+          "memory_type": "REGIME_TRANSITION"
+        },
+        {
+          "timestamp": "2026-06-16T15:30:00",
+          "memory_type": "REGIME_TRANSITION"
+        },
+        {
+          "timestamp": "2026-06-17T15:30:00",
+          "memory_type": "REGIME_TRANSITION"
+        },
+        {
+          "timestamp": "2026-06-17T15:30:00",
+          "memory_type": "REGIME_TRANSITION"
+        },
+        {
+          "timestamp": "2026-06-18T15:30:00",
+          "memory_type": "REGIME_TRANSITION"
+        },
+        {
+          "timestamp": "2026-06-19T15:30:00",
+          "memory_type": "REGIME_TRANSITION"
+        }
+      ]
+    },
+    {
+      "id": "NIFTY-2026-06-23",
+      "outcome": "COMPLETED",
+      "strategy": "DIRECTIONAL_CALL_SPREAD",
+      "market_context": "TRENDING_UP",
+      "market_opinion": "BULLISH",
+      "context_stability": "MOSTLY_STABLE",
+      "calibration": "CALIBRATED",
+      "governance": "APPROVED",
+      "lifecycle": "UNKNOWN",
+      "contract": "UNKNOWN",
+      "market_character": "CLEAR",
+      "market_phase": "ESTABLISHED",
+      "confidence": "HIGH",
+      "selection_status": "SELECTED",
+      "selection_confidence": "MODERATE",
+      "selection_reason": "Market state TREND matches required states.; Market character CLEAR meets minimum CLEAR.; Confidence HIGH meets required HIGH.",
+      "risk_status": "APPROVED",
+      "risk_level": "LOW",
+      "risk_approval": "ALLOW",
+      "risk_blocking_reason": null,
+      "capital_intent": "STANDARD",
+      "capital_allocation_status": "APPROVED",
+      "capital_allocation_reason": "Risk Level is LOW under a clean ALLOW; standard capital is authorized.",
+      "execution_status": "PLANNED",
+      "execution_intent": "PREPARE",
+      "evidence_opportunity_state": "HIGH_EDGE",
+      "evidence_risk_state": "NORMAL",
+      "stability_reasoning_summary": "transition_rate=0.179 at or below 0.25",
+      "stability_transition_count": 5,
+      "stability_persistence_length": 14,
+      "stability_dimension_agreement": 0.9345,
+      "stability_confidence_variance": 0.0,
+      "stability_context_lifetime": 29,
+      "context_volatility": "STABLE",
+      "context_liquidity": "UNKNOWN",
+      "context_regime": "TREND",
+      "context_conviction": "LOW",
+      "context_stability_dimension": "CHANGING",
+      "transition_events": [
+        {
+          "timestamp": "2026-06-01T15:30:00",
+          "memory_type": "REGIME_TRANSITION"
+        },
+        {
+          "timestamp": "2026-06-01T15:30:00",
+          "memory_type": "REGIME_TRANSITION"
+        },
+        {
+          "timestamp": "2026-06-02T15:30:00",
+          "memory_type": "REGIME_TRANSITION"
+        },
+        {
+          "timestamp": "2026-06-03T15:30:00",
+          "memory_type": "REGIME_TRANSITION"
+        },
+        {
+          "timestamp": "2026-06-04T15:30:00",
+          "memory_type": "REGIME_TRANSITION"
+        },
+        {
+          "timestamp": "2026-06-09T15:30:00",
+          "memory_type": "REGIME_TRANSITION"
+        },
+        {
+          "timestamp": "2026-06-10T15:30:00",
+          "memory_type": "REGIME_TRANSITION"
+        },
+        {
+          "timestamp": "2026-06-10T15:30:00",
+          "memory_type": "REGIME_TRANSITION"
+        },
+        {
+          "timestamp": "2026-06-11T15:30:00",
+          "memory_type": "REGIME_TRANSITION"
+        },
+        {
+          "timestamp": "2026-06-12T15:30:00",
+          "memory_type": "REGIME_TRANSITION"
+        },
+        {
+          "timestamp": "2026-06-12T15:30:00",
+          "memory_type": "REGIME_TRANSITION"
+        },
+        {
+          "timestamp": "2026-06-15T15:30:00",
+          "memory_type": "REGIME_TRANSITION"
+        },
+        {
+          "timestamp": "2026-06-15T15:30:00",
+          "memory_type": "REGIME_TRANSITION"
+        },
+        {
+          "timestamp": "2026-06-16T15:30:00",
+          "memory_type": "REGIME_TRANSITION"
+        },
+        {
+          "timestamp": "2026-06-16T15:30:00",
+          "memory_type": "REGIME_TRANSITION"
+        },
+        {
+          "timestamp": "2026-06-17T15:30:00",
+          "memory_type": "REGIME_TRANSITION"
+        },
+        {
+          "timestamp": "2026-06-17T15:30:00",
+          "memory_type": "REGIME_TRANSITION"
+        },
+        {
+          "timestamp": "2026-06-18T15:30:00",
+          "memory_type": "REGIME_TRANSITION"
+        },
+        {
+          "timestamp": "2026-06-19T15:30:00",
+          "memory_type": "REGIME_TRANSITION"
+        }
+      ]
+    },
+    {
+      "id": "NIFTY-2026-06-24",
+      "outcome": "COMPLETED",
+      "strategy": "DIRECTIONAL_CALL_SPREAD",
+      "market_context": "TRENDING_UP",
+      "market_opinion": "BULLISH",
+      "context_stability": "MOSTLY_STABLE",
+      "calibration": "CALIBRATED",
+      "governance": "APPROVED",
+      "lifecycle": "UNKNOWN",
+      "contract": "UNKNOWN",
+      "market_character": "CLEAR",
+      "market_phase": "ESTABLISHED",
+      "confidence": "HIGH",
+      "selection_status": "SELECTED",
+      "selection_confidence": "MODERATE",
+      "selection_reason": "Market state TREND matches required states.; Market character CLEAR meets minimum CLEAR.; Confidence HIGH meets required HIGH.",
+      "risk_status": "APPROVED",
+      "risk_level": "LOW",
+      "risk_approval": "ALLOW",
+      "risk_blocking_reason": null,
+      "capital_intent": "STANDARD",
+      "capital_allocation_status": "APPROVED",
+      "capital_allocation_reason": "Risk Level is LOW under a clean ALLOW; standard capital is authorized.",
+      "execution_status": "PLANNED",
+      "execution_intent": "PREPARE",
+      "evidence_opportunity_state": "HIGH_EDGE",
+      "evidence_risk_state": "NORMAL",
+      "stability_reasoning_summary": "transition_rate=0.172 at or below 0.25",
+      "stability_transition_count": 5,
+      "stability_persistence_length": 14,
+      "stability_dimension_agreement": 0.9368,
+      "stability_confidence_variance": 0.0,
+      "stability_context_lifetime": 30,
+      "context_volatility": "STABLE",
+      "context_liquidity": "UNKNOWN",
+      "context_regime": "TREND",
+      "context_conviction": "LOW",
+      "context_stability_dimension": "CHANGING",
+      "transition_events": [
+        {
+          "timestamp": "2026-06-01T15:30:00",
+          "memory_type": "REGIME_TRANSITION"
+        },
+        {
+          "timestamp": "2026-06-01T15:30:00",
+          "memory_type": "REGIME_TRANSITION"
+        },
+        {
+          "timestamp": "2026-06-02T15:30:00",
+          "memory_type": "REGIME_TRANSITION"
+        },
+        {
+          "timestamp": "2026-06-03T15:30:00",
+          "memory_type": "REGIME_TRANSITION"
+        },
+        {
+          "timestamp": "2026-06-04T15:30:00",
+          "memory_type": "REGIME_TRANSITION"
+        },
+        {
+          "timestamp": "2026-06-09T15:30:00",
+          "memory_type": "REGIME_TRANSITION"
+        },
+        {
+          "timestamp": "2026-06-10T15:30:00",
+          "memory_type": "REGIME_TRANSITION"
+        },
+        {
+          "timestamp": "2026-06-10T15:30:00",
+          "memory_type": "REGIME_TRANSITION"
+        },
+        {
+          "timestamp": "2026-06-11T15:30:00",
+          "memory_type": "REGIME_TRANSITION"
+        },
+        {
+          "timestamp": "2026-06-12T15:30:00",
+          "memory_type": "REGIME_TRANSITION"
+        },
+        {
+          "timestamp": "2026-06-12T15:30:00",
+          "memory_type": "REGIME_TRANSITION"
+        },
+        {
+          "timestamp": "2026-06-15T15:30:00",
+          "memory_type": "REGIME_TRANSITION"
+        },
+        {
+          "timestamp": "2026-06-15T15:30:00",
+          "memory_type": "REGIME_TRANSITION"
+        },
+        {
+          "timestamp": "2026-06-16T15:30:00",
+          "memory_type": "REGIME_TRANSITION"
+        },
+        {
+          "timestamp": "2026-06-16T15:30:00",
+          "memory_type": "REGIME_TRANSITION"
+        },
+        {
+          "timestamp": "2026-06-17T15:30:00",
+          "memory_type": "REGIME_TRANSITION"
+        },
+        {
+          "timestamp": "2026-06-17T15:30:00",
+          "memory_type": "REGIME_TRANSITION"
+        },
+        {
+          "timestamp": "2026-06-18T15:30:00",
+          "memory_type": "REGIME_TRANSITION"
+        },
+        {
+          "timestamp": "2026-06-19T15:30:00",
+          "memory_type": "REGIME_TRANSITION"
+        }
+      ]
+    },
+    {
+      "id": "NIFTY-2026-06-25",
+      "outcome": "COMPLETED",
+      "strategy": "DIRECTIONAL_PUT_SPREAD",
+      "market_context": "TRANSITION",
+      "market_opinion": "BULLISH",
+      "context_stability": "MOSTLY_STABLE",
+      "calibration": "CALIBRATED",
+      "governance": "APPROVED",
+      "lifecycle": "UNKNOWN",
+      "contract": "UNKNOWN",
+      "market_character": "CLEAR",
+      "market_phase": "ESTABLISHED",
+      "confidence": "HIGH",
+      "selection_status": "SELECTED",
+      "selection_confidence": "HIGH",
+      "selection_reason": "Market state REVERSAL matches required states.; Market character CLEAR meets minimum CLEAR.; Confidence HIGH meets required HIGH.",
+      "risk_status": "APPROVED",
+      "risk_level": "LOW",
+      "risk_approval": "ALLOW",
+      "risk_blocking_reason": null,
+      "capital_intent": "STANDARD",
+      "capital_allocation_status": "APPROVED",
+      "capital_allocation_reason": "Risk Level is LOW under a clean ALLOW; standard capital is authorized.",
+      "execution_status": "PLANNED",
+      "execution_intent": "PREPARE",
+      "evidence_opportunity_state": "HIGH_EDGE",
+      "evidence_risk_state": "NORMAL",
+      "stability_reasoning_summary": "transition_rate=0.194 at or below 0.25",
+      "stability_transition_count": 6,
+      "stability_persistence_length": 14,
+      "stability_dimension_agreement": 0.9301,
+      "stability_confidence_variance": 0.0,
+      "stability_context_lifetime": 32,
+      "context_volatility": "STABLE",
+      "context_liquidity": "UNKNOWN",
+      "context_regime": "TRANSITION",
+      "context_conviction": "LOW",
+      "context_stability_dimension": "CHANGING",
+      "transition_events": [
+        {
+          "timestamp": "2026-06-01T15:30:00",
+          "memory_type": "REGIME_TRANSITION"
+        },
+        {
+          "timestamp": "2026-06-01T15:30:00",
+          "memory_type": "REGIME_TRANSITION"
+        },
+        {
+          "timestamp": "2026-06-02T15:30:00",
+          "memory_type": "REGIME_TRANSITION"
+        },
+        {
+          "timestamp": "2026-06-03T15:30:00",
+          "memory_type": "REGIME_TRANSITION"
+        },
+        {
+          "timestamp": "2026-06-04T15:30:00",
+          "memory_type": "REGIME_TRANSITION"
+        },
+        {
+          "timestamp": "2026-06-09T15:30:00",
+          "memory_type": "REGIME_TRANSITION"
+        },
+        {
+          "timestamp": "2026-06-10T15:30:00",
+          "memory_type": "REGIME_TRANSITION"
+        },
+        {
+          "timestamp": "2026-06-10T15:30:00",
+          "memory_type": "REGIME_TRANSITION"
+        },
+        {
+          "timestamp": "2026-06-11T15:30:00",
+          "memory_type": "REGIME_TRANSITION"
+        },
+        {
+          "timestamp": "2026-06-12T15:30:00",
+          "memory_type": "REGIME_TRANSITION"
+        },
+        {
+          "timestamp": "2026-06-12T15:30:00",
+          "memory_type": "REGIME_TRANSITION"
+        },
+        {
+          "timestamp": "2026-06-15T15:30:00",
+          "memory_type": "REGIME_TRANSITION"
+        },
+        {
+          "timestamp": "2026-06-15T15:30:00",
+          "memory_type": "REGIME_TRANSITION"
+        },
+        {
+          "timestamp": "2026-06-16T15:30:00",
+          "memory_type": "REGIME_TRANSITION"
+        },
+        {
+          "timestamp": "2026-06-16T15:30:00",
+          "memory_type": "REGIME_TRANSITION"
+        },
+        {
+          "timestamp": "2026-06-17T15:30:00",
+          "memory_type": "REGIME_TRANSITION"
+        },
+        {
+          "timestamp": "2026-06-17T15:30:00",
+          "memory_type": "REGIME_TRANSITION"
+        },
+        {
+          "timestamp": "2026-06-18T15:30:00",
+          "memory_type": "REGIME_TRANSITION"
+        },
+        {
+          "timestamp": "2026-06-19T15:30:00",
+          "memory_type": "REGIME_TRANSITION"
+        },
+        {
+          "timestamp": "2026-06-25T15:30:00",
+          "memory_type": "REGIME_TRANSITION"
+        }
+      ]
+    },
+    {
+      "id": "NIFTY-2026-06-29",
+      "outcome": "COMPLETED",
+      "strategy": "DIRECTIONAL_PUT_SPREAD",
+      "market_context": "TRANSITION",
+      "market_opinion": "BULLISH",
+      "context_stability": "MOSTLY_STABLE",
+      "calibration": "CALIBRATED",
+      "governance": "APPROVED",
+      "lifecycle": "UNKNOWN",
+      "contract": "UNKNOWN",
+      "market_character": "CLEAR",
+      "market_phase": "ESTABLISHED",
+      "confidence": "HIGH",
+      "selection_status": "SELECTED",
+      "selection_confidence": "HIGH",
+      "selection_reason": "Market state REVERSAL matches required states.; Market character CLEAR meets minimum CLEAR.; Confidence HIGH meets required HIGH.",
+      "risk_status": "APPROVED",
+      "risk_level": "LOW",
+      "risk_approval": "ALLOW",
+      "risk_blocking_reason": null,
+      "capital_intent": "STANDARD",
+      "capital_allocation_status": "APPROVED",
+      "capital_allocation_reason": "Risk Level is LOW under a clean ALLOW; standard capital is authorized.",
+      "execution_status": "PLANNED",
+      "execution_intent": "PREPARE",
+      "evidence_opportunity_state": "HIGH_EDGE",
+      "evidence_risk_state": "NORMAL",
+      "stability_reasoning_summary": "transition_rate=0.182 at or below 0.25",
+      "stability_transition_count": 6,
+      "stability_persistence_length": 14,
+      "stability_dimension_agreement": 0.9343,
+      "stability_confidence_variance": 0.0,
+      "stability_context_lifetime": 34,
+      "context_volatility": "STABLE",
+      "context_liquidity": "UNKNOWN",
+      "context_regime": "TRANSITION",
+      "context_conviction": "LOW",
+      "context_stability_dimension": "CHANGING",
+      "transition_events": [
+        {
+          "timestamp": "2026-06-01T15:30:00",
+          "memory_type": "REGIME_TRANSITION"
+        },
+        {
+          "timestamp": "2026-06-01T15:30:00",
+          "memory_type": "REGIME_TRANSITION"
+        },
+        {
+          "timestamp": "2026-06-02T15:30:00",
+          "memory_type": "REGIME_TRANSITION"
+        },
+        {
+          "timestamp": "2026-06-03T15:30:00",
+          "memory_type": "REGIME_TRANSITION"
+        },
+        {
+          "timestamp": "2026-06-04T15:30:00",
+          "memory_type": "REGIME_TRANSITION"
+        },
+        {
+          "timestamp": "2026-06-09T15:30:00",
+          "memory_type": "REGIME_TRANSITION"
+        },
+        {
+          "timestamp": "2026-06-10T15:30:00",
+          "memory_type": "REGIME_TRANSITION"
+        },
+        {
+          "timestamp": "2026-06-10T15:30:00",
+          "memory_type": "REGIME_TRANSITION"
+        },
+        {
+          "timestamp": "2026-06-11T15:30:00",
+          "memory_type": "REGIME_TRANSITION"
+        },
+        {
+          "timestamp": "2026-06-12T15:30:00",
+          "memory_type": "REGIME_TRANSITION"
+        },
+        {
+          "timestamp": "2026-06-12T15:30:00",
+          "memory_type": "REGIME_TRANSITION"
+        },
+        {
+          "timestamp": "2026-06-15T15:30:00",
+          "memory_type": "REGIME_TRANSITION"
+        },
+        {
+          "timestamp": "2026-06-15T15:30:00",
+          "memory_type": "REGIME_TRANSITION"
+        },
+        {
+          "timestamp": "2026-06-16T15:30:00",
+          "memory_type": "REGIME_TRANSITION"
+        },
+        {
+          "timestamp": "2026-06-16T15:30:00",
+          "memory_type": "REGIME_TRANSITION"
+        },
+        {
+          "timestamp": "2026-06-17T15:30:00",
+          "memory_type": "REGIME_TRANSITION"
+        },
+        {
+          "timestamp": "2026-06-17T15:30:00",
+          "memory_type": "REGIME_TRANSITION"
+        },
+        {
+          "timestamp": "2026-06-18T15:30:00",
+          "memory_type": "REGIME_TRANSITION"
+        },
+        {
+          "timestamp": "2026-06-19T15:30:00",
+          "memory_type": "REGIME_TRANSITION"
+        },
+        {
+          "timestamp": "2026-06-25T15:30:00",
+          "memory_type": "REGIME_TRANSITION"
+        },
+        {
+          "timestamp": "2026-06-29T15:30:00",
+          "memory_type": "REGIME_TRANSITION"
+        },
+        {
+          "timestamp": "2026-06-29T15:30:00",
+          "memory_type": "REGIME_TRANSITION"
+        }
+      ]
+    },
+    {
+      "id": "NIFTY-2026-06-30",
+      "outcome": "COMPLETED",
+      "strategy": "DIRECTIONAL_PUT_SPREAD",
+      "market_context": "TRANSITION",
+      "market_opinion": "NEUTRAL",
+      "context_stability": "MOSTLY_STABLE",
+      "calibration": "CALIBRATED",
+      "governance": "APPROVED",
+      "lifecycle": "UNKNOWN",
+      "contract": "UNKNOWN",
+      "market_character": "CLEAR",
+      "market_phase": "ESTABLISHED",
+      "confidence": "HIGH",
+      "selection_status": "SELECTED",
+      "selection_confidence": "HIGH",
+      "selection_reason": "Market state REVERSAL matches required states.; Market character CLEAR meets minimum CLEAR.; Confidence HIGH meets required HIGH.",
+      "risk_status": "APPROVED",
+      "risk_level": "LOW",
+      "risk_approval": "ALLOW",
+      "risk_blocking_reason": null,
+      "capital_intent": "STANDARD",
+      "capital_allocation_status": "APPROVED",
+      "capital_allocation_reason": "Risk Level is LOW under a clean ALLOW; standard capital is authorized.",
+      "execution_status": "PLANNED",
+      "execution_intent": "PREPARE",
+      "evidence_opportunity_state": "HIGH_EDGE",
+      "evidence_risk_state": "NORMAL",
+      "stability_reasoning_summary": "transition_rate=0.176 at or below 0.25",
+      "stability_transition_count": 6,
+      "stability_persistence_length": 14,
+      "stability_dimension_agreement": 0.9363,
+      "stability_confidence_variance": 0.0,
+      "stability_context_lifetime": 35,
+      "context_volatility": "STABLE",
+      "context_liquidity": "UNKNOWN",
+      "context_regime": "TRANSITION",
+      "context_conviction": "LOW",
+      "context_stability_dimension": "CHANGING",
+      "transition_events": [
+        {
+          "timestamp": "2026-06-01T15:30:00",
+          "memory_type": "REGIME_TRANSITION"
+        },
+        {
+          "timestamp": "2026-06-01T15:30:00",
+          "memory_type": "REGIME_TRANSITION"
+        },
+        {
+          "timestamp": "2026-06-02T15:30:00",
+          "memory_type": "REGIME_TRANSITION"
+        },
+        {
+          "timestamp": "2026-06-03T15:30:00",
+          "memory_type": "REGIME_TRANSITION"
+        },
+        {
+          "timestamp": "2026-06-04T15:30:00",
+          "memory_type": "REGIME_TRANSITION"
+        },
+        {
+          "timestamp": "2026-06-09T15:30:00",
+          "memory_type": "REGIME_TRANSITION"
+        },
+        {
+          "timestamp": "2026-06-10T15:30:00",
+          "memory_type": "REGIME_TRANSITION"
+        },
+        {
+          "timestamp": "2026-06-10T15:30:00",
+          "memory_type": "REGIME_TRANSITION"
+        },
+        {
+          "timestamp": "2026-06-11T15:30:00",
+          "memory_type": "REGIME_TRANSITION"
+        },
+        {
+          "timestamp": "2026-06-12T15:30:00",
+          "memory_type": "REGIME_TRANSITION"
+        },
+        {
+          "timestamp": "2026-06-12T15:30:00",
+          "memory_type": "REGIME_TRANSITION"
+        },
+        {
+          "timestamp": "2026-06-15T15:30:00",
+          "memory_type": "REGIME_TRANSITION"
+        },
+        {
+          "timestamp": "2026-06-15T15:30:00",
+          "memory_type": "REGIME_TRANSITION"
+        },
+        {
+          "timestamp": "2026-06-16T15:30:00",
+          "memory_type": "REGIME_TRANSITION"
+        },
+        {
+          "timestamp": "2026-06-16T15:30:00",
+          "memory_type": "REGIME_TRANSITION"
+        },
+        {
+          "timestamp": "2026-06-17T15:30:00",
+          "memory_type": "REGIME_TRANSITION"
+        },
+        {
+          "timestamp": "2026-06-17T15:30:00",
+          "memory_type": "REGIME_TRANSITION"
+        },
+        {
+          "timestamp": "2026-06-18T15:30:00",
+          "memory_type": "REGIME_TRANSITION"
+        },
+        {
+          "timestamp": "2026-06-19T15:30:00",
+          "memory_type": "REGIME_TRANSITION"
+        },
+        {
+          "timestamp": "2026-06-25T15:30:00",
+          "memory_type": "REGIME_TRANSITION"
+        },
+        {
+          "timestamp": "2026-06-29T15:30:00",
+          "memory_type": "REGIME_TRANSITION"
+        },
+        {
+          "timestamp": "2026-06-29T15:30:00",
+          "memory_type": "REGIME_TRANSITION"
+        },
+        {
+          "timestamp": "2026-06-30T15:30:00",
+          "memory_type": "REGIME_TRANSITION"
+        }
+      ]
+    },
+    {
+      "id": "NIFTY-2026-07-01",
+      "outcome": "COMPLETED",
+      "strategy": "DIRECTIONAL_PUT_SPREAD",
+      "market_context": "TRANSITION",
+      "market_opinion": "INSUFFICIENT_EVIDENCE",
+      "context_stability": "MOSTLY_STABLE",
+      "calibration": "CALIBRATED",
+      "governance": "APPROVED",
+      "lifecycle": "UNKNOWN",
+      "contract": "UNKNOWN",
+      "market_character": "CLEAR",
+      "market_phase": "ESTABLISHED",
+      "confidence": "HIGH",
+      "selection_status": "SELECTED",
+      "selection_confidence": "HIGH",
+      "selection_reason": "Market state REVERSAL matches required states.; Market character CLEAR meets minimum CLEAR.; Confidence HIGH meets required HIGH.",
+      "risk_status": "APPROVED",
+      "risk_level": "LOW",
+      "risk_approval": "ALLOW",
+      "risk_blocking_reason": null,
+      "capital_intent": "STANDARD",
+      "capital_allocation_status": "APPROVED",
+      "capital_allocation_reason": "Risk Level is LOW under a clean ALLOW; standard capital is authorized.",
+      "execution_status": "PLANNED",
+      "execution_intent": "PREPARE",
+      "evidence_opportunity_state": "HIGH_EDGE",
+      "evidence_risk_state": "NORMAL",
+      "stability_reasoning_summary": "transition_rate=0.167 at or below 0.25",
+      "stability_transition_count": 6,
+      "stability_persistence_length": 14,
+      "stability_dimension_agreement": 0.9398,
+      "stability_confidence_variance": 0.0,
+      "stability_context_lifetime": 37,
+      "context_volatility": "STABLE",
+      "context_liquidity": "UNKNOWN",
+      "context_regime": "TRANSITION",
+      "context_conviction": "LOW",
+      "context_stability_dimension": "CHANGING",
+      "transition_events": [
+        {
+          "timestamp": "2026-06-01T15:30:00",
+          "memory_type": "REGIME_TRANSITION"
+        },
+        {
+          "timestamp": "2026-06-01T15:30:00",
+          "memory_type": "REGIME_TRANSITION"
+        },
+        {
+          "timestamp": "2026-06-02T15:30:00",
+          "memory_type": "REGIME_TRANSITION"
+        },
+        {
+          "timestamp": "2026-06-03T15:30:00",
+          "memory_type": "REGIME_TRANSITION"
+        },
+        {
+          "timestamp": "2026-06-04T15:30:00",
+          "memory_type": "REGIME_TRANSITION"
+        },
+        {
+          "timestamp": "2026-06-09T15:30:00",
+          "memory_type": "REGIME_TRANSITION"
+        },
+        {
+          "timestamp": "2026-06-10T15:30:00",
+          "memory_type": "REGIME_TRANSITION"
+        },
+        {
+          "timestamp": "2026-06-10T15:30:00",
+          "memory_type": "REGIME_TRANSITION"
+        },
+        {
+          "timestamp": "2026-06-11T15:30:00",
+          "memory_type": "REGIME_TRANSITION"
+        },
+        {
+          "timestamp": "2026-06-12T15:30:00",
+          "memory_type": "REGIME_TRANSITION"
+        },
+        {
+          "timestamp": "2026-06-12T15:30:00",
+          "memory_type": "REGIME_TRANSITION"
+        },
+        {
+          "timestamp": "2026-06-15T15:30:00",
+          "memory_type": "REGIME_TRANSITION"
+        },
+        {
+          "timestamp": "2026-06-15T15:30:00",
+          "memory_type": "REGIME_TRANSITION"
+        },
+        {
+          "timestamp": "2026-06-16T15:30:00",
+          "memory_type": "REGIME_TRANSITION"
+        },
+        {
+          "timestamp": "2026-06-16T15:30:00",
+          "memory_type": "REGIME_TRANSITION"
+        },
+        {
+          "timestamp": "2026-06-17T15:30:00",
+          "memory_type": "REGIME_TRANSITION"
+        },
+        {
+          "timestamp": "2026-06-17T15:30:00",
+          "memory_type": "REGIME_TRANSITION"
+        },
+        {
+          "timestamp": "2026-06-18T15:30:00",
+          "memory_type": "REGIME_TRANSITION"
+        },
+        {
+          "timestamp": "2026-06-19T15:30:00",
+          "memory_type": "REGIME_TRANSITION"
+        },
+        {
+          "timestamp": "2026-06-25T15:30:00",
+          "memory_type": "REGIME_TRANSITION"
+        },
+        {
+          "timestamp": "2026-06-29T15:30:00",
+          "memory_type": "REGIME_TRANSITION"
+        },
+        {
+          "timestamp": "2026-06-29T15:30:00",
+          "memory_type": "REGIME_TRANSITION"
+        },
+        {
+          "timestamp": "2026-06-30T15:30:00",
+          "memory_type": "REGIME_TRANSITION"
+        },
+        {
+          "timestamp": "2026-07-01T15:30:00",
+          "memory_type": "REGIME_TRANSITION"
+        },
+        {
+          "timestamp": "2026-07-01T15:30:00",
+          "memory_type": "REGIME_TRANSITION"
+        }
+      ]
+    },
+    {
+      "id": "NIFTY-2026-07-02",
+      "outcome": "COMPLETED",
+      "strategy": "DIRECTIONAL_PUT_SPREAD",
+      "market_context": "TRANSITION",
+      "market_opinion": "BULLISH",
+      "context_stability": "MOSTLY_STABLE",
+      "calibration": "CALIBRATED",
+      "governance": "APPROVED",
+      "lifecycle": "UNKNOWN",
+      "contract": "UNKNOWN",
+      "market_character": "CLEAR",
+      "market_phase": "ESTABLISHED",
+      "confidence": "HIGH",
+      "selection_status": "SELECTED",
+      "selection_confidence": "HIGH",
+      "selection_reason": "Market state REVERSAL matches required states.; Market character CLEAR meets minimum CLEAR.; Confidence HIGH meets required HIGH.",
+      "risk_status": "APPROVED",
+      "risk_level": "LOW",
+      "risk_approval": "ALLOW",
+      "risk_blocking_reason": null,
+      "capital_intent": "STANDARD",
+      "capital_allocation_status": "APPROVED",
+      "capital_allocation_reason": "Risk Level is LOW under a clean ALLOW; standard capital is authorized.",
+      "execution_status": "PLANNED",
+      "execution_intent": "PREPARE",
+      "evidence_opportunity_state": "HIGH_EDGE",
+      "evidence_risk_state": "NORMAL",
+      "stability_reasoning_summary": "transition_rate=0.158 at or below 0.25",
+      "stability_transition_count": 6,
+      "stability_persistence_length": 14,
+      "stability_dimension_agreement": 0.943,
+      "stability_confidence_variance": 0.0,
+      "stability_context_lifetime": 39,
+      "context_volatility": "STABLE",
+      "context_liquidity": "UNKNOWN",
+      "context_regime": "TRANSITION",
+      "context_conviction": "LOW",
+      "context_stability_dimension": "CHANGING",
+      "transition_events": [
+        {
+          "timestamp": "2026-06-01T15:30:00",
+          "memory_type": "REGIME_TRANSITION"
+        },
+        {
+          "timestamp": "2026-06-01T15:30:00",
+          "memory_type": "REGIME_TRANSITION"
+        },
+        {
+          "timestamp": "2026-06-02T15:30:00",
+          "memory_type": "REGIME_TRANSITION"
+        },
+        {
+          "timestamp": "2026-06-03T15:30:00",
+          "memory_type": "REGIME_TRANSITION"
+        },
+        {
+          "timestamp": "2026-06-04T15:30:00",
+          "memory_type": "REGIME_TRANSITION"
+        },
+        {
+          "timestamp": "2026-06-09T15:30:00",
+          "memory_type": "REGIME_TRANSITION"
+        },
+        {
+          "timestamp": "2026-06-10T15:30:00",
+          "memory_type": "REGIME_TRANSITION"
+        },
+        {
+          "timestamp": "2026-06-10T15:30:00",
+          "memory_type": "REGIME_TRANSITION"
+        },
+        {
+          "timestamp": "2026-06-11T15:30:00",
+          "memory_type": "REGIME_TRANSITION"
+        },
+        {
+          "timestamp": "2026-06-12T15:30:00",
+          "memory_type": "REGIME_TRANSITION"
+        },
+        {
+          "timestamp": "2026-06-12T15:30:00",
+          "memory_type": "REGIME_TRANSITION"
+        },
+        {
+          "timestamp": "2026-06-15T15:30:00",
+          "memory_type": "REGIME_TRANSITION"
+        },
+        {
+          "timestamp": "2026-06-15T15:30:00",
+          "memory_type": "REGIME_TRANSITION"
+        },
+        {
+          "timestamp": "2026-06-16T15:30:00",
+          "memory_type": "REGIME_TRANSITION"
+        },
+        {
+          "timestamp": "2026-06-16T15:30:00",
+          "memory_type": "REGIME_TRANSITION"
+        },
+        {
+          "timestamp": "2026-06-17T15:30:00",
+          "memory_type": "REGIME_TRANSITION"
+        },
+        {
+          "timestamp": "2026-06-17T15:30:00",
+          "memory_type": "REGIME_TRANSITION"
+        },
+        {
+          "timestamp": "2026-06-18T15:30:00",
+          "memory_type": "REGIME_TRANSITION"
+        },
+        {
+          "timestamp": "2026-06-19T15:30:00",
+          "memory_type": "REGIME_TRANSITION"
+        },
+        {
+          "timestamp": "2026-06-25T15:30:00",
+          "memory_type": "REGIME_TRANSITION"
+        },
+        {
+          "timestamp": "2026-06-29T15:30:00",
+          "memory_type": "REGIME_TRANSITION"
+        },
+        {
+          "timestamp": "2026-06-29T15:30:00",
+          "memory_type": "REGIME_TRANSITION"
+        },
+        {
+          "timestamp": "2026-06-30T15:30:00",
+          "memory_type": "REGIME_TRANSITION"
+        },
+        {
+          "timestamp": "2026-07-01T15:30:00",
+          "memory_type": "REGIME_TRANSITION"
+        },
+        {
+          "timestamp": "2026-07-01T15:30:00",
+          "memory_type": "REGIME_TRANSITION"
+        },
+        {
+          "timestamp": "2026-07-02T15:30:00",
+          "memory_type": "REGIME_TRANSITION"
+        },
+        {
+          "timestamp": "2026-07-02T15:30:00",
+          "memory_type": "REGIME_TRANSITION"
+        }
+      ]
+    },
+    {
+      "id": "NIFTY-2026-07-03",
+      "outcome": "COMPLETED",
+      "strategy": "DIRECTIONAL_PUT_SPREAD",
+      "market_context": "TRANSITION",
+      "market_opinion": "BULLISH",
+      "context_stability": "MOSTLY_STABLE",
+      "calibration": "CALIBRATED",
+      "governance": "APPROVED",
+      "lifecycle": "UNKNOWN",
+      "contract": "UNKNOWN",
+      "market_character": "CLEAR",
+      "market_phase": "ESTABLISHED",
+      "confidence": "HIGH",
+      "selection_status": "SELECTED",
+      "selection_confidence": "HIGH",
+      "selection_reason": "Market state REVERSAL matches required states.; Market character CLEAR meets minimum CLEAR.; Confidence HIGH meets required HIGH.",
+      "risk_status": "APPROVED",
+      "risk_level": "LOW",
+      "risk_approval": "ALLOW",
+      "risk_blocking_reason": null,
+      "capital_intent": "STANDARD",
+      "capital_allocation_status": "APPROVED",
+      "capital_allocation_reason": "Risk Level is LOW under a clean ALLOW; standard capital is authorized.",
+      "execution_status": "PLANNED",
+      "execution_intent": "PREPARE",
+      "evidence_opportunity_state": "HIGH_EDGE",
+      "evidence_risk_state": "NORMAL",
+      "stability_reasoning_summary": "transition_rate=0.150 at or below 0.25",
+      "stability_transition_count": 6,
+      "stability_persistence_length": 14,
+      "stability_dimension_agreement": 0.9458,
+      "stability_confidence_variance": 0.0,
+      "stability_context_lifetime": 41,
+      "context_volatility": "STABLE",
+      "context_liquidity": "UNKNOWN",
+      "context_regime": "TRANSITION",
+      "context_conviction": "LOW",
+      "context_stability_dimension": "CHANGING",
+      "transition_events": [
+        {
+          "timestamp": "2026-06-01T15:30:00",
+          "memory_type": "REGIME_TRANSITION"
+        },
+        {
+          "timestamp": "2026-06-01T15:30:00",
+          "memory_type": "REGIME_TRANSITION"
+        },
+        {
+          "timestamp": "2026-06-02T15:30:00",
+          "memory_type": "REGIME_TRANSITION"
+        },
+        {
+          "timestamp": "2026-06-03T15:30:00",
+          "memory_type": "REGIME_TRANSITION"
+        },
+        {
+          "timestamp": "2026-06-04T15:30:00",
+          "memory_type": "REGIME_TRANSITION"
+        },
+        {
+          "timestamp": "2026-06-09T15:30:00",
+          "memory_type": "REGIME_TRANSITION"
+        },
+        {
+          "timestamp": "2026-06-10T15:30:00",
+          "memory_type": "REGIME_TRANSITION"
+        },
+        {
+          "timestamp": "2026-06-10T15:30:00",
+          "memory_type": "REGIME_TRANSITION"
+        },
+        {
+          "timestamp": "2026-06-11T15:30:00",
+          "memory_type": "REGIME_TRANSITION"
+        },
+        {
+          "timestamp": "2026-06-12T15:30:00",
+          "memory_type": "REGIME_TRANSITION"
+        },
+        {
+          "timestamp": "2026-06-12T15:30:00",
+          "memory_type": "REGIME_TRANSITION"
+        },
+        {
+          "timestamp": "2026-06-15T15:30:00",
+          "memory_type": "REGIME_TRANSITION"
+        },
+        {
+          "timestamp": "2026-06-15T15:30:00",
+          "memory_type": "REGIME_TRANSITION"
+        },
+        {
+          "timestamp": "2026-06-16T15:30:00",
+          "memory_type": "REGIME_TRANSITION"
+        },
+        {
+          "timestamp": "2026-06-16T15:30:00",
+          "memory_type": "REGIME_TRANSITION"
+        },
+        {
+          "timestamp": "2026-06-17T15:30:00",
+          "memory_type": "REGIME_TRANSITION"
+        },
+        {
+          "timestamp": "2026-06-17T15:30:00",
+          "memory_type": "REGIME_TRANSITION"
+        },
+        {
+          "timestamp": "2026-06-18T15:30:00",
+          "memory_type": "REGIME_TRANSITION"
+        },
+        {
+          "timestamp": "2026-06-19T15:30:00",
+          "memory_type": "REGIME_TRANSITION"
+        },
+        {
+          "timestamp": "2026-06-25T15:30:00",
+          "memory_type": "REGIME_TRANSITION"
+        },
+        {
+          "timestamp": "2026-06-29T15:30:00",
+          "memory_type": "REGIME_TRANSITION"
+        },
+        {
+          "timestamp": "2026-06-29T15:30:00",
+          "memory_type": "REGIME_TRANSITION"
+        },
+        {
+          "timestamp": "2026-06-30T15:30:00",
+          "memory_type": "REGIME_TRANSITION"
+        },
+        {
+          "timestamp": "2026-07-01T15:30:00",
+          "memory_type": "REGIME_TRANSITION"
+        },
+        {
+          "timestamp": "2026-07-01T15:30:00",
+          "memory_type": "REGIME_TRANSITION"
+        },
+        {
+          "timestamp": "2026-07-02T15:30:00",
+          "memory_type": "REGIME_TRANSITION"
+        },
+        {
+          "timestamp": "2026-07-02T15:30:00",
+          "memory_type": "REGIME_TRANSITION"
+        },
+        {
+          "timestamp": "2026-07-03T15:30:00",
+          "memory_type": "REGIME_TRANSITION"
+        },
+        {
+          "timestamp": "2026-07-03T15:30:00",
+          "memory_type": "REGIME_TRANSITION"
+        }
+      ]
+    },
+    {
+      "id": "NIFTY-2026-07-06",
+      "outcome": "COMPLETED",
+      "strategy": "DIRECTIONAL_PUT_SPREAD",
+      "market_context": "TRANSITION",
+      "market_opinion": "BULLISH",
+      "context_stability": "MOSTLY_STABLE",
+      "calibration": "CALIBRATED",
+      "governance": "APPROVED",
+      "lifecycle": "UNKNOWN",
+      "contract": "UNKNOWN",
+      "market_character": "CLEAR",
+      "market_phase": "ESTABLISHED",
+      "confidence": "HIGH",
+      "selection_status": "SELECTED",
+      "selection_confidence": "HIGH",
+      "selection_reason": "Market state REVERSAL matches required states.; Market character CLEAR meets minimum CLEAR.; Confidence HIGH meets required HIGH.",
+      "risk_status": "APPROVED",
+      "risk_level": "LOW",
+      "risk_approval": "ALLOW",
+      "risk_blocking_reason": null,
+      "capital_intent": "STANDARD",
+      "capital_allocation_status": "APPROVED",
+      "capital_allocation_reason": "Risk Level is LOW under a clean ALLOW; standard capital is authorized.",
+      "execution_status": "PLANNED",
+      "execution_intent": "PREPARE",
+      "evidence_opportunity_state": "HIGH_EDGE",
+      "evidence_risk_state": "NORMAL",
+      "stability_reasoning_summary": "transition_rate=0.143 at or below 0.25",
+      "stability_transition_count": 6,
+      "stability_persistence_length": 14,
+      "stability_dimension_agreement": 0.9484,
+      "stability_confidence_variance": 0.0,
+      "stability_context_lifetime": 43,
+      "context_volatility": "STABLE",
+      "context_liquidity": "UNKNOWN",
+      "context_regime": "TRANSITION",
+      "context_conviction": "LOW",
+      "context_stability_dimension": "CHANGING",
+      "transition_events": [
+        {
+          "timestamp": "2026-06-01T15:30:00",
+          "memory_type": "REGIME_TRANSITION"
+        },
+        {
+          "timestamp": "2026-06-01T15:30:00",
+          "memory_type": "REGIME_TRANSITION"
+        },
+        {
+          "timestamp": "2026-06-02T15:30:00",
+          "memory_type": "REGIME_TRANSITION"
+        },
+        {
+          "timestamp": "2026-06-03T15:30:00",
+          "memory_type": "REGIME_TRANSITION"
+        },
+        {
+          "timestamp": "2026-06-04T15:30:00",
+          "memory_type": "REGIME_TRANSITION"
+        },
+        {
+          "timestamp": "2026-06-09T15:30:00",
+          "memory_type": "REGIME_TRANSITION"
+        },
+        {
+          "timestamp": "2026-06-10T15:30:00",
+          "memory_type": "REGIME_TRANSITION"
+        },
+        {
+          "timestamp": "2026-06-10T15:30:00",
+          "memory_type": "REGIME_TRANSITION"
+        },
+        {
+          "timestamp": "2026-06-11T15:30:00",
+          "memory_type": "REGIME_TRANSITION"
+        },
+        {
+          "timestamp": "2026-06-12T15:30:00",
+          "memory_type": "REGIME_TRANSITION"
+        },
+        {
+          "timestamp": "2026-06-12T15:30:00",
+          "memory_type": "REGIME_TRANSITION"
+        },
+        {
+          "timestamp": "2026-06-15T15:30:00",
+          "memory_type": "REGIME_TRANSITION"
+        },
+        {
+          "timestamp": "2026-06-15T15:30:00",
+          "memory_type": "REGIME_TRANSITION"
+        },
+        {
+          "timestamp": "2026-06-16T15:30:00",
+          "memory_type": "REGIME_TRANSITION"
+        },
+        {
+          "timestamp": "2026-06-16T15:30:00",
+          "memory_type": "REGIME_TRANSITION"
+        },
+        {
+          "timestamp": "2026-06-17T15:30:00",
+          "memory_type": "REGIME_TRANSITION"
+        },
+        {
+          "timestamp": "2026-06-17T15:30:00",
+          "memory_type": "REGIME_TRANSITION"
+        },
+        {
+          "timestamp": "2026-06-18T15:30:00",
+          "memory_type": "REGIME_TRANSITION"
+        },
+        {
+          "timestamp": "2026-06-19T15:30:00",
+          "memory_type": "REGIME_TRANSITION"
+        },
+        {
+          "timestamp": "2026-06-25T15:30:00",
+          "memory_type": "REGIME_TRANSITION"
+        },
+        {
+          "timestamp": "2026-06-29T15:30:00",
+          "memory_type": "REGIME_TRANSITION"
+        },
+        {
+          "timestamp": "2026-06-29T15:30:00",
+          "memory_type": "REGIME_TRANSITION"
+        },
+        {
+          "timestamp": "2026-06-30T15:30:00",
+          "memory_type": "REGIME_TRANSITION"
+        },
+        {
+          "timestamp": "2026-07-01T15:30:00",
+          "memory_type": "REGIME_TRANSITION"
+        },
+        {
+          "timestamp": "2026-07-01T15:30:00",
+          "memory_type": "REGIME_TRANSITION"
+        },
+        {
+          "timestamp": "2026-07-02T15:30:00",
+          "memory_type": "REGIME_TRANSITION"
+        },
+        {
+          "timestamp": "2026-07-02T15:30:00",
+          "memory_type": "REGIME_TRANSITION"
+        },
+        {
+          "timestamp": "2026-07-03T15:30:00",
+          "memory_type": "REGIME_TRANSITION"
+        },
+        {
+          "timestamp": "2026-07-03T15:30:00",
+          "memory_type": "REGIME_TRANSITION"
+        },
+        {
+          "timestamp": "2026-07-06T15:30:00",
+          "memory_type": "REGIME_TRANSITION"
+        },
+        {
+          "timestamp": "2026-07-06T15:30:00",
+          "memory_type": "REGIME_TRANSITION"
+        }
+      ]
+    },
+    {
+      "id": "NIFTY-2026-07-07",
+      "outcome": "COMPLETED",
+      "strategy": "DIRECTIONAL_PUT_SPREAD",
+      "market_context": "TRANSITION",
+      "market_opinion": "BULLISH",
+      "context_stability": "MOSTLY_STABLE",
+      "calibration": "CALIBRATED",
+      "governance": "APPROVED",
+      "lifecycle": "UNKNOWN",
+      "contract": "UNKNOWN",
+      "market_character": "CLEAR",
+      "market_phase": "ESTABLISHED",
+      "confidence": "HIGH",
+      "selection_status": "SELECTED",
+      "selection_confidence": "HIGH",
+      "selection_reason": "Market state REVERSAL matches required states.; Market character CLEAR meets minimum CLEAR.; Confidence HIGH meets required HIGH.",
+      "risk_status": "APPROVED",
+      "risk_level": "LOW",
+      "risk_approval": "ALLOW",
+      "risk_blocking_reason": null,
+      "capital_intent": "STANDARD",
+      "capital_allocation_status": "APPROVED",
+      "capital_allocation_reason": "Risk Level is LOW under a clean ALLOW; standard capital is authorized.",
+      "execution_status": "PLANNED",
+      "execution_intent": "PREPARE",
+      "evidence_opportunity_state": "HIGH_EDGE",
+      "evidence_risk_state": "NORMAL",
+      "stability_reasoning_summary": "transition_rate=0.136 at or below 0.25",
+      "stability_transition_count": 6,
+      "stability_persistence_length": 14,
+      "stability_dimension_agreement": 0.9508,
+      "stability_confidence_variance": 0.0,
+      "stability_context_lifetime": 45,
+      "context_volatility": "STABLE",
+      "context_liquidity": "UNKNOWN",
+      "context_regime": "TRANSITION",
+      "context_conviction": "LOW",
+      "context_stability_dimension": "CHANGING",
+      "transition_events": [
+        {
+          "timestamp": "2026-06-01T15:30:00",
+          "memory_type": "REGIME_TRANSITION"
+        },
+        {
+          "timestamp": "2026-06-01T15:30:00",
+          "memory_type": "REGIME_TRANSITION"
+        },
+        {
+          "timestamp": "2026-06-02T15:30:00",
+          "memory_type": "REGIME_TRANSITION"
+        },
+        {
+          "timestamp": "2026-06-03T15:30:00",
+          "memory_type": "REGIME_TRANSITION"
+        },
+        {
+          "timestamp": "2026-06-04T15:30:00",
+          "memory_type": "REGIME_TRANSITION"
+        },
+        {
+          "timestamp": "2026-06-09T15:30:00",
+          "memory_type": "REGIME_TRANSITION"
+        },
+        {
+          "timestamp": "2026-06-10T15:30:00",
+          "memory_type": "REGIME_TRANSITION"
+        },
+        {
+          "timestamp": "2026-06-10T15:30:00",
+          "memory_type": "REGIME_TRANSITION"
+        },
+        {
+          "timestamp": "2026-06-11T15:30:00",
+          "memory_type": "REGIME_TRANSITION"
+        },
+        {
+          "timestamp": "2026-06-12T15:30:00",
+          "memory_type": "REGIME_TRANSITION"
+        },
+        {
+          "timestamp": "2026-06-12T15:30:00",
+          "memory_type": "REGIME_TRANSITION"
+        },
+        {
+          "timestamp": "2026-06-15T15:30:00",
+          "memory_type": "REGIME_TRANSITION"
+        },
+        {
+          "timestamp": "2026-06-15T15:30:00",
+          "memory_type": "REGIME_TRANSITION"
+        },
+        {
+          "timestamp": "2026-06-16T15:30:00",
+          "memory_type": "REGIME_TRANSITION"
+        },
+        {
+          "timestamp": "2026-06-16T15:30:00",
+          "memory_type": "REGIME_TRANSITION"
+        },
+        {
+          "timestamp": "2026-06-17T15:30:00",
+          "memory_type": "REGIME_TRANSITION"
+        },
+        {
+          "timestamp": "2026-06-17T15:30:00",
+          "memory_type": "REGIME_TRANSITION"
+        },
+        {
+          "timestamp": "2026-06-18T15:30:00",
+          "memory_type": "REGIME_TRANSITION"
+        },
+        {
+          "timestamp": "2026-06-19T15:30:00",
+          "memory_type": "REGIME_TRANSITION"
+        },
+        {
+          "timestamp": "2026-06-25T15:30:00",
+          "memory_type": "REGIME_TRANSITION"
+        },
+        {
+          "timestamp": "2026-06-29T15:30:00",
+          "memory_type": "REGIME_TRANSITION"
+        },
+        {
+          "timestamp": "2026-06-29T15:30:00",
+          "memory_type": "REGIME_TRANSITION"
+        },
+        {
+          "timestamp": "2026-06-30T15:30:00",
+          "memory_type": "REGIME_TRANSITION"
+        },
+        {
+          "timestamp": "2026-07-01T15:30:00",
+          "memory_type": "REGIME_TRANSITION"
+        },
+        {
+          "timestamp": "2026-07-01T15:30:00",
+          "memory_type": "REGIME_TRANSITION"
+        },
+        {
+          "timestamp": "2026-07-02T15:30:00",
+          "memory_type": "REGIME_TRANSITION"
+        },
+        {
+          "timestamp": "2026-07-02T15:30:00",
+          "memory_type": "REGIME_TRANSITION"
+        },
+        {
+          "timestamp": "2026-07-03T15:30:00",
+          "memory_type": "REGIME_TRANSITION"
+        },
+        {
+          "timestamp": "2026-07-03T15:30:00",
+          "memory_type": "REGIME_TRANSITION"
+        },
+        {
+          "timestamp": "2026-07-06T15:30:00",
+          "memory_type": "REGIME_TRANSITION"
+        },
+        {
+          "timestamp": "2026-07-06T15:30:00",
+          "memory_type": "REGIME_TRANSITION"
+        },
+        {
+          "timestamp": "2026-07-07T15:30:00",
+          "memory_type": "REGIME_TRANSITION"
+        },
+        {
+          "timestamp": "2026-07-07T15:30:00",
+          "memory_type": "REGIME_TRANSITION"
+        }
+      ]
+    },
+    {
+      "id": "NIFTY-2026-07-08",
+      "outcome": "COMPLETED",
+      "strategy": "DIRECTIONAL_PUT_SPREAD",
+      "market_context": "TRANSITION",
+      "market_opinion": "INSUFFICIENT_EVIDENCE",
+      "context_stability": "MOSTLY_STABLE",
+      "calibration": "CALIBRATED",
+      "governance": "APPROVED",
+      "lifecycle": "UNKNOWN",
+      "contract": "UNKNOWN",
+      "market_character": "CLEAR",
+      "market_phase": "ESTABLISHED",
+      "confidence": "HIGH",
+      "selection_status": "SELECTED",
+      "selection_confidence": "HIGH",
+      "selection_reason": "Market state REVERSAL matches required states.; Market character CLEAR meets minimum CLEAR.; Confidence HIGH meets required HIGH.",
+      "risk_status": "APPROVED",
+      "risk_level": "LOW",
+      "risk_approval": "ALLOW",
+      "risk_blocking_reason": null,
+      "capital_intent": "STANDARD",
+      "capital_allocation_status": "APPROVED",
+      "capital_allocation_reason": "Risk Level is LOW under a clean ALLOW; standard capital is authorized.",
+      "execution_status": "PLANNED",
+      "execution_intent": "PREPARE",
+      "evidence_opportunity_state": "HIGH_EDGE",
+      "evidence_risk_state": "NORMAL",
+      "stability_reasoning_summary": "transition_rate=0.174 at or below 0.25",
+      "stability_transition_count": 8,
+      "stability_persistence_length": 14,
+      "stability_dimension_agreement": 0.9384,
+      "stability_confidence_variance": 0.0,
+      "stability_context_lifetime": 47,
+      "context_volatility": "STABLE",
+      "context_liquidity": "UNKNOWN",
+      "context_regime": "TRANSITION",
+      "context_conviction": "LOW",
+      "context_stability_dimension": "CHANGING",
+      "transition_events": [
+        {
+          "timestamp": "2026-06-01T15:30:00",
+          "memory_type": "REGIME_TRANSITION"
+        },
+        {
+          "timestamp": "2026-06-01T15:30:00",
+          "memory_type": "REGIME_TRANSITION"
+        },
+        {
+          "timestamp": "2026-06-02T15:30:00",
+          "memory_type": "REGIME_TRANSITION"
+        },
+        {
+          "timestamp": "2026-06-03T15:30:00",
+          "memory_type": "REGIME_TRANSITION"
+        },
+        {
+          "timestamp": "2026-06-04T15:30:00",
+          "memory_type": "REGIME_TRANSITION"
+        },
+        {
+          "timestamp": "2026-06-09T15:30:00",
+          "memory_type": "REGIME_TRANSITION"
+        },
+        {
+          "timestamp": "2026-06-10T15:30:00",
+          "memory_type": "REGIME_TRANSITION"
+        },
+        {
+          "timestamp": "2026-06-10T15:30:00",
+          "memory_type": "REGIME_TRANSITION"
+        },
+        {
+          "timestamp": "2026-06-11T15:30:00",
+          "memory_type": "REGIME_TRANSITION"
+        },
+        {
+          "timestamp": "2026-06-12T15:30:00",
+          "memory_type": "REGIME_TRANSITION"
+        },
+        {
+          "timestamp": "2026-06-12T15:30:00",
+          "memory_type": "REGIME_TRANSITION"
+        },
+        {
+          "timestamp": "2026-06-15T15:30:00",
+          "memory_type": "REGIME_TRANSITION"
+        },
+        {
+          "timestamp": "2026-06-15T15:30:00",
+          "memory_type": "REGIME_TRANSITION"
+        },
+        {
+          "timestamp": "2026-06-16T15:30:00",
+          "memory_type": "REGIME_TRANSITION"
+        },
+        {
+          "timestamp": "2026-06-16T15:30:00",
+          "memory_type": "REGIME_TRANSITION"
+        },
+        {
+          "timestamp": "2026-06-17T15:30:00",
+          "memory_type": "REGIME_TRANSITION"
+        },
+        {
+          "timestamp": "2026-06-17T15:30:00",
+          "memory_type": "REGIME_TRANSITION"
+        },
+        {
+          "timestamp": "2026-06-18T15:30:00",
+          "memory_type": "REGIME_TRANSITION"
+        },
+        {
+          "timestamp": "2026-06-19T15:30:00",
+          "memory_type": "REGIME_TRANSITION"
+        },
+        {
+          "timestamp": "2026-06-25T15:30:00",
+          "memory_type": "REGIME_TRANSITION"
+        },
+        {
+          "timestamp": "2026-06-29T15:30:00",
+          "memory_type": "REGIME_TRANSITION"
+        },
+        {
+          "timestamp": "2026-06-29T15:30:00",
+          "memory_type": "REGIME_TRANSITION"
+        },
+        {
+          "timestamp": "2026-06-30T15:30:00",
+          "memory_type": "REGIME_TRANSITION"
+        },
+        {
+          "timestamp": "2026-07-01T15:30:00",
+          "memory_type": "REGIME_TRANSITION"
+        },
+        {
+          "timestamp": "2026-07-01T15:30:00",
+          "memory_type": "REGIME_TRANSITION"
+        },
+        {
+          "timestamp": "2026-07-02T15:30:00",
+          "memory_type": "REGIME_TRANSITION"
+        },
+        {
+          "timestamp": "2026-07-02T15:30:00",
+          "memory_type": "REGIME_TRANSITION"
+        },
+        {
+          "timestamp": "2026-07-03T15:30:00",
+          "memory_type": "REGIME_TRANSITION"
+        },
+        {
+          "timestamp": "2026-07-03T15:30:00",
+          "memory_type": "REGIME_TRANSITION"
+        },
+        {
+          "timestamp": "2026-07-06T15:30:00",
+          "memory_type": "REGIME_TRANSITION"
+        },
+        {
+          "timestamp": "2026-07-06T15:30:00",
+          "memory_type": "REGIME_TRANSITION"
+        },
+        {
+          "timestamp": "2026-07-07T15:30:00",
+          "memory_type": "REGIME_TRANSITION"
+        },
+        {
+          "timestamp": "2026-07-07T15:30:00",
+          "memory_type": "REGIME_TRANSITION"
+        },
+        {
+          "timestamp": "2026-07-08T15:30:00",
+          "memory_type": "REGIME_TRANSITION"
+        }
+      ]
+    },
+    {
+      "id": "NIFTY-2026-07-09",
+      "outcome": "COMPLETED",
+      "strategy": "PREMIUM_VWAP_STRADDLE",
+      "market_context": "SIDEWAYS",
+      "market_opinion": "NEUTRAL",
+      "context_stability": "MOSTLY_STABLE",
+      "calibration": "CALIBRATED",
+      "governance": "APPROVED",
+      "lifecycle": "UNKNOWN",
+      "contract": "UNKNOWN",
+      "market_character": "CLEAR",
+      "market_phase": "ESTABLISHED",
+      "confidence": "HIGH",
+      "selection_status": "SELECTED",
+      "selection_confidence": "MODERATE",
+      "selection_reason": "Market state RANGE matches required states.; Market character CLEAR meets minimum CLEAR.; Confidence HIGH meets required HIGH.",
+      "risk_status": "APPROVED",
+      "risk_level": "LOW",
+      "risk_approval": "ALLOW",
+      "risk_blocking_reason": null,
+      "capital_intent": "STANDARD",
+      "capital_allocation_status": "APPROVED",
+      "capital_allocation_reason": "Risk Level is LOW under a clean ALLOW; standard capital is authorized.",
+      "execution_status": "PLANNED",
+      "execution_intent": "PREPARE",
+      "evidence_opportunity_state": "HIGH_EDGE",
+      "evidence_risk_state": "NORMAL",
+      "stability_reasoning_summary": "transition_rate=0.191 at or below 0.25",
+      "stability_transition_count": 9,
+      "stability_persistence_length": 14,
+      "stability_dimension_agreement": 0.9326,
+      "stability_confidence_variance": 0.0,
+      "stability_context_lifetime": 48,
+      "context_volatility": "STABLE",
+      "context_liquidity": "UNKNOWN",
+      "context_regime": "RANGE",
+      "context_conviction": "LOW",
+      "context_stability_dimension": "CHANGING",
+      "transition_events": [
+        {
+          "timestamp": "2026-06-01T15:30:00",
+          "memory_type": "REGIME_TRANSITION"
+        },
+        {
+          "timestamp": "2026-06-01T15:30:00",
+          "memory_type": "REGIME_TRANSITION"
+        },
+        {
+          "timestamp": "2026-06-02T15:30:00",
+          "memory_type": "REGIME_TRANSITION"
+        },
+        {
+          "timestamp": "2026-06-03T15:30:00",
+          "memory_type": "REGIME_TRANSITION"
+        },
+        {
+          "timestamp": "2026-06-04T15:30:00",
+          "memory_type": "REGIME_TRANSITION"
+        },
+        {
+          "timestamp": "2026-06-09T15:30:00",
+          "memory_type": "REGIME_TRANSITION"
+        },
+        {
+          "timestamp": "2026-06-10T15:30:00",
+          "memory_type": "REGIME_TRANSITION"
+        },
+        {
+          "timestamp": "2026-06-10T15:30:00",
+          "memory_type": "REGIME_TRANSITION"
+        },
+        {
+          "timestamp": "2026-06-11T15:30:00",
+          "memory_type": "REGIME_TRANSITION"
+        },
+        {
+          "timestamp": "2026-06-12T15:30:00",
+          "memory_type": "REGIME_TRANSITION"
+        },
+        {
+          "timestamp": "2026-06-12T15:30:00",
+          "memory_type": "REGIME_TRANSITION"
+        },
+        {
+          "timestamp": "2026-06-15T15:30:00",
+          "memory_type": "REGIME_TRANSITION"
+        },
+        {
+          "timestamp": "2026-06-15T15:30:00",
+          "memory_type": "REGIME_TRANSITION"
+        },
+        {
+          "timestamp": "2026-06-16T15:30:00",
+          "memory_type": "REGIME_TRANSITION"
+        },
+        {
+          "timestamp": "2026-06-16T15:30:00",
+          "memory_type": "REGIME_TRANSITION"
+        },
+        {
+          "timestamp": "2026-06-17T15:30:00",
+          "memory_type": "REGIME_TRANSITION"
+        },
+        {
+          "timestamp": "2026-06-17T15:30:00",
+          "memory_type": "REGIME_TRANSITION"
+        },
+        {
+          "timestamp": "2026-06-18T15:30:00",
+          "memory_type": "REGIME_TRANSITION"
+        },
+        {
+          "timestamp": "2026-06-19T15:30:00",
+          "memory_type": "REGIME_TRANSITION"
+        },
+        {
+          "timestamp": "2026-06-25T15:30:00",
+          "memory_type": "REGIME_TRANSITION"
+        },
+        {
+          "timestamp": "2026-06-29T15:30:00",
+          "memory_type": "REGIME_TRANSITION"
+        },
+        {
+          "timestamp": "2026-06-29T15:30:00",
+          "memory_type": "REGIME_TRANSITION"
+        },
+        {
+          "timestamp": "2026-06-30T15:30:00",
+          "memory_type": "REGIME_TRANSITION"
+        },
+        {
+          "timestamp": "2026-07-01T15:30:00",
+          "memory_type": "REGIME_TRANSITION"
+        },
+        {
+          "timestamp": "2026-07-01T15:30:00",
+          "memory_type": "REGIME_TRANSITION"
+        },
+        {
+          "timestamp": "2026-07-02T15:30:00",
+          "memory_type": "REGIME_TRANSITION"
+        },
+        {
+          "timestamp": "2026-07-02T15:30:00",
+          "memory_type": "REGIME_TRANSITION"
+        },
+        {
+          "timestamp": "2026-07-03T15:30:00",
+          "memory_type": "REGIME_TRANSITION"
+        },
+        {
+          "timestamp": "2026-07-03T15:30:00",
+          "memory_type": "REGIME_TRANSITION"
+        },
+        {
+          "timestamp": "2026-07-06T15:30:00",
+          "memory_type": "REGIME_TRANSITION"
+        },
+        {
+          "timestamp": "2026-07-06T15:30:00",
+          "memory_type": "REGIME_TRANSITION"
+        },
+        {
+          "timestamp": "2026-07-07T15:30:00",
+          "memory_type": "REGIME_TRANSITION"
+        },
+        {
+          "timestamp": "2026-07-07T15:30:00",
+          "memory_type": "REGIME_TRANSITION"
+        },
+        {
+          "timestamp": "2026-07-08T15:30:00",
+          "memory_type": "REGIME_TRANSITION"
+        }
+      ]
+    },
+    {
+      "id": "NIFTY-2026-07-10",
+      "outcome": "COMPLETED",
+      "strategy": "DIRECTIONAL_PUT_SPREAD",
+      "market_context": "TRANSITION",
+      "market_opinion": "BULLISH",
+      "context_stability": "MOSTLY_STABLE",
+      "calibration": "CALIBRATED",
+      "governance": "APPROVED",
+      "lifecycle": "UNKNOWN",
+      "contract": "UNKNOWN",
+      "market_character": "CLEAR",
+      "market_phase": "ESTABLISHED",
+      "confidence": "HIGH",
+      "selection_status": "SELECTED",
+      "selection_confidence": "HIGH",
+      "selection_reason": "Market state REVERSAL matches required states.; Market character CLEAR meets minimum CLEAR.; Confidence HIGH meets required HIGH.",
+      "risk_status": "APPROVED",
+      "risk_level": "LOW",
+      "risk_approval": "ALLOW",
+      "risk_blocking_reason": null,
+      "capital_intent": "STANDARD",
+      "capital_allocation_status": "APPROVED",
+      "capital_allocation_reason": "Risk Level is LOW under a clean ALLOW; standard capital is authorized.",
+      "execution_status": "PLANNED",
+      "execution_intent": "PREPARE",
+      "evidence_opportunity_state": "HIGH_EDGE",
+      "evidence_risk_state": "NORMAL",
+      "stability_reasoning_summary": "transition_rate=0.208 at or below 0.25",
+      "stability_transition_count": 10,
+      "stability_persistence_length": 14,
+      "stability_dimension_agreement": 0.9271,
+      "stability_confidence_variance": 0.0,
+      "stability_context_lifetime": 49,
+      "context_volatility": "STABLE",
+      "context_liquidity": "UNKNOWN",
+      "context_regime": "TRANSITION",
+      "context_conviction": "LOW",
+      "context_stability_dimension": "CHANGING",
+      "transition_events": [
+        {
+          "timestamp": "2026-06-01T15:30:00",
+          "memory_type": "REGIME_TRANSITION"
+        },
+        {
+          "timestamp": "2026-06-01T15:30:00",
+          "memory_type": "REGIME_TRANSITION"
+        },
+        {
+          "timestamp": "2026-06-02T15:30:00",
+          "memory_type": "REGIME_TRANSITION"
+        },
+        {
+          "timestamp": "2026-06-03T15:30:00",
+          "memory_type": "REGIME_TRANSITION"
+        },
+        {
+          "timestamp": "2026-06-04T15:30:00",
+          "memory_type": "REGIME_TRANSITION"
+        },
+        {
+          "timestamp": "2026-06-09T15:30:00",
+          "memory_type": "REGIME_TRANSITION"
+        },
+        {
+          "timestamp": "2026-06-10T15:30:00",
+          "memory_type": "REGIME_TRANSITION"
+        },
+        {
+          "timestamp": "2026-06-10T15:30:00",
+          "memory_type": "REGIME_TRANSITION"
+        },
+        {
+          "timestamp": "2026-06-11T15:30:00",
+          "memory_type": "REGIME_TRANSITION"
+        },
+        {
+          "timestamp": "2026-06-12T15:30:00",
+          "memory_type": "REGIME_TRANSITION"
+        },
+        {
+          "timestamp": "2026-06-12T15:30:00",
+          "memory_type": "REGIME_TRANSITION"
+        },
+        {
+          "timestamp": "2026-06-15T15:30:00",
+          "memory_type": "REGIME_TRANSITION"
+        },
+        {
+          "timestamp": "2026-06-15T15:30:00",
+          "memory_type": "REGIME_TRANSITION"
+        },
+        {
+          "timestamp": "2026-06-16T15:30:00",
+          "memory_type": "REGIME_TRANSITION"
+        },
+        {
+          "timestamp": "2026-06-16T15:30:00",
+          "memory_type": "REGIME_TRANSITION"
+        },
+        {
+          "timestamp": "2026-06-17T15:30:00",
+          "memory_type": "REGIME_TRANSITION"
+        },
+        {
+          "timestamp": "2026-06-17T15:30:00",
+          "memory_type": "REGIME_TRANSITION"
+        },
+        {
+          "timestamp": "2026-06-18T15:30:00",
+          "memory_type": "REGIME_TRANSITION"
+        },
+        {
+          "timestamp": "2026-06-19T15:30:00",
+          "memory_type": "REGIME_TRANSITION"
+        },
+        {
+          "timestamp": "2026-06-25T15:30:00",
+          "memory_type": "REGIME_TRANSITION"
+        },
+        {
+          "timestamp": "2026-06-29T15:30:00",
+          "memory_type": "REGIME_TRANSITION"
+        },
+        {
+          "timestamp": "2026-06-29T15:30:00",
+          "memory_type": "REGIME_TRANSITION"
+        },
+        {
+          "timestamp": "2026-06-30T15:30:00",
+          "memory_type": "REGIME_TRANSITION"
+        },
+        {
+          "timestamp": "2026-07-01T15:30:00",
+          "memory_type": "REGIME_TRANSITION"
+        },
+        {
+          "timestamp": "2026-07-01T15:30:00",
+          "memory_type": "REGIME_TRANSITION"
+        },
+        {
+          "timestamp": "2026-07-02T15:30:00",
+          "memory_type": "REGIME_TRANSITION"
+        },
+        {
+          "timestamp": "2026-07-02T15:30:00",
+          "memory_type": "REGIME_TRANSITION"
+        },
+        {
+          "timestamp": "2026-07-03T15:30:00",
+          "memory_type": "REGIME_TRANSITION"
+        },
+        {
+          "timestamp": "2026-07-03T15:30:00",
+          "memory_type": "REGIME_TRANSITION"
+        },
+        {
+          "timestamp": "2026-07-06T15:30:00",
+          "memory_type": "REGIME_TRANSITION"
+        },
+        {
+          "timestamp": "2026-07-06T15:30:00",
+          "memory_type": "REGIME_TRANSITION"
+        },
+        {
+          "timestamp": "2026-07-07T15:30:00",
+          "memory_type": "REGIME_TRANSITION"
+        },
+        {
+          "timestamp": "2026-07-07T15:30:00",
+          "memory_type": "REGIME_TRANSITION"
+        },
+        {
+          "timestamp": "2026-07-08T15:30:00",
+          "memory_type": "REGIME_TRANSITION"
+        },
+        {
+          "timestamp": "2026-07-10T15:30:00",
+          "memory_type": "REGIME_TRANSITION"
+        }
+      ]
+    },
+    {
+      "id": "NIFTY-2026-07-13",
+      "outcome": "COMPLETED",
+      "strategy": "DIRECTIONAL_PUT_SPREAD",
+      "market_context": "TRANSITION",
+      "market_opinion": "BULLISH",
+      "context_stability": "MOSTLY_STABLE",
+      "calibration": "CALIBRATED",
+      "governance": "APPROVED",
+      "lifecycle": "UNKNOWN",
+      "contract": "UNKNOWN",
+      "market_character": "CLEAR",
+      "market_phase": "ESTABLISHED",
+      "confidence": "HIGH",
+      "selection_status": "SELECTED",
+      "selection_confidence": "HIGH",
+      "selection_reason": "Market state REVERSAL matches required states.; Market character CLEAR meets minimum CLEAR.; Confidence HIGH meets required HIGH.",
+      "risk_status": "APPROVED",
+      "risk_level": "LOW",
+      "risk_approval": "ALLOW",
+      "risk_blocking_reason": null,
+      "capital_intent": "STANDARD",
+      "capital_allocation_status": "APPROVED",
+      "capital_allocation_reason": "Risk Level is LOW under a clean ALLOW; standard capital is authorized.",
+      "execution_status": "PLANNED",
+      "execution_intent": "PREPARE",
+      "evidence_opportunity_state": "HIGH_EDGE",
+      "evidence_risk_state": "NORMAL",
+      "stability_reasoning_summary": "transition_rate=0.240 at or below 0.25",
+      "stability_transition_count": 12,
+      "stability_persistence_length": 14,
+      "stability_dimension_agreement": 0.9167,
+      "stability_confidence_variance": 0.0,
+      "stability_context_lifetime": 51,
+      "context_volatility": "STABLE",
+      "context_liquidity": "UNKNOWN",
+      "context_regime": "TRANSITION",
+      "context_conviction": "LOW",
+      "context_stability_dimension": "CHANGING",
+      "transition_events": [
+        {
+          "timestamp": "2026-06-01T15:30:00",
+          "memory_type": "REGIME_TRANSITION"
+        },
+        {
+          "timestamp": "2026-06-01T15:30:00",
+          "memory_type": "REGIME_TRANSITION"
+        },
+        {
+          "timestamp": "2026-06-02T15:30:00",
+          "memory_type": "REGIME_TRANSITION"
+        },
+        {
+          "timestamp": "2026-06-03T15:30:00",
+          "memory_type": "REGIME_TRANSITION"
+        },
+        {
+          "timestamp": "2026-06-04T15:30:00",
+          "memory_type": "REGIME_TRANSITION"
+        },
+        {
+          "timestamp": "2026-06-09T15:30:00",
+          "memory_type": "REGIME_TRANSITION"
+        },
+        {
+          "timestamp": "2026-06-10T15:30:00",
+          "memory_type": "REGIME_TRANSITION"
+        },
+        {
+          "timestamp": "2026-06-10T15:30:00",
+          "memory_type": "REGIME_TRANSITION"
+        },
+        {
+          "timestamp": "2026-06-11T15:30:00",
+          "memory_type": "REGIME_TRANSITION"
+        },
+        {
+          "timestamp": "2026-06-12T15:30:00",
+          "memory_type": "REGIME_TRANSITION"
+        },
+        {
+          "timestamp": "2026-06-12T15:30:00",
+          "memory_type": "REGIME_TRANSITION"
+        },
+        {
+          "timestamp": "2026-06-15T15:30:00",
+          "memory_type": "REGIME_TRANSITION"
+        },
+        {
+          "timestamp": "2026-06-15T15:30:00",
+          "memory_type": "REGIME_TRANSITION"
+        },
+        {
+          "timestamp": "2026-06-16T15:30:00",
+          "memory_type": "REGIME_TRANSITION"
+        },
+        {
+          "timestamp": "2026-06-16T15:30:00",
+          "memory_type": "REGIME_TRANSITION"
+        },
+        {
+          "timestamp": "2026-06-17T15:30:00",
+          "memory_type": "REGIME_TRANSITION"
+        },
+        {
+          "timestamp": "2026-06-17T15:30:00",
+          "memory_type": "REGIME_TRANSITION"
+        },
+        {
+          "timestamp": "2026-06-18T15:30:00",
+          "memory_type": "REGIME_TRANSITION"
+        },
+        {
+          "timestamp": "2026-06-19T15:30:00",
+          "memory_type": "REGIME_TRANSITION"
+        },
+        {
+          "timestamp": "2026-06-25T15:30:00",
+          "memory_type": "REGIME_TRANSITION"
+        },
+        {
+          "timestamp": "2026-06-29T15:30:00",
+          "memory_type": "REGIME_TRANSITION"
+        },
+        {
+          "timestamp": "2026-06-29T15:30:00",
+          "memory_type": "REGIME_TRANSITION"
+        },
+        {
+          "timestamp": "2026-06-30T15:30:00",
+          "memory_type": "REGIME_TRANSITION"
+        },
+        {
+          "timestamp": "2026-07-01T15:30:00",
+          "memory_type": "REGIME_TRANSITION"
+        },
+        {
+          "timestamp": "2026-07-01T15:30:00",
+          "memory_type": "REGIME_TRANSITION"
+        },
+        {
+          "timestamp": "2026-07-02T15:30:00",
+          "memory_type": "REGIME_TRANSITION"
+        },
+        {
+          "timestamp": "2026-07-02T15:30:00",
+          "memory_type": "REGIME_TRANSITION"
+        },
+        {
+          "timestamp": "2026-07-03T15:30:00",
+          "memory_type": "REGIME_TRANSITION"
+        },
+        {
+          "timestamp": "2026-07-03T15:30:00",
+          "memory_type": "REGIME_TRANSITION"
+        },
+        {
+          "timestamp": "2026-07-06T15:30:00",
+          "memory_type": "REGIME_TRANSITION"
+        },
+        {
+          "timestamp": "2026-07-06T15:30:00",
+          "memory_type": "REGIME_TRANSITION"
+        },
+        {
+          "timestamp": "2026-07-07T15:30:00",
+          "memory_type": "REGIME_TRANSITION"
+        },
+        {
+          "timestamp": "2026-07-07T15:30:00",
+          "memory_type": "REGIME_TRANSITION"
+        },
+        {
+          "timestamp": "2026-07-08T15:30:00",
+          "memory_type": "REGIME_TRANSITION"
+        },
+        {
+          "timestamp": "2026-07-10T15:30:00",
+          "memory_type": "REGIME_TRANSITION"
+        },
+        {
+          "timestamp": "2026-07-13T15:30:00",
+          "memory_type": "REGIME_TRANSITION"
+        }
+      ]
+    },
+    {
+      "id": "NIFTY-2026-07-14",
+      "outcome": "COMPLETED",
+      "strategy": "DIRECTIONAL_PUT_SPREAD",
+      "market_context": "TRANSITION",
+      "market_opinion": "BULLISH",
+      "context_stability": "MOSTLY_STABLE",
+      "calibration": "CALIBRATED",
+      "governance": "APPROVED",
+      "lifecycle": "UNKNOWN",
+      "contract": "UNKNOWN",
+      "market_character": "CLEAR",
+      "market_phase": "ESTABLISHED",
+      "confidence": "HIGH",
+      "selection_status": "SELECTED",
+      "selection_confidence": "HIGH",
+      "selection_reason": "Market state REVERSAL matches required states.; Market character CLEAR meets minimum CLEAR.; Confidence HIGH meets required HIGH.",
+      "risk_status": "APPROVED",
+      "risk_level": "LOW",
+      "risk_approval": "ALLOW",
+      "risk_blocking_reason": null,
+      "capital_intent": "STANDARD",
+      "capital_allocation_status": "APPROVED",
+      "capital_allocation_reason": "Risk Level is LOW under a clean ALLOW; standard capital is authorized.",
+      "execution_status": "PLANNED",
+      "execution_intent": "PREPARE",
+      "evidence_opportunity_state": "HIGH_EDGE",
+      "evidence_risk_state": "NORMAL",
+      "stability_reasoning_summary": "transition_rate=0.235 at or below 0.25",
+      "stability_transition_count": 12,
+      "stability_persistence_length": 14,
+      "stability_dimension_agreement": 0.9183,
+      "stability_confidence_variance": 0.0,
+      "stability_context_lifetime": 52,
+      "context_volatility": "STABLE",
+      "context_liquidity": "UNKNOWN",
+      "context_regime": "TRANSITION",
+      "context_conviction": "LOW",
+      "context_stability_dimension": "CHANGING",
+      "transition_events": [
+        {
+          "timestamp": "2026-06-01T15:30:00",
+          "memory_type": "REGIME_TRANSITION"
+        },
+        {
+          "timestamp": "2026-06-01T15:30:00",
+          "memory_type": "REGIME_TRANSITION"
+        },
+        {
+          "timestamp": "2026-06-02T15:30:00",
+          "memory_type": "REGIME_TRANSITION"
+        },
+        {
+          "timestamp": "2026-06-03T15:30:00",
+          "memory_type": "REGIME_TRANSITION"
+        },
+        {
+          "timestamp": "2026-06-04T15:30:00",
+          "memory_type": "REGIME_TRANSITION"
+        },
+        {
+          "timestamp": "2026-06-09T15:30:00",
+          "memory_type": "REGIME_TRANSITION"
+        },
+        {
+          "timestamp": "2026-06-10T15:30:00",
+          "memory_type": "REGIME_TRANSITION"
+        },
+        {
+          "timestamp": "2026-06-10T15:30:00",
+          "memory_type": "REGIME_TRANSITION"
+        },
+        {
+          "timestamp": "2026-06-11T15:30:00",
+          "memory_type": "REGIME_TRANSITION"
+        },
+        {
+          "timestamp": "2026-06-12T15:30:00",
+          "memory_type": "REGIME_TRANSITION"
+        },
+        {
+          "timestamp": "2026-06-12T15:30:00",
+          "memory_type": "REGIME_TRANSITION"
+        },
+        {
+          "timestamp": "2026-06-15T15:30:00",
+          "memory_type": "REGIME_TRANSITION"
+        },
+        {
+          "timestamp": "2026-06-15T15:30:00",
+          "memory_type": "REGIME_TRANSITION"
+        },
+        {
+          "timestamp": "2026-06-16T15:30:00",
+          "memory_type": "REGIME_TRANSITION"
+        },
+        {
+          "timestamp": "2026-06-16T15:30:00",
+          "memory_type": "REGIME_TRANSITION"
+        },
+        {
+          "timestamp": "2026-06-17T15:30:00",
+          "memory_type": "REGIME_TRANSITION"
+        },
+        {
+          "timestamp": "2026-06-17T15:30:00",
+          "memory_type": "REGIME_TRANSITION"
+        },
+        {
+          "timestamp": "2026-06-18T15:30:00",
+          "memory_type": "REGIME_TRANSITION"
+        },
+        {
+          "timestamp": "2026-06-19T15:30:00",
+          "memory_type": "REGIME_TRANSITION"
+        },
+        {
+          "timestamp": "2026-06-25T15:30:00",
+          "memory_type": "REGIME_TRANSITION"
+        },
+        {
+          "timestamp": "2026-06-29T15:30:00",
+          "memory_type": "REGIME_TRANSITION"
+        },
+        {
+          "timestamp": "2026-06-29T15:30:00",
+          "memory_type": "REGIME_TRANSITION"
+        },
+        {
+          "timestamp": "2026-06-30T15:30:00",
+          "memory_type": "REGIME_TRANSITION"
+        },
+        {
+          "timestamp": "2026-07-01T15:30:00",
+          "memory_type": "REGIME_TRANSITION"
+        },
+        {
+          "timestamp": "2026-07-01T15:30:00",
+          "memory_type": "REGIME_TRANSITION"
+        },
+        {
+          "timestamp": "2026-07-02T15:30:00",
+          "memory_type": "REGIME_TRANSITION"
+        },
+        {
+          "timestamp": "2026-07-02T15:30:00",
+          "memory_type": "REGIME_TRANSITION"
+        },
+        {
+          "timestamp": "2026-07-03T15:30:00",
+          "memory_type": "REGIME_TRANSITION"
+        },
+        {
+          "timestamp": "2026-07-03T15:30:00",
+          "memory_type": "REGIME_TRANSITION"
+        },
+        {
+          "timestamp": "2026-07-06T15:30:00",
+          "memory_type": "REGIME_TRANSITION"
+        },
+        {
+          "timestamp": "2026-07-06T15:30:00",
+          "memory_type": "REGIME_TRANSITION"
+        },
+        {
+          "timestamp": "2026-07-07T15:30:00",
+          "memory_type": "REGIME_TRANSITION"
+        },
+        {
+          "timestamp": "2026-07-07T15:30:00",
+          "memory_type": "REGIME_TRANSITION"
+        },
+        {
+          "timestamp": "2026-07-08T15:30:00",
+          "memory_type": "REGIME_TRANSITION"
+        },
+        {
+          "timestamp": "2026-07-10T15:30:00",
+          "memory_type": "REGIME_TRANSITION"
+        },
+        {
+          "timestamp": "2026-07-13T15:30:00",
+          "memory_type": "REGIME_TRANSITION"
+        },
+        {
+          "timestamp": "2026-07-14T15:30:00",
+          "memory_type": "REGIME_TRANSITION"
+        }
+      ]
+    },
+    {
+      "id": "NIFTY-2026-07-15",
+      "outcome": "COMPLETED",
+      "strategy": "DIRECTIONAL_PUT_SPREAD",
+      "market_context": "TRANSITION",
+      "market_opinion": "NEUTRAL",
+      "context_stability": "MOSTLY_STABLE",
+      "calibration": "CALIBRATED",
+      "governance": "APPROVED",
+      "lifecycle": "UNKNOWN",
+      "contract": "UNKNOWN",
+      "market_character": "CLEAR",
+      "market_phase": "ESTABLISHED",
+      "confidence": "HIGH",
+      "selection_status": "SELECTED",
+      "selection_confidence": "HIGH",
+      "selection_reason": "Market state REVERSAL matches required states.; Market character CLEAR meets minimum CLEAR.; Confidence HIGH meets required HIGH.",
+      "risk_status": "APPROVED",
+      "risk_level": "LOW",
+      "risk_approval": "ALLOW",
+      "risk_blocking_reason": null,
+      "capital_intent": "STANDARD",
+      "capital_allocation_status": "APPROVED",
+      "capital_allocation_reason": "Risk Level is LOW under a clean ALLOW; standard capital is authorized.",
+      "execution_status": "PLANNED",
+      "execution_intent": "PREPARE",
+      "evidence_opportunity_state": "HIGH_EDGE",
+      "evidence_risk_state": "NORMAL",
+      "stability_reasoning_summary": "transition_rate=0.231 at or below 0.25",
+      "stability_transition_count": 12,
+      "stability_persistence_length": 14,
+      "stability_dimension_agreement": 0.9199,
+      "stability_confidence_variance": 0.0,
+      "stability_context_lifetime": 53,
+      "context_volatility": "STABLE",
+      "context_liquidity": "UNKNOWN",
+      "context_regime": "TRANSITION",
+      "context_conviction": "LOW",
+      "context_stability_dimension": "CHANGING",
+      "transition_events": [
+        {
+          "timestamp": "2026-06-01T15:30:00",
+          "memory_type": "REGIME_TRANSITION"
+        },
+        {
+          "timestamp": "2026-06-01T15:30:00",
+          "memory_type": "REGIME_TRANSITION"
+        },
+        {
+          "timestamp": "2026-06-02T15:30:00",
+          "memory_type": "REGIME_TRANSITION"
+        },
+        {
+          "timestamp": "2026-06-03T15:30:00",
+          "memory_type": "REGIME_TRANSITION"
+        },
+        {
+          "timestamp": "2026-06-04T15:30:00",
+          "memory_type": "REGIME_TRANSITION"
+        },
+        {
+          "timestamp": "2026-06-09T15:30:00",
+          "memory_type": "REGIME_TRANSITION"
+        },
+        {
+          "timestamp": "2026-06-10T15:30:00",
+          "memory_type": "REGIME_TRANSITION"
+        },
+        {
+          "timestamp": "2026-06-10T15:30:00",
+          "memory_type": "REGIME_TRANSITION"
+        },
+        {
+          "timestamp": "2026-06-11T15:30:00",
+          "memory_type": "REGIME_TRANSITION"
+        },
+        {
+          "timestamp": "2026-06-12T15:30:00",
+          "memory_type": "REGIME_TRANSITION"
+        },
+        {
+          "timestamp": "2026-06-12T15:30:00",
+          "memory_type": "REGIME_TRANSITION"
+        },
+        {
+          "timestamp": "2026-06-15T15:30:00",
+          "memory_type": "REGIME_TRANSITION"
+        },
+        {
+          "timestamp": "2026-06-15T15:30:00",
+          "memory_type": "REGIME_TRANSITION"
+        },
+        {
+          "timestamp": "2026-06-16T15:30:00",
+          "memory_type": "REGIME_TRANSITION"
+        },
+        {
+          "timestamp": "2026-06-16T15:30:00",
+          "memory_type": "REGIME_TRANSITION"
+        },
+        {
+          "timestamp": "2026-06-17T15:30:00",
+          "memory_type": "REGIME_TRANSITION"
+        },
+        {
+          "timestamp": "2026-06-17T15:30:00",
+          "memory_type": "REGIME_TRANSITION"
+        },
+        {
+          "timestamp": "2026-06-18T15:30:00",
+          "memory_type": "REGIME_TRANSITION"
+        },
+        {
+          "timestamp": "2026-06-19T15:30:00",
+          "memory_type": "REGIME_TRANSITION"
+        },
+        {
+          "timestamp": "2026-06-25T15:30:00",
+          "memory_type": "REGIME_TRANSITION"
+        },
+        {
+          "timestamp": "2026-06-29T15:30:00",
+          "memory_type": "REGIME_TRANSITION"
+        },
+        {
+          "timestamp": "2026-06-29T15:30:00",
+          "memory_type": "REGIME_TRANSITION"
+        },
+        {
+          "timestamp": "2026-06-30T15:30:00",
+          "memory_type": "REGIME_TRANSITION"
+        },
+        {
+          "timestamp": "2026-07-01T15:30:00",
+          "memory_type": "REGIME_TRANSITION"
+        },
+        {
+          "timestamp": "2026-07-01T15:30:00",
+          "memory_type": "REGIME_TRANSITION"
+        },
+        {
+          "timestamp": "2026-07-02T15:30:00",
+          "memory_type": "REGIME_TRANSITION"
+        },
+        {
+          "timestamp": "2026-07-02T15:30:00",
+          "memory_type": "REGIME_TRANSITION"
+        },
+        {
+          "timestamp": "2026-07-03T15:30:00",
+          "memory_type": "REGIME_TRANSITION"
+        },
+        {
+          "timestamp": "2026-07-03T15:30:00",
+          "memory_type": "REGIME_TRANSITION"
+        },
+        {
+          "timestamp": "2026-07-06T15:30:00",
+          "memory_type": "REGIME_TRANSITION"
+        },
+        {
+          "timestamp": "2026-07-06T15:30:00",
+          "memory_type": "REGIME_TRANSITION"
+        },
+        {
+          "timestamp": "2026-07-07T15:30:00",
+          "memory_type": "REGIME_TRANSITION"
+        },
+        {
+          "timestamp": "2026-07-07T15:30:00",
+          "memory_type": "REGIME_TRANSITION"
+        },
+        {
+          "timestamp": "2026-07-08T15:30:00",
+          "memory_type": "REGIME_TRANSITION"
+        },
+        {
+          "timestamp": "2026-07-10T15:30:00",
+          "memory_type": "REGIME_TRANSITION"
+        },
+        {
+          "timestamp": "2026-07-13T15:30:00",
+          "memory_type": "REGIME_TRANSITION"
+        },
+        {
+          "timestamp": "2026-07-14T15:30:00",
+          "memory_type": "REGIME_TRANSITION"
+        },
+        {
+          "timestamp": "2026-07-15T15:30:00",
+          "memory_type": "REGIME_TRANSITION"
+        }
+      ]
+    },
+    {
+      "id": "NIFTY-2026-07-16",
+      "outcome": "COMPLETED",
+      "strategy": "PREMIUM_VWAP_STRADDLE",
+      "market_context": "SIDEWAYS",
+      "market_opinion": "NEUTRAL",
+      "context_stability": "MOSTLY_STABLE",
+      "calibration": "CALIBRATED",
+      "governance": "APPROVED",
+      "lifecycle": "UNKNOWN",
+      "contract": "UNKNOWN",
+      "market_character": "CLEAR",
+      "market_phase": "ESTABLISHED",
+      "confidence": "HIGH",
+      "selection_status": "SELECTED",
+      "selection_confidence": "MODERATE",
+      "selection_reason": "Market state RANGE matches required states.; Market character CLEAR meets minimum CLEAR.; Confidence HIGH meets required HIGH.",
+      "risk_status": "APPROVED",
+      "risk_level": "LOW",
+      "risk_approval": "ALLOW",
+      "risk_blocking_reason": null,
+      "capital_intent": "STANDARD",
+      "capital_allocation_status": "APPROVED",
+      "capital_allocation_reason": "Risk Level is LOW under a clean ALLOW; standard capital is authorized.",
+      "execution_status": "PLANNED",
+      "execution_intent": "PREPARE",
+      "evidence_opportunity_state": "HIGH_EDGE",
+      "evidence_risk_state": "NORMAL",
+      "stability_reasoning_summary": "transition_rate=0.245 at or below 0.25",
+      "stability_transition_count": 13,
+      "stability_persistence_length": 14,
+      "stability_dimension_agreement": 0.9151,
+      "stability_confidence_variance": 0.0,
+      "stability_context_lifetime": 54,
+      "context_volatility": "STABLE",
+      "context_liquidity": "UNKNOWN",
+      "context_regime": "RANGE",
+      "context_conviction": "LOW",
+      "context_stability_dimension": "CHANGING",
+      "transition_events": [
+        {
+          "timestamp": "2026-06-01T15:30:00",
+          "memory_type": "REGIME_TRANSITION"
+        },
+        {
+          "timestamp": "2026-06-01T15:30:00",
+          "memory_type": "REGIME_TRANSITION"
+        },
+        {
+          "timestamp": "2026-06-02T15:30:00",
+          "memory_type": "REGIME_TRANSITION"
+        },
+        {
+          "timestamp": "2026-06-03T15:30:00",
+          "memory_type": "REGIME_TRANSITION"
+        },
+        {
+          "timestamp": "2026-06-04T15:30:00",
+          "memory_type": "REGIME_TRANSITION"
+        },
+        {
+          "timestamp": "2026-06-09T15:30:00",
+          "memory_type": "REGIME_TRANSITION"
+        },
+        {
+          "timestamp": "2026-06-10T15:30:00",
+          "memory_type": "REGIME_TRANSITION"
+        },
+        {
+          "timestamp": "2026-06-10T15:30:00",
+          "memory_type": "REGIME_TRANSITION"
+        },
+        {
+          "timestamp": "2026-06-11T15:30:00",
+          "memory_type": "REGIME_TRANSITION"
+        },
+        {
+          "timestamp": "2026-06-12T15:30:00",
+          "memory_type": "REGIME_TRANSITION"
+        },
+        {
+          "timestamp": "2026-06-12T15:30:00",
+          "memory_type": "REGIME_TRANSITION"
+        },
+        {
+          "timestamp": "2026-06-15T15:30:00",
+          "memory_type": "REGIME_TRANSITION"
+        },
+        {
+          "timestamp": "2026-06-15T15:30:00",
+          "memory_type": "REGIME_TRANSITION"
+        },
+        {
+          "timestamp": "2026-06-16T15:30:00",
+          "memory_type": "REGIME_TRANSITION"
+        },
+        {
+          "timestamp": "2026-06-16T15:30:00",
+          "memory_type": "REGIME_TRANSITION"
+        },
+        {
+          "timestamp": "2026-06-17T15:30:00",
+          "memory_type": "REGIME_TRANSITION"
+        },
+        {
+          "timestamp": "2026-06-17T15:30:00",
+          "memory_type": "REGIME_TRANSITION"
+        },
+        {
+          "timestamp": "2026-06-18T15:30:00",
+          "memory_type": "REGIME_TRANSITION"
+        },
+        {
+          "timestamp": "2026-06-19T15:30:00",
+          "memory_type": "REGIME_TRANSITION"
+        },
+        {
+          "timestamp": "2026-06-25T15:30:00",
+          "memory_type": "REGIME_TRANSITION"
+        },
+        {
+          "timestamp": "2026-06-29T15:30:00",
+          "memory_type": "REGIME_TRANSITION"
+        },
+        {
+          "timestamp": "2026-06-29T15:30:00",
+          "memory_type": "REGIME_TRANSITION"
+        },
+        {
+          "timestamp": "2026-06-30T15:30:00",
+          "memory_type": "REGIME_TRANSITION"
+        },
+        {
+          "timestamp": "2026-07-01T15:30:00",
+          "memory_type": "REGIME_TRANSITION"
+        },
+        {
+          "timestamp": "2026-07-01T15:30:00",
+          "memory_type": "REGIME_TRANSITION"
+        },
+        {
+          "timestamp": "2026-07-02T15:30:00",
+          "memory_type": "REGIME_TRANSITION"
+        },
+        {
+          "timestamp": "2026-07-02T15:30:00",
+          "memory_type": "REGIME_TRANSITION"
+        },
+        {
+          "timestamp": "2026-07-03T15:30:00",
+          "memory_type": "REGIME_TRANSITION"
+        },
+        {
+          "timestamp": "2026-07-03T15:30:00",
+          "memory_type": "REGIME_TRANSITION"
+        },
+        {
+          "timestamp": "2026-07-06T15:30:00",
+          "memory_type": "REGIME_TRANSITION"
+        },
+        {
+          "timestamp": "2026-07-06T15:30:00",
+          "memory_type": "REGIME_TRANSITION"
+        },
+        {
+          "timestamp": "2026-07-07T15:30:00",
+          "memory_type": "REGIME_TRANSITION"
+        },
+        {
+          "timestamp": "2026-07-07T15:30:00",
+          "memory_type": "REGIME_TRANSITION"
+        },
+        {
+          "timestamp": "2026-07-08T15:30:00",
+          "memory_type": "REGIME_TRANSITION"
+        },
+        {
+          "timestamp": "2026-07-10T15:30:00",
+          "memory_type": "REGIME_TRANSITION"
+        },
+        {
+          "timestamp": "2026-07-13T15:30:00",
+          "memory_type": "REGIME_TRANSITION"
+        },
+        {
+          "timestamp": "2026-07-14T15:30:00",
+          "memory_type": "REGIME_TRANSITION"
+        },
+        {
+          "timestamp": "2026-07-15T15:30:00",
+          "memory_type": "REGIME_TRANSITION"
+        }
+      ]
+    },
+    {
+      "id": "NIFTY-2026-07-17",
+      "outcome": "FAILED",
+      "strategy": null,
+      "market_context": "TRANSITION",
+      "market_opinion": "NEUTRAL",
+      "context_stability": "TRANSITIONING",
+      "calibration": "CALIBRATED",
+      "governance": "APPROVED",
+      "lifecycle": "UNKNOWN",
+      "contract": "UNKNOWN",
+      "market_character": "CLEAR",
+      "market_phase": "EMERGING",
+      "confidence": "MODERATE",
+      "selection_status": "NO_STRATEGY",
+      "selection_confidence": "MODERATE",
+      "selection_reason": "No registered strategy honestly qualified under today's market state.",
+      "risk_status": "REJECTED",
+      "risk_level": "UNKNOWN",
+      "risk_approval": "DENY",
+      "risk_blocking_reason": "NO_STRATEGY",
+      "capital_intent": "NONE",
+      "capital_allocation_status": "DENIED",
+      "capital_allocation_reason": "Risk Brain denied approval; no capital may be committed.",
+      "execution_status": "NOT_PLANNED",
+      "execution_intent": "NONE",
+      "evidence_opportunity_state": "HIGH_EDGE",
+      "evidence_risk_state": "NORMAL",
+      "stability_reasoning_summary": "transition_rate=0.259 at or below 0.6",
+      "stability_transition_count": 14,
+      "stability_persistence_length": 14,
+      "stability_dimension_agreement": 0.9105,
+      "stability_confidence_variance": 0.0,
+      "stability_context_lifetime": 55,
+      "context_volatility": "STABLE",
+      "context_liquidity": "UNKNOWN",
+      "context_regime": "TRANSITION",
+      "context_conviction": "LOW",
+      "context_stability_dimension": "CHANGING",
+      "transition_events": [
+        {
+          "timestamp": "2026-06-01T15:30:00",
+          "memory_type": "REGIME_TRANSITION"
+        },
+        {
+          "timestamp": "2026-06-01T15:30:00",
+          "memory_type": "REGIME_TRANSITION"
+        },
+        {
+          "timestamp": "2026-06-02T15:30:00",
+          "memory_type": "REGIME_TRANSITION"
+        },
+        {
+          "timestamp": "2026-06-03T15:30:00",
+          "memory_type": "REGIME_TRANSITION"
+        },
+        {
+          "timestamp": "2026-06-04T15:30:00",
+          "memory_type": "REGIME_TRANSITION"
+        },
+        {
+          "timestamp": "2026-06-09T15:30:00",
+          "memory_type": "REGIME_TRANSITION"
+        },
+        {
+          "timestamp": "2026-06-10T15:30:00",
+          "memory_type": "REGIME_TRANSITION"
+        },
+        {
+          "timestamp": "2026-06-10T15:30:00",
+          "memory_type": "REGIME_TRANSITION"
+        },
+        {
+          "timestamp": "2026-06-11T15:30:00",
+          "memory_type": "REGIME_TRANSITION"
+        },
+        {
+          "timestamp": "2026-06-12T15:30:00",
+          "memory_type": "REGIME_TRANSITION"
+        },
+        {
+          "timestamp": "2026-06-12T15:30:00",
+          "memory_type": "REGIME_TRANSITION"
+        },
+        {
+          "timestamp": "2026-06-15T15:30:00",
+          "memory_type": "REGIME_TRANSITION"
+        },
+        {
+          "timestamp": "2026-06-15T15:30:00",
+          "memory_type": "REGIME_TRANSITION"
+        },
+        {
+          "timestamp": "2026-06-16T15:30:00",
+          "memory_type": "REGIME_TRANSITION"
+        },
+        {
+          "timestamp": "2026-06-16T15:30:00",
+          "memory_type": "REGIME_TRANSITION"
+        },
+        {
+          "timestamp": "2026-06-17T15:30:00",
+          "memory_type": "REGIME_TRANSITION"
+        },
+        {
+          "timestamp": "2026-06-17T15:30:00",
+          "memory_type": "REGIME_TRANSITION"
+        },
+        {
+          "timestamp": "2026-06-18T15:30:00",
+          "memory_type": "REGIME_TRANSITION"
+        },
+        {
+          "timestamp": "2026-06-19T15:30:00",
+          "memory_type": "REGIME_TRANSITION"
+        },
+        {
+          "timestamp": "2026-06-25T15:30:00",
+          "memory_type": "REGIME_TRANSITION"
+        },
+        {
+          "timestamp": "2026-06-29T15:30:00",
+          "memory_type": "REGIME_TRANSITION"
+        },
+        {
+          "timestamp": "2026-06-29T15:30:00",
+          "memory_type": "REGIME_TRANSITION"
+        },
+        {
+          "timestamp": "2026-06-30T15:30:00",
+          "memory_type": "REGIME_TRANSITION"
+        },
+        {
+          "timestamp": "2026-07-01T15:30:00",
+          "memory_type": "REGIME_TRANSITION"
+        },
+        {
+          "timestamp": "2026-07-01T15:30:00",
+          "memory_type": "REGIME_TRANSITION"
+        },
+        {
+          "timestamp": "2026-07-02T15:30:00",
+          "memory_type": "REGIME_TRANSITION"
+        },
+        {
+          "timestamp": "2026-07-02T15:30:00",
+          "memory_type": "REGIME_TRANSITION"
+        },
+        {
+          "timestamp": "2026-07-03T15:30:00",
+          "memory_type": "REGIME_TRANSITION"
+        },
+        {
+          "timestamp": "2026-07-03T15:30:00",
+          "memory_type": "REGIME_TRANSITION"
+        },
+        {
+          "timestamp": "2026-07-06T15:30:00",
+          "memory_type": "REGIME_TRANSITION"
+        },
+        {
+          "timestamp": "2026-07-06T15:30:00",
+          "memory_type": "REGIME_TRANSITION"
+        },
+        {
+          "timestamp": "2026-07-07T15:30:00",
+          "memory_type": "REGIME_TRANSITION"
+        },
+        {
+          "timestamp": "2026-07-07T15:30:00",
+          "memory_type": "REGIME_TRANSITION"
+        },
+        {
+          "timestamp": "2026-07-08T15:30:00",
+          "memory_type": "REGIME_TRANSITION"
+        },
+        {
+          "timestamp": "2026-07-10T15:30:00",
+          "memory_type": "REGIME_TRANSITION"
+        },
+        {
+          "timestamp": "2026-07-13T15:30:00",
+          "memory_type": "REGIME_TRANSITION"
+        },
+        {
+          "timestamp": "2026-07-14T15:30:00",
+          "memory_type": "REGIME_TRANSITION"
+        },
+        {
+          "timestamp": "2026-07-15T15:30:00",
+          "memory_type": "REGIME_TRANSITION"
+        },
+        {
+          "timestamp": "2026-07-17T15:30:00",
+          "memory_type": "REGIME_TRANSITION"
+        }
+      ]
+    },
+    {
+      "id": "NIFTY-2026-07-20",
+      "outcome": "COMPLETED",
+      "strategy": "DIRECTIONAL_PUT_SPREAD",
+      "market_context": "TRANSITION",
+      "market_opinion": "INSUFFICIENT_EVIDENCE",
+      "context_stability": "MOSTLY_STABLE",
+      "calibration": "CALIBRATED",
+      "governance": "APPROVED",
+      "lifecycle": "UNKNOWN",
+      "contract": "UNKNOWN",
+      "market_character": "CLEAR",
+      "market_phase": "ESTABLISHED",
+      "confidence": "HIGH",
+      "selection_status": "SELECTED",
+      "selection_confidence": "HIGH",
+      "selection_reason": "Market state REVERSAL matches required states.; Market character CLEAR meets minimum CLEAR.; Confidence HIGH meets required HIGH.",
+      "risk_status": "APPROVED",
+      "risk_level": "LOW",
+      "risk_approval": "ALLOW",
+      "risk_blocking_reason": null,
+      "capital_intent": "STANDARD",
+      "capital_allocation_status": "APPROVED",
+      "capital_allocation_reason": "Risk Level is LOW under a clean ALLOW; standard capital is authorized.",
+      "execution_status": "PLANNED",
+      "execution_intent": "PREPARE",
+      "evidence_opportunity_state": "HIGH_EDGE",
+      "evidence_risk_state": "NORMAL",
+      "stability_reasoning_summary": "transition_rate=0.250 at or below 0.25",
+      "stability_transition_count": 14,
+      "stability_persistence_length": 14,
+      "stability_dimension_agreement": 0.9137,
+      "stability_confidence_variance": 0.0,
+      "stability_context_lifetime": 57,
+      "context_volatility": "STABLE",
+      "context_liquidity": "UNKNOWN",
+      "context_regime": "TRANSITION",
+      "context_conviction": "LOW",
+      "context_stability_dimension": "CHANGING",
+      "transition_events": [
+        {
+          "timestamp": "2026-06-01T15:30:00",
+          "memory_type": "REGIME_TRANSITION"
+        },
+        {
+          "timestamp": "2026-06-01T15:30:00",
+          "memory_type": "REGIME_TRANSITION"
+        },
+        {
+          "timestamp": "2026-06-02T15:30:00",
+          "memory_type": "REGIME_TRANSITION"
+        },
+        {
+          "timestamp": "2026-06-03T15:30:00",
+          "memory_type": "REGIME_TRANSITION"
+        },
+        {
+          "timestamp": "2026-06-04T15:30:00",
+          "memory_type": "REGIME_TRANSITION"
+        },
+        {
+          "timestamp": "2026-06-09T15:30:00",
+          "memory_type": "REGIME_TRANSITION"
+        },
+        {
+          "timestamp": "2026-06-10T15:30:00",
+          "memory_type": "REGIME_TRANSITION"
+        },
+        {
+          "timestamp": "2026-06-10T15:30:00",
+          "memory_type": "REGIME_TRANSITION"
+        },
+        {
+          "timestamp": "2026-06-11T15:30:00",
+          "memory_type": "REGIME_TRANSITION"
+        },
+        {
+          "timestamp": "2026-06-12T15:30:00",
+          "memory_type": "REGIME_TRANSITION"
+        },
+        {
+          "timestamp": "2026-06-12T15:30:00",
+          "memory_type": "REGIME_TRANSITION"
+        },
+        {
+          "timestamp": "2026-06-15T15:30:00",
+          "memory_type": "REGIME_TRANSITION"
+        },
+        {
+          "timestamp": "2026-06-15T15:30:00",
+          "memory_type": "REGIME_TRANSITION"
+        },
+        {
+          "timestamp": "2026-06-16T15:30:00",
+          "memory_type": "REGIME_TRANSITION"
+        },
+        {
+          "timestamp": "2026-06-16T15:30:00",
+          "memory_type": "REGIME_TRANSITION"
+        },
+        {
+          "timestamp": "2026-06-17T15:30:00",
+          "memory_type": "REGIME_TRANSITION"
+        },
+        {
+          "timestamp": "2026-06-17T15:30:00",
+          "memory_type": "REGIME_TRANSITION"
+        },
+        {
+          "timestamp": "2026-06-18T15:30:00",
+          "memory_type": "REGIME_TRANSITION"
+        },
+        {
+          "timestamp": "2026-06-19T15:30:00",
+          "memory_type": "REGIME_TRANSITION"
+        },
+        {
+          "timestamp": "2026-06-25T15:30:00",
+          "memory_type": "REGIME_TRANSITION"
+        },
+        {
+          "timestamp": "2026-06-29T15:30:00",
+          "memory_type": "REGIME_TRANSITION"
+        },
+        {
+          "timestamp": "2026-06-29T15:30:00",
+          "memory_type": "REGIME_TRANSITION"
+        },
+        {
+          "timestamp": "2026-06-30T15:30:00",
+          "memory_type": "REGIME_TRANSITION"
+        },
+        {
+          "timestamp": "2026-07-01T15:30:00",
+          "memory_type": "REGIME_TRANSITION"
+        },
+        {
+          "timestamp": "2026-07-01T15:30:00",
+          "memory_type": "REGIME_TRANSITION"
+        },
+        {
+          "timestamp": "2026-07-02T15:30:00",
+          "memory_type": "REGIME_TRANSITION"
+        },
+        {
+          "timestamp": "2026-07-02T15:30:00",
+          "memory_type": "REGIME_TRANSITION"
+        },
+        {
+          "timestamp": "2026-07-03T15:30:00",
+          "memory_type": "REGIME_TRANSITION"
+        },
+        {
+          "timestamp": "2026-07-03T15:30:00",
+          "memory_type": "REGIME_TRANSITION"
+        },
+        {
+          "timestamp": "2026-07-06T15:30:00",
+          "memory_type": "REGIME_TRANSITION"
+        },
+        {
+          "timestamp": "2026-07-06T15:30:00",
+          "memory_type": "REGIME_TRANSITION"
+        },
+        {
+          "timestamp": "2026-07-07T15:30:00",
+          "memory_type": "REGIME_TRANSITION"
+        },
+        {
+          "timestamp": "2026-07-07T15:30:00",
+          "memory_type": "REGIME_TRANSITION"
+        },
+        {
+          "timestamp": "2026-07-08T15:30:00",
+          "memory_type": "REGIME_TRANSITION"
+        },
+        {
+          "timestamp": "2026-07-10T15:30:00",
+          "memory_type": "REGIME_TRANSITION"
+        },
+        {
+          "timestamp": "2026-07-13T15:30:00",
+          "memory_type": "REGIME_TRANSITION"
+        },
+        {
+          "timestamp": "2026-07-14T15:30:00",
+          "memory_type": "REGIME_TRANSITION"
+        },
+        {
+          "timestamp": "2026-07-15T15:30:00",
+          "memory_type": "REGIME_TRANSITION"
+        },
+        {
+          "timestamp": "2026-07-17T15:30:00",
+          "memory_type": "REGIME_TRANSITION"
+        },
+        {
+          "timestamp": "2026-07-20T15:30:00",
+          "memory_type": "REGIME_TRANSITION"
+        },
+        {
+          "timestamp": "2026-07-20T15:30:00",
+          "memory_type": "REGIME_TRANSITION"
+        }
+      ]
+    },
+    {
+      "id": "NIFTY-2026-07-21",
+      "outcome": "COMPLETED",
+      "strategy": "DIRECTIONAL_PUT_SPREAD",
+      "market_context": "TRANSITION",
+      "market_opinion": "BULLISH",
+      "context_stability": "MOSTLY_STABLE",
+      "calibration": "CALIBRATED",
+      "governance": "APPROVED",
+      "lifecycle": "UNKNOWN",
+      "contract": "UNKNOWN",
+      "market_character": "CLEAR",
+      "market_phase": "ESTABLISHED",
+      "confidence": "HIGH",
+      "selection_status": "SELECTED",
+      "selection_confidence": "HIGH",
+      "selection_reason": "Market state REVERSAL matches required states.; Market character CLEAR meets minimum CLEAR.; Confidence HIGH meets required HIGH.",
+      "risk_status": "APPROVED",
+      "risk_level": "LOW",
+      "risk_approval": "ALLOW",
+      "risk_blocking_reason": null,
+      "capital_intent": "STANDARD",
+      "capital_allocation_status": "APPROVED",
+      "capital_allocation_reason": "Risk Level is LOW under a clean ALLOW; standard capital is authorized.",
+      "execution_status": "PLANNED",
+      "execution_intent": "PREPARE",
+      "evidence_opportunity_state": "HIGH_EDGE",
+      "evidence_risk_state": "NORMAL",
+      "stability_reasoning_summary": "transition_rate=0.246 at or below 0.25",
+      "stability_transition_count": 14,
+      "stability_persistence_length": 14,
+      "stability_dimension_agreement": 0.9152,
+      "stability_confidence_variance": 0.0,
+      "stability_context_lifetime": 58,
+      "context_volatility": "STABLE",
+      "context_liquidity": "UNKNOWN",
+      "context_regime": "TRANSITION",
+      "context_conviction": "LOW",
+      "context_stability_dimension": "CHANGING",
+      "transition_events": [
+        {
+          "timestamp": "2026-06-01T15:30:00",
+          "memory_type": "REGIME_TRANSITION"
+        },
+        {
+          "timestamp": "2026-06-01T15:30:00",
+          "memory_type": "REGIME_TRANSITION"
+        },
+        {
+          "timestamp": "2026-06-02T15:30:00",
+          "memory_type": "REGIME_TRANSITION"
+        },
+        {
+          "timestamp": "2026-06-03T15:30:00",
+          "memory_type": "REGIME_TRANSITION"
+        },
+        {
+          "timestamp": "2026-06-04T15:30:00",
+          "memory_type": "REGIME_TRANSITION"
+        },
+        {
+          "timestamp": "2026-06-09T15:30:00",
+          "memory_type": "REGIME_TRANSITION"
+        },
+        {
+          "timestamp": "2026-06-10T15:30:00",
+          "memory_type": "REGIME_TRANSITION"
+        },
+        {
+          "timestamp": "2026-06-10T15:30:00",
+          "memory_type": "REGIME_TRANSITION"
+        },
+        {
+          "timestamp": "2026-06-11T15:30:00",
+          "memory_type": "REGIME_TRANSITION"
+        },
+        {
+          "timestamp": "2026-06-12T15:30:00",
+          "memory_type": "REGIME_TRANSITION"
+        },
+        {
+          "timestamp": "2026-06-12T15:30:00",
+          "memory_type": "REGIME_TRANSITION"
+        },
+        {
+          "timestamp": "2026-06-15T15:30:00",
+          "memory_type": "REGIME_TRANSITION"
+        },
+        {
+          "timestamp": "2026-06-15T15:30:00",
+          "memory_type": "REGIME_TRANSITION"
+        },
+        {
+          "timestamp": "2026-06-16T15:30:00",
+          "memory_type": "REGIME_TRANSITION"
+        },
+        {
+          "timestamp": "2026-06-16T15:30:00",
+          "memory_type": "REGIME_TRANSITION"
+        },
+        {
+          "timestamp": "2026-06-17T15:30:00",
+          "memory_type": "REGIME_TRANSITION"
+        },
+        {
+          "timestamp": "2026-06-17T15:30:00",
+          "memory_type": "REGIME_TRANSITION"
+        },
+        {
+          "timestamp": "2026-06-18T15:30:00",
+          "memory_type": "REGIME_TRANSITION"
+        },
+        {
+          "timestamp": "2026-06-19T15:30:00",
+          "memory_type": "REGIME_TRANSITION"
+        },
+        {
+          "timestamp": "2026-06-25T15:30:00",
+          "memory_type": "REGIME_TRANSITION"
+        },
+        {
+          "timestamp": "2026-06-29T15:30:00",
+          "memory_type": "REGIME_TRANSITION"
+        },
+        {
+          "timestamp": "2026-06-29T15:30:00",
+          "memory_type": "REGIME_TRANSITION"
+        },
+        {
+          "timestamp": "2026-06-30T15:30:00",
+          "memory_type": "REGIME_TRANSITION"
+        },
+        {
+          "timestamp": "2026-07-01T15:30:00",
+          "memory_type": "REGIME_TRANSITION"
+        },
+        {
+          "timestamp": "2026-07-01T15:30:00",
+          "memory_type": "REGIME_TRANSITION"
+        },
+        {
+          "timestamp": "2026-07-02T15:30:00",
+          "memory_type": "REGIME_TRANSITION"
+        },
+        {
+          "timestamp": "2026-07-02T15:30:00",
+          "memory_type": "REGIME_TRANSITION"
+        },
+        {
+          "timestamp": "2026-07-03T15:30:00",
+          "memory_type": "REGIME_TRANSITION"
+        },
+        {
+          "timestamp": "2026-07-03T15:30:00",
+          "memory_type": "REGIME_TRANSITION"
+        },
+        {
+          "timestamp": "2026-07-06T15:30:00",
+          "memory_type": "REGIME_TRANSITION"
+        },
+        {
+          "timestamp": "2026-07-06T15:30:00",
+          "memory_type": "REGIME_TRANSITION"
+        },
+        {
+          "timestamp": "2026-07-07T15:30:00",
+          "memory_type": "REGIME_TRANSITION"
+        },
+        {
+          "timestamp": "2026-07-07T15:30:00",
+          "memory_type": "REGIME_TRANSITION"
+        },
+        {
+          "timestamp": "2026-07-08T15:30:00",
+          "memory_type": "REGIME_TRANSITION"
+        },
+        {
+          "timestamp": "2026-07-10T15:30:00",
+          "memory_type": "REGIME_TRANSITION"
+        },
+        {
+          "timestamp": "2026-07-13T15:30:00",
+          "memory_type": "REGIME_TRANSITION"
+        },
+        {
+          "timestamp": "2026-07-14T15:30:00",
+          "memory_type": "REGIME_TRANSITION"
+        },
+        {
+          "timestamp": "2026-07-15T15:30:00",
+          "memory_type": "REGIME_TRANSITION"
+        },
+        {
+          "timestamp": "2026-07-17T15:30:00",
+          "memory_type": "REGIME_TRANSITION"
+        },
+        {
+          "timestamp": "2026-07-20T15:30:00",
+          "memory_type": "REGIME_TRANSITION"
+        },
+        {
+          "timestamp": "2026-07-20T15:30:00",
+          "memory_type": "REGIME_TRANSITION"
+        },
+        {
+          "timestamp": "2026-07-21T15:30:00",
+          "memory_type": "REGIME_TRANSITION"
+        }
+      ]
+    },
+    {
+      "id": "NIFTY-2026-07-22",
+      "outcome": "COMPLETED",
+      "strategy": "DIRECTIONAL_PUT_SPREAD",
+      "market_context": "TRANSITION",
+      "market_opinion": "INSUFFICIENT_EVIDENCE",
+      "context_stability": "MOSTLY_STABLE",
+      "calibration": "CALIBRATED",
+      "governance": "APPROVED",
+      "lifecycle": "UNKNOWN",
+      "contract": "UNKNOWN",
+      "market_character": "CLEAR",
+      "market_phase": "ESTABLISHED",
+      "confidence": "HIGH",
+      "selection_status": "SELECTED",
+      "selection_confidence": "HIGH",
+      "selection_reason": "Market state REVERSAL matches required states.; Market character CLEAR meets minimum CLEAR.; Confidence HIGH meets required HIGH.",
+      "risk_status": "APPROVED",
+      "risk_level": "LOW",
+      "risk_approval": "ALLOW",
+      "risk_blocking_reason": null,
+      "capital_intent": "STANDARD",
+      "capital_allocation_status": "APPROVED",
+      "capital_allocation_reason": "Risk Level is LOW under a clean ALLOW; standard capital is authorized.",
+      "execution_status": "PLANNED",
+      "execution_intent": "PREPARE",
+      "evidence_opportunity_state": "HIGH_EDGE",
+      "evidence_risk_state": "NORMAL",
+      "stability_reasoning_summary": "transition_rate=0.237 at or below 0.25",
+      "stability_transition_count": 14,
+      "stability_persistence_length": 14,
+      "stability_dimension_agreement": 0.9181,
+      "stability_confidence_variance": 0.0,
+      "stability_context_lifetime": 60,
+      "context_volatility": "STABLE",
+      "context_liquidity": "UNKNOWN",
+      "context_regime": "TRANSITION",
+      "context_conviction": "LOW",
+      "context_stability_dimension": "CHANGING",
+      "transition_events": [
+        {
+          "timestamp": "2026-06-01T15:30:00",
+          "memory_type": "REGIME_TRANSITION"
+        },
+        {
+          "timestamp": "2026-06-01T15:30:00",
+          "memory_type": "REGIME_TRANSITION"
+        },
+        {
+          "timestamp": "2026-06-02T15:30:00",
+          "memory_type": "REGIME_TRANSITION"
+        },
+        {
+          "timestamp": "2026-06-03T15:30:00",
+          "memory_type": "REGIME_TRANSITION"
+        },
+        {
+          "timestamp": "2026-06-04T15:30:00",
+          "memory_type": "REGIME_TRANSITION"
+        },
+        {
+          "timestamp": "2026-06-09T15:30:00",
+          "memory_type": "REGIME_TRANSITION"
+        },
+        {
+          "timestamp": "2026-06-10T15:30:00",
+          "memory_type": "REGIME_TRANSITION"
+        },
+        {
+          "timestamp": "2026-06-10T15:30:00",
+          "memory_type": "REGIME_TRANSITION"
+        },
+        {
+          "timestamp": "2026-06-11T15:30:00",
+          "memory_type": "REGIME_TRANSITION"
+        },
+        {
+          "timestamp": "2026-06-12T15:30:00",
+          "memory_type": "REGIME_TRANSITION"
+        },
+        {
+          "timestamp": "2026-06-12T15:30:00",
+          "memory_type": "REGIME_TRANSITION"
+        },
+        {
+          "timestamp": "2026-06-15T15:30:00",
+          "memory_type": "REGIME_TRANSITION"
+        },
+        {
+          "timestamp": "2026-06-15T15:30:00",
+          "memory_type": "REGIME_TRANSITION"
+        },
+        {
+          "timestamp": "2026-06-16T15:30:00",
+          "memory_type": "REGIME_TRANSITION"
+        },
+        {
+          "timestamp": "2026-06-16T15:30:00",
+          "memory_type": "REGIME_TRANSITION"
+        },
+        {
+          "timestamp": "2026-06-17T15:30:00",
+          "memory_type": "REGIME_TRANSITION"
+        },
+        {
+          "timestamp": "2026-06-17T15:30:00",
+          "memory_type": "REGIME_TRANSITION"
+        },
+        {
+          "timestamp": "2026-06-18T15:30:00",
+          "memory_type": "REGIME_TRANSITION"
+        },
+        {
+          "timestamp": "2026-06-19T15:30:00",
+          "memory_type": "REGIME_TRANSITION"
+        },
+        {
+          "timestamp": "2026-06-25T15:30:00",
+          "memory_type": "REGIME_TRANSITION"
+        },
+        {
+          "timestamp": "2026-06-29T15:30:00",
+          "memory_type": "REGIME_TRANSITION"
+        },
+        {
+          "timestamp": "2026-06-29T15:30:00",
+          "memory_type": "REGIME_TRANSITION"
+        },
+        {
+          "timestamp": "2026-06-30T15:30:00",
+          "memory_type": "REGIME_TRANSITION"
+        },
+        {
+          "timestamp": "2026-07-01T15:30:00",
+          "memory_type": "REGIME_TRANSITION"
+        },
+        {
+          "timestamp": "2026-07-01T15:30:00",
+          "memory_type": "REGIME_TRANSITION"
+        },
+        {
+          "timestamp": "2026-07-02T15:30:00",
+          "memory_type": "REGIME_TRANSITION"
+        },
+        {
+          "timestamp": "2026-07-02T15:30:00",
+          "memory_type": "REGIME_TRANSITION"
+        },
+        {
+          "timestamp": "2026-07-03T15:30:00",
+          "memory_type": "REGIME_TRANSITION"
+        },
+        {
+          "timestamp": "2026-07-03T15:30:00",
+          "memory_type": "REGIME_TRANSITION"
+        },
+        {
+          "timestamp": "2026-07-06T15:30:00",
+          "memory_type": "REGIME_TRANSITION"
+        },
+        {
+          "timestamp": "2026-07-06T15:30:00",
+          "memory_type": "REGIME_TRANSITION"
+        },
+        {
+          "timestamp": "2026-07-07T15:30:00",
+          "memory_type": "REGIME_TRANSITION"
+        },
+        {
+          "timestamp": "2026-07-07T15:30:00",
+          "memory_type": "REGIME_TRANSITION"
+        },
+        {
+          "timestamp": "2026-07-08T15:30:00",
+          "memory_type": "REGIME_TRANSITION"
+        },
+        {
+          "timestamp": "2026-07-10T15:30:00",
+          "memory_type": "REGIME_TRANSITION"
+        },
+        {
+          "timestamp": "2026-07-13T15:30:00",
+          "memory_type": "REGIME_TRANSITION"
+        },
+        {
+          "timestamp": "2026-07-14T15:30:00",
+          "memory_type": "REGIME_TRANSITION"
+        },
+        {
+          "timestamp": "2026-07-15T15:30:00",
+          "memory_type": "REGIME_TRANSITION"
+        },
+        {
+          "timestamp": "2026-07-17T15:30:00",
+          "memory_type": "REGIME_TRANSITION"
+        },
+        {
+          "timestamp": "2026-07-20T15:30:00",
+          "memory_type": "REGIME_TRANSITION"
+        },
+        {
+          "timestamp": "2026-07-20T15:30:00",
+          "memory_type": "REGIME_TRANSITION"
+        },
+        {
+          "timestamp": "2026-07-21T15:30:00",
+          "memory_type": "REGIME_TRANSITION"
+        },
+        {
+          "timestamp": "2026-07-22T15:30:00",
+          "memory_type": "REGIME_TRANSITION"
+        },
+        {
+          "timestamp": "2026-07-22T15:30:00",
+          "memory_type": "REGIME_TRANSITION"
+        }
+      ]
+    }
+  ],
+  "_note": "Supersedes earlier Phase 4 report of the same session-shape: earlier run_before_deep_s70.py/run_after_deep_s70.py called HistoricalQualificationRunner.run_corpus() without published_states=, so all 12 Series 70 fields were None. Fixed 2026-07-24 by threading final_states through to run_corpus(published_states=final_states). See docs/CONTEXT_STABILITY_OBSERVABILITY.md for details."
+}

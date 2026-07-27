@@ -1,0 +1,186 @@
+{
+  "sprint": "Qualification Data Enrichment Sprint B",
+  "status": "COMPLETE",
+  "data_sources": [
+    {
+      "name": "NSE official F&O Bhavcopy",
+      "license": "Free, public regulatory disclosure",
+      "integrated": true,
+      "fields": [
+        "spot (UndrlygPric)",
+        "option chain (strike/type/expiry/symbol)"
+      ]
+    },
+    {
+      "name": "FYERS fyers_historical NSE:INDIAVIX-INDEX",
+      "license": "Existing authorized broker relationship",
+      "integrated": false,
+      "reason_not_integrated": "HistoricalSessionRecord (Series 59, frozen) has no VIX field; adding one requires modifying frozen Replay Framework, out of scope this sprint.",
+      "sourced_and_proven": true
+    },
+    {
+      "name": "Option OI / bid-ask (within NSE Bhavcopy)",
+      "license": "Same as Bhavcopy",
+      "integrated": false,
+      "reason_not_integrated": "OI already present in raw source rows (OpnIntrst) but not carried through by the frozen ingestion adapter / HistoricalSessionRecord schema.",
+      "sourced_and_proven": true
+    },
+    {
+      "name": "Certification/governance input",
+      "license": null,
+      "integrated": false,
+      "reason_not_integrated": "No authorized external source identified; internal BUJJI concept, not a market-data gap.",
+      "sourced_and_proven": false
+    },
+    {
+      "name": "TrueData",
+      "license": "Barred from individual/retail licensing",
+      "integrated": false
+    },
+    {
+      "name": "Global Datafeeds",
+      "license": "Requires paid account creation not authorized for this project to perform",
+      "integrated": false
+    }
+  ],
+  "coverage_period": {
+    "start": "2026-05-25",
+    "end": "2026-07-22",
+    "weekday_candidates": 43,
+    "valid_trading_days": 41,
+    "detected_holidays": [
+      "2026-05-28",
+      "2026-06-26"
+    ]
+  },
+  "corpus_manifest": {
+    "corpus_id": "CORPUS-28a6ba13849f9608",
+    "source_description": "NSE official F&O Bhavcopy, NIFTY index options, enriched corpus 2026-05-25 to 2026-07-22 (Qualification Data Enrichment Sprint B)",
+    "trading_dates": [
+      "2026-05-25",
+      "2026-05-26",
+      "2026-05-27",
+      "2026-05-29",
+      "2026-06-01",
+      "2026-06-02",
+      "2026-06-03",
+      "2026-06-04",
+      "2026-06-05",
+      "2026-06-08",
+      "2026-06-09",
+      "2026-06-10",
+      "2026-06-11",
+      "2026-06-12",
+      "2026-06-15",
+      "2026-06-16",
+      "2026-06-17",
+      "2026-06-18",
+      "2026-06-19",
+      "2026-06-22",
+      "2026-06-23",
+      "2026-06-24",
+      "2026-06-25",
+      "2026-06-29",
+      "2026-06-30",
+      "2026-07-01",
+      "2026-07-02",
+      "2026-07-03",
+      "2026-07-06",
+      "2026-07-07",
+      "2026-07-08",
+      "2026-07-09",
+      "2026-07-10",
+      "2026-07-13",
+      "2026-07-14",
+      "2026-07-15",
+      "2026-07-16",
+      "2026-07-17",
+      "2026-07-20",
+      "2026-07-21",
+      "2026-07-22"
+    ],
+    "session_count": 41,
+    "checksum": "09673a3dc182a3677df14ec3c610b427154243a9676f3c79facd4ba563b3729e",
+    "generation_timestamp": "2026-07-23T00:00:00",
+    "schema_version": "1.0.0"
+  },
+  "corpus_expansion_factor_vs_campaign_v2": 3.1538461538461537,
+  "validation": {
+    "total": 41,
+    "valid": 41,
+    "invalid": 0,
+    "invalid_details": []
+  },
+  "missing_field_analysis": {
+    "spot_missing": 0,
+    "option_chain_missing": 0,
+    "option_oi_missing": 41,
+    "option_bid_ask_missing": 41,
+    "vix_missing": 41,
+    "certification_missing": 41
+  },
+  "qualification_dry_run": {
+    "total_replay_sessions": 41,
+    "outcome_distribution": {
+      "FAILED": 39,
+      "COMPLETED": 2
+    },
+    "strategy_distribution": {
+      "null": 35,
+      "COVERED_CALL": 4,
+      "IRON_CONDOR": 2
+    },
+    "governance_distribution": {
+      "REJECTED": 41
+    },
+    "market_context_distribution": {
+      "UNKNOWN": 2,
+      "TRENDING_DOWN": 4,
+      "TRANSITION": 30,
+      "TRENDING_UP": 3,
+      "SIDEWAYS": 2
+    },
+    "market_opinion_distribution": {
+      "INSUFFICIENT_EVIDENCE": 8,
+      "BEARISH": 11,
+      "BULLISH": 17,
+      "NEUTRAL": 5
+    },
+    "calibration_distribution": {
+      "INSUFFICIENT_HISTORY": 7,
+      "CALIBRATED": 34
+    },
+    "completed_sessions": [
+      "NIFTY-2026-07-09",
+      "NIFTY-2026-07-16"
+    ],
+    "comparison_vs_campaign_v2": {
+      "campaign_v2_sessions": 13,
+      "campaign_v2_completed": 0,
+      "sprint_b_sessions": 41,
+      "sprint_b_completed": 2,
+      "campaign_v2_calibrated_pct": 30.8,
+      "sprint_b_calibrated_pct": 82.9,
+      "campaign_v2_unknown_context_pct": 15.4,
+      "sprint_b_unknown_context_pct": 4.9
+    }
+  },
+  "governance_quality_improved": false,
+  "live_paper_readiness_improved": "Materially improved but not yet sufficient",
+  "newly_discovered_gaps": [
+    "HistoricalSessionRecord (Series 59) has no field for option OI, bid/ask, or VIX, despite OI and VIX both now confirmed sourceable.",
+    "IRON_CONDOR CONSTRUCTED/DISPATCHED path now proven against real data -- worth dedicated examination given OI/bid-ask blindness.",
+    "Certification/governance wiring gap remains the largest blocker to governance ever leaving REJECTED, confirmed unaffected by corpus size."
+  ],
+  "qualification_fingerprint": {
+    "production_baselines_md5": "2328e0f77ec312eeca318946df293d91",
+    "production_baselines_mtime": "2026-07-20T23:43:00",
+    "unchanged": true
+  },
+  "regression": {
+    "total_tests": 1950,
+    "passed": 1950,
+    "failed": 0,
+    "code_modified": false
+  }
+}

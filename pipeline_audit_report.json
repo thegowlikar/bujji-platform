@@ -1,0 +1,47 @@
+{
+  "architecture_audit": {
+    "stage_boundaries_found": [
+      "execution_decision",
+      "journal_recording_decision",
+      "journal_recording_trade",
+      "market_intelligence",
+      "market_observation",
+      "order_dispatch",
+      "risk_validation",
+      "strategy_evaluation"
+    ],
+    "issues": [],
+    "exception_never_swallowed": true,
+    "all_documented_stages_present": true,
+    "no_undocumented_stages": true
+  },
+  "stage_overhead": {
+    "iterations": 10000,
+    "per_stage_call_overhead_microseconds": 4.758,
+    "seven_stages_per_candle_overhead_microseconds": 33.304,
+    "candle_interval_seconds": 300,
+    "overhead_as_pct_of_candle_interval": 1.11e-05
+  },
+  "replay_scenarios": {
+    "normal_exit": {
+      "final_state": "State.DONE_FOR_DAY",
+      "trade_count": 1
+    },
+    "eod_square_off": {
+      "final_state": "State.DONE_FOR_DAY",
+      "trade_count": 0
+    },
+    "max_trades_gate": {
+      "final_state": "State.DONE_FOR_DAY",
+      "trade_count": 0
+    },
+    "clock_untrusted_gate": {
+      "final_state": "State.READY",
+      "trade_count": 0
+    },
+    "capital_rejection": {
+      "final_state": "State.READY",
+      "trade_count": 0
+    }
+  }
+}

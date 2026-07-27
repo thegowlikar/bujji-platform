@@ -53,7 +53,31 @@ class TimingConfig(BaseModel):
 
 
 class RiskConfig(BaseModel):
-    lots: int = 1
+    # Renamed in role (not in field name, to avoid a config.yaml migration):
+    # this is now the OPERATOR CEILING -- the Capital Management Engine
+    # (bujji/capital/) may approve FEWER lots than this if available margin
+    # does not support it, but will never approve MORE. No strategy module
+    # multiplies this by lot_size directly anymore.
+    lots: int = 1  # configured_max_lots
+    margin_safety_buffer: float = 0.90  # Only this fraction of available
+                                          # margin may be allocated; the rest
+                                          # stays unused headroom.
+    # Capital policy (see bujji/capital/policy.py for the full contract):
+    #   STRICT     -- only a broker-CERTIFIED margin figure may be used;
+    #                  anything uncertified -> no trade. The only policy
+    #                  safe for real capital without also setting
+    #                  margin_provider_certified below.
+    #   ESTIMATED  -- uses estimated_margin_per_lot below (an operator
+    #                  guess, never broker-verified).
+    #   SIMULATION -- uses simulated_margin_per_lot below (pure synthetic,
+    #                  for replay/dev; not tied to any real account).
+    #   CERTIFIED  -- uses the broker's margin calculator AND requires
+    #                  margin_provider_certified: true as a separate,
+    #                  explicit confirmation that a human verified it live.
+    capital_policy: str = "STRICT"
+    estimated_margin_per_lot: Optional[float] = None
+    simulated_margin_per_lot: float = 1_00_000.0
+    margin_provider_certified: bool = False
     max_mtm_loss: float = 6000.0      # Rupees; positive number, treated as loss cap.
     daily_loss_limit: float = 6000.0  # Rupees.
     breakout_body_ratio: float = 0.60  # Body must be >= 60% of range.
@@ -99,9 +123,53 @@ class PathsConfig(BaseModel):
     journal_csv: Path = Path("data/trade_journal.csv")
     database: Path = Path("data/bujji.db")
     state_file: Path = Path("data/session_state.json")
+    # Decision Journal foundation (Sprint 2) -- separate from journal_csv/
+    # database, deliberately: DecisionSnapshots are keyed by decision_id
+    # and joined against the trade journal by a future Learning Layer,
+    # never merged into TradeJournal's own schema.
+    decision_journal: Path = Path("data/decision_journal.jsonl")
+    # Operations Layer (Sprint 4) -- observational only, never read by any
+    # trading decision.
+    ops_restart_count: Path = Path("data/ops_restart_count.json")
+    incident_log: Path = Path("data/incident_log.jsonl")
     # Single-instance guard (F4): a second process pointed at the same lock
     # file refuses to start rather than risk duplicate/conflicting orders.
     lock_file: Path = Path("data/bujji.lock")
+    # Intelligence Observation Journal (Integration Series 2, Sprint 2) --
+    # entirely separate from decision_journal above; never modifies it.
+    intelligence_observation_journal: Path = Path("data/intelligence_observation_journal.jsonl")
+    # Intelligence Evaluation Journal (Integration Series 3, Sprint 1) --
+    # entirely separate from decision_journal and
+    # intelligence_observation_journal above; never modifies either.
+    intelligence_evaluation_journal: Path = Path("data/intelligence_evaluation_journal.jsonl")
+
+
+class IntelligenceAdapterSettings(BaseModel):
+    """Integration Series 1, Sprint 1 -- MIC v2 Intelligence Adapter.
+
+    Strictly observational: reads MIC v2's published Consumer API
+    (a durable JSONL journal) and, when enabled, records a snapshot
+    REFERENCE alongside the existing Decision Journal entry. Never
+    influences entry, exit, qualification, sizing, filtering, risk,
+    execution, or broker communication -- disabled by default, and even
+    when enabled, its only observable effect is three extra id fields
+    on a DecisionJournal row (see bujji/core/orchestrator.py's own
+    `_enter()` and docs/INTELLIGENCE_ADAPTER_ARCHITECTURE.md).
+    """
+    enabled: bool = False
+    mic_v2_root: Path = Path("/opt/bujji-mic-v2")
+    consumer_journal_path: Path = Path("/opt/bujji-mic-v2/qualification_campaign_1/consumer_journal.jsonl")
+    # Continuous Intelligence Observation Framework (Integration Series 2,
+    # Sprint 2) -- purely observational thresholds for the adapter's own
+    # operational health; never read by any decision-making code (see
+    # docs/INTELLIGENCE_OBSERVATION_ARCHITECTURE.md).
+    observation_stale_after_seconds: float = 7 * 24 * 3600.0
+    observation_degraded_latency_seconds: float = 0.5
+    # Real Opinion Source Wiring (Integration Series 4, Sprint 1) --
+    # location of MIC v2's Opinion Journal (Engineering Series 19,
+    # Sprint 1 / Addendum 8). Read-only, never read by any
+    # decision-making code (see docs/OPINION_SOURCE_WIRING_ARCHITECTURE.md).
+    opinion_journal_path: Path = Path("/opt/bujji-mic-v2/qualification_campaign_1/opinion_journal.jsonl")
 
 
 class DashboardConfig(BaseModel):
@@ -127,6 +195,7 @@ class AppConfig(BaseModel):
     broker: BrokerConfig = BrokerConfig()
     paths: PathsConfig = PathsConfig()
     dashboard: DashboardConfig = DashboardConfig()
+    intelligence_adapter: IntelligenceAdapterSettings = IntelligenceAdapterSettings()
     log_level: str = "INFO"
 
     @classmethod

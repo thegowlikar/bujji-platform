@@ -74,10 +74,21 @@ class HealthEngine:
             self._status.ws_last_tick_age_seconds = None
             return
 
-        age = feed.tick_age_seconds(pos.contract.symbol)
+        # A straddle has two legs (CE + PE) — report the STALER of the two,
+        # not just one, or a dead feed on the unreported leg would go
+        # unnoticed while the other leg keeps ticking fine.
+        if pos.ce_contract and pos.pe_contract:
+            symbols = [pos.ce_contract.symbol, pos.pe_contract.symbol]
+        else:
+            symbols = [pos.contract.symbol]
+        ages = [feed.tick_age_seconds(s) for s in symbols]
+        known_ages = [a for a in ages if a is not None]
+        age = max(known_ages) if known_ages else None
+        stale_symbol = symbols[ages.index(age)] if age is not None else None
+
         self._status.ws_last_tick_age_seconds = (
             round(age, 1) if age is not None else None
         )
         if age is not None and age > _STALE_THRESHOLD_SECONDS:
             log_event(self._log, "ws_health_stale_tick",
-                      symbol=pos.contract.symbol, age_seconds=round(age, 1))
+                      symbol=stale_symbol, age_seconds=round(age, 1))

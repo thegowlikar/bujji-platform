@@ -1,0 +1,68 @@
+{
+  "campaign": "Historical Qualification Campaign v1",
+  "engineering_series": 60,
+  "status": "BLOCKED",
+  "blocked_reason": "No historical, point-in-time NIFTY option-chain data source is available in this environment. The connected FYERS MCP tool set exposes only live quote/OHLC endpoints and historical index/equity OHLCV candles (fyers_historical), never a historical or live option-chain endpoint.",
+  "qualification_fingerprint": "2328e0f77ec312eeca318946df293d91",
+  "qualification_fingerprint_file": "/opt/bujji/qualification/baselines.json",
+  "qualification_fingerprint_mtime": "2026-07-20T23:43:00",
+  "qualification_fingerprint_unchanged": true,
+  "runtime_version": {
+    "composition_root": "Engineering Series 54",
+    "health_aggregation": "Engineering Series 55",
+    "circuit_breaker": "Engineering Series 56",
+    "rate_limiter": "Engineering Series 57",
+    "qualification_framework": "Engineering Series 58",
+    "replay_corpus_pipeline": "Engineering Series 59"
+  },
+  "corpus_manifest": {
+    "corpus_id": "CORPUS-7663f6705edcd405",
+    "source_description": "NIFTY 50 index daily candles via FYERS MCP fyers_historical (spot only; no historical option-chain source available)",
+    "trading_dates": [],
+    "session_count": 0,
+    "checksum": "af57c15a4abec64b5e4db71a6b147a217ff95b117499d84566387ded2ecad493",
+    "generation_timestamp": "2026-07-23T00:00:00",
+    "schema_version": "1.0.0"
+  },
+  "ingestion_pipeline_validation": {
+    "total_sessions_attempted": 8,
+    "valid_sessions": 0,
+    "invalid_sessions": 8,
+    "invalid_reason_all": "missing option chain (no entries)",
+    "real_data_source_confirmed": true,
+    "real_data_description": "NIFTY 50 index (NSE:NIFTY 50) daily OHLCV candles, 2026-07-13 through 2026-07-22, fetched via the connected FYERS MCP fyers_historical tool.",
+    "synthetic_data_used": false
+  },
+  "replay_sessions": {
+    "total": 0,
+    "completed": 0,
+    "rejected": 0,
+    "runtime_failures": 0
+  },
+  "health_state_frequencies": {},
+  "circuit_state_frequencies": {},
+  "rate_limit_state_frequencies": {},
+  "insufficient_data_occurrences": 0,
+  "replay_duration_seconds": null,
+  "deterministic_replay_consistency": "not evaluated -- no admitted sessions",
+  "multi_configuration_comparison": {
+    "performed": false,
+    "reason": "A corpus with zero valid sessions produces no operational signal to compare across RateLimiterConfig settings; running the comparison would not reflect realistic conditions."
+  },
+  "live_interaction": {
+    "live_broker_authentication": false,
+    "live_orders_placed": false,
+    "live_order_dispatch_target": "PaperBroker only (unused this campaign -- zero sessions reached the runtime)"
+  },
+  "known_limitations": [
+    "No historical NIFTY option-chain data source is available in this environment.",
+    "The FYERS MCP tool set connected in this session has no option-chain endpoint, historical or live.",
+    "Real NIFTY spot (index) historical data is obtainable and was confirmed working end-to-end through the Series 59 ingestion pipeline."
+  ],
+  "recommendations": [
+    "Do not build further runtime, operational-control, or qualification-framework infrastructure -- Series 31-59 are complete and already verified against synthetic fixtures.",
+    "Source a historical, point-in-time NIFTY option-chain dataset from an authorized provider before re-attempting this campaign.",
+    "Once that source exists, re-run this exact campaign design (Series 60) with no changes required to the ingestion pipeline (Series 59) or campaign tooling built in this sprint.",
+    "Do not recommend proceeding to controlled live qualification (Milestone D) -- no operational evidence was gathered this campaign to support that decision."
+  ]
+}

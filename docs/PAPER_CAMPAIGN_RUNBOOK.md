@@ -1,5 +1,8 @@
 # BUJJI — Paper Campaign Operator Runbook
 
+> **Staleness notice:** this document predates the VWAP Premium Straddle Seller strategy and describes the earlier ORB-VWAP breakout strategy in places. For the current strategy/architecture, see ARCHITECTURE.md; for the current bug/fix history, see AUDIT_LOG.md; for current operational procedures, see OPERATIONS_RUNBOOK.md.
+
+
 Operate BUJJI in `fyers_paper` mode (live FYERS market data, **paper-only
 execution — no real orders can be placed**). Written to be usable with no prior
 project knowledge. Assumes the platform is already installed per

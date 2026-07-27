@@ -263,3 +263,129 @@ async def test_get_open_positions_parses_verified_shape(config, logger):
     assert positions[0]["symbol"] == "NSE:NIFTY25JAN22000CE"
     assert positions[0]["side"] == "SELL"
     assert positions[0]["qty"] == 75
+
+
+@pytest.mark.asyncio
+async def test_get_quote_parses_verified_shape(config, logger):
+    """Regression fixture: shaped exactly like the real live capture used
+    to build the Liquidity Brain (2026-07-20) -- bid/ask/spread under the
+    quote's `v` dict, spread == ask - bid."""
+    broker = RecordingFyers(_creds(config).broker, logger)
+    broker.responses["ltp"] = {
+        "s": "ok",
+        "d": [{"n": "NSE:NIFTY2672124250CE",
+              "v": {"lp": 82.4, "bid": 82.4, "ask": 82.6, "spread": 0.2}}],
+    }
+    contract = OptionContract(symbol="NSE:NIFTY2672124250CE", underlying="NIFTY",
+                              strike=24250, option_type=OptionType.CE,
+                              expiry="2026-07-21", lot_size=65)
+    quote = await broker.get_quote(contract)
+    assert quote == {"bid": 82.4, "ask": 82.6, "spread": 0.2}
+
+
+@pytest.mark.asyncio
+async def test_get_quote_returns_none_when_symbol_not_in_response(config, logger):
+    broker = RecordingFyers(_creds(config).broker, logger)
+    broker.responses["ltp"] = {"s": "ok", "d": []}
+    contract = OptionContract(symbol="NSE:MISSING", underlying="NIFTY", strike=24250,
+                              option_type=OptionType.CE, expiry="2026-07-21", lot_size=65)
+    assert await broker.get_quote(contract) is None
+
+
+@pytest.mark.asyncio
+async def test_get_quote_returns_none_on_crossed_or_zero_quote(config, logger):
+    broker = RecordingFyers(_creds(config).broker, logger)
+    broker.responses["ltp"] = {
+        "s": "ok",
+        "d": [{"n": "NSE:X", "v": {"lp": 0, "bid": 0, "ask": 0}}],
+    }
+    contract = OptionContract(symbol="NSE:X", underlying="NIFTY", strike=24250,
+                              option_type=OptionType.CE, expiry="2026-07-21", lot_size=65)
+    assert await broker.get_quote(contract) is None
+
+
+@pytest.mark.asyncio
+async def test_get_option_chain_parses_the_nested_data_key(config, logger):
+    """Regression test for a real bug caught during live verification: the
+    optionchain endpoint's payload is nested under a top-level "data" key
+    (unlike the plain quotes endpoint, which uses "d" at the top level) --
+    an earlier draft read `data["optionsChain"]` directly and silently got
+    zero strikes back every time. Shaped exactly like the real live capture
+    used to build the Structure Brain (2026-07-20)."""
+    broker = RecordingFyers(_creds(config).broker, logger)
+    broker.responses["optionchain"] = {
+        "s": "ok", "code": 200, "message": "",
+        "data": {
+            "optionsChain": [
+                {"symbol": "NSE:NIFTY50-INDEX", "strike_price": -1, "option_type": "",
+                 "ltp": 24243.1},  # Underlying row -- must be skipped.
+                {"symbol": "NSE:NIFTY2672124100PE", "strike_price": 24100,
+                 "option_type": "PE", "oi": 17299295, "prev_oi": 10241300, "oich": 7057995},
+                {"symbol": "NSE:NIFTY2672124100CE", "strike_price": 24100,
+                 "option_type": "CE", "oi": 3940820, "prev_oi": 2905820, "oich": 1035000},
+            ],
+        },
+    }
+    chain = await broker.get_option_chain("NIFTY", 24243.1, strike_count=3)
+    assert chain == [(24100.0, 3940820.0, 17299295.0)]
+    action, params = broker.calls[0]
+    assert action == "optionchain"
+    assert params["symbol"] == "NSE:NIFTY50-INDEX"
+    assert params["strikecount"] == 3
+
+
+@pytest.mark.asyncio
+async def test_get_option_chain_returns_empty_list_for_no_real_strikes(config, logger):
+    broker = RecordingFyers(_creds(config).broker, logger)
+    broker.responses["optionchain"] = {
+        "s": "ok", "data": {"optionsChain": [
+            {"symbol": "NSE:NIFTY50-INDEX", "strike_price": -1, "option_type": "", "ltp": 24243.1},
+        ]},
+    }
+    chain = await broker.get_option_chain("NIFTY", 24243.1)
+    assert chain == []
+
+
+@pytest.mark.asyncio
+async def test_get_vix_parses_verified_shape(config, logger):
+    """Regression fixture: shaped exactly like the real live capture used
+    to build the Event Brain's VIX half (2026-07-20)."""
+    broker = RecordingFyers(_creds(config).broker, logger)
+    broker.responses["ltp"] = {
+        "s": "ok",
+        "d": [{"n": "NSE:INDIAVIX-INDEX",
+              "v": {"lp": 13.02, "prev_close_price": 13.15}}],
+    }
+    vix = await broker.get_vix()
+    assert vix == {"level": 13.02, "prev_close": 13.15}
+    action, params = broker.calls[0]
+    assert action == "ltp"
+    assert params["symbols"] == "NSE:INDIAVIX-INDEX"
+
+
+@pytest.mark.asyncio
+async def test_get_vix_returns_none_when_symbol_not_in_response(config, logger):
+    broker = RecordingFyers(_creds(config).broker, logger)
+    broker.responses["ltp"] = {"s": "ok", "d": []}
+    assert await broker.get_vix() is None
+
+
+@pytest.mark.asyncio
+async def test_get_vix_returns_none_for_nonpositive_level(config, logger):
+    broker = RecordingFyers(_creds(config).broker, logger)
+    broker.responses["ltp"] = {
+        "s": "ok",
+        "d": [{"n": "NSE:INDIAVIX-INDEX", "v": {"lp": 0, "prev_close_price": 13.15}}],
+    }
+    assert await broker.get_vix() is None
+
+
+@pytest.mark.asyncio
+async def test_get_vix_omits_prev_close_when_nonpositive_or_missing(config, logger):
+    broker = RecordingFyers(_creds(config).broker, logger)
+    broker.responses["ltp"] = {
+        "s": "ok",
+        "d": [{"n": "NSE:INDIAVIX-INDEX", "v": {"lp": 13.02}}],
+    }
+    vix = await broker.get_vix()
+    assert vix == {"level": 13.02}

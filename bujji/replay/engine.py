@@ -63,15 +63,21 @@ def load_candles_csv(path: str | Path) -> list[Candle]:
 class ReplayEngine:
     """Constructs the full live stack over a ReplayBroker and feeds candles."""
 
-    def __init__(self, config: AppConfig, logger: Optional[logging.Logger] = None):
+    def __init__(self, config: AppConfig, logger: Optional[logging.Logger] = None,
+                 broker: Optional[ReplayBroker] = None):
         self._cfg = config
         self._log = logger or logging.getLogger("bujji.replay")
         if not self._log.handlers:
             self._log.addHandler(logging.NullHandler())
-        self._broker = ReplayBroker()
+        # Deterministic capital simulation: pass a ReplayBroker configured
+        # with starting_capital/margin_schedule/lot_size_schedule to make
+        # the Capital Management Engine's sizing decisions exactly
+        # reproducible for this replay run. Defaults to a plain
+        # ReplayBroker() (ample synthetic capital) if not supplied.
+        self._broker = broker or ReplayBroker()
         self._status = RuntimeStatus()
         self._bus = EventBus(self._log)
-        self._journal = TradeJournal(config.paths.journal_csv, config.paths.database)
+        self._journal = TradeJournal(config.paths.journal_csv, config.paths.database, self._log)
         self._store = SessionStore(config.paths.state_file)
         self._orch = Orchestrator(
             config, self._log,

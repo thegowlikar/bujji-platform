@@ -211,3 +211,90 @@ async def test_replay_startup_survives_corrupt_snapshot(config, logger, tmp_path
     await engine2.orchestrator.startup()  # Must not raise.
     assert engine2.orchestrator.state is State.DONE_FOR_DAY
     assert not engine2.orchestrator.has_open_position()
+
+
+# ---------------------------------------------------------------------- #
+# Straddle-specific: exactly one leg present is never a valid snapshot.
+# ---------------------------------------------------------------------- #
+def _valid_ce():
+    return {
+        "symbol": "NIFTY22000CE", "underlying": "NIFTY", "strike": 22000,
+        "option_type": "CE", "expiry": "2026-07-10", "lot_size": 75,
+    }
+
+
+def _valid_pe():
+    return {
+        "symbol": "NIFTY22000PE", "underlying": "NIFTY", "strike": 22000,
+        "option_type": "PE", "expiry": "2026-07-10", "lot_size": 75,
+    }
+
+
+def test_both_legs_absent_is_still_valid_backward_compat():
+    """Neither ce_contract nor pe_contract present at all (the pre-straddle
+    schema) must still parse fine — this is NOT the corruption case."""
+    good = _valid_position_dict()
+    restored = position_from_dict(good)
+    assert restored.ce_contract is None and restored.pe_contract is None
+
+
+def test_both_legs_present_is_valid():
+    good = _valid_position_dict()
+    good["ce_contract"] = _valid_ce()
+    good["pe_contract"] = _valid_pe()
+    restored = position_from_dict(good)
+    assert restored.ce_contract.symbol == "NIFTY22000CE"
+    assert restored.pe_contract.symbol == "NIFTY22000PE"
+
+
+def test_only_ce_leg_present_raises_schema_error():
+    """A straddle snapshot with pe_contract missing/null while ce_contract
+    is present must be treated as corrupt, not silently resumed as a
+    single-leg position — see PROD-AUDIT: Trade Identity & Position
+    Lifecycle. Silently accepting this would resume live management
+    observing only the CE leg's LTP while entry_price/VWAP still assume a
+    combined-premium baseline, and would only buy back the CE leg on exit,
+    permanently orphaning any real PE leg at the broker."""
+    good = _valid_position_dict()
+    good["ce_contract"] = _valid_ce()
+    good["pe_contract"] = None
+    with pytest.raises(PositionSchemaError):
+        position_from_dict(good)
+
+
+def test_only_pe_leg_present_raises_schema_error():
+    good = _valid_position_dict()
+    good["ce_contract"] = None
+    good["pe_contract"] = _valid_pe()
+    with pytest.raises(PositionSchemaError):
+        position_from_dict(good)
+
+
+@pytest.mark.asyncio
+async def test_recovery_treats_one_leg_snapshot_as_orphan_and_flattens_both(
+    config, logger, tmp_path
+):
+    """End-to-end: a one-leg-corrupted snapshot must fall through to the
+    orphan-detection path (broker reconciliation is ground truth) and
+    flatten BOTH real legs the broker actually holds — not resume trusting
+    the half-populated snapshot."""
+    broker = PaperBroker()
+    a, _ = build_orch(config, logger, broker, tmp_path)
+    await a.startup()
+    await _enter_position(a)
+    assert a.state is State.IN_POSITION
+
+    state_path = config.paths.state_file
+    raw = json.loads(state_path.read_text())
+    assert raw["position"]["pe_contract"] is not None
+    raw["position"]["pe_contract"] = None  # Simulate partial corruption.
+    state_path.write_text(json.dumps(raw))
+
+    b, status = build_orch(config, logger, broker, tmp_path)
+    await b.startup()  # Must not raise.
+
+    assert b.state is State.DONE_FOR_DAY
+    assert not b.has_open_position()
+    assert not await broker.get_open_positions()  # BOTH legs truly flattened.
+    assert status.healthy is False
+    assert "corrupt" in (status.health_detail or "")

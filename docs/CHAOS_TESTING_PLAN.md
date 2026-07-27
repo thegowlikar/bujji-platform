@@ -1,5 +1,8 @@
 # Chaos Testing Plan & Failure Playbook
 
+> **Staleness notice:** this document predates the VWAP Premium Straddle Seller strategy and describes the earlier ORB-VWAP breakout strategy in places. For the current strategy/architecture, see ARCHITECTURE.md; for the current bug/fix history, see AUDIT_LOG.md; for current operational procedures, see OPERATIONS_RUNBOOK.md.
+
+
 **Status:** planning document only. No production code is modified in this step.
 **Scope:** operational failure modes for a system trading real capital. This is
 the runbook for "what happens when X breaks," and the test plan to prove it.

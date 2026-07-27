@@ -178,6 +178,47 @@ class ExecutionEngine:
     async def get_spot(self, underlying: str) -> float:
         return await self._with_retry("get_spot", self._broker.get_spot, underlying)
 
+    async def get_option_candles(self, contract, minutes: int, count: int):
+        return await self._with_retry(
+            "get_option_candles", self._broker.get_option_candles,
+            contract, minutes, count,
+        )
+
+    async def get_quote(self, contract):
+        """Best-effort real bid/ask for the Liquidity Brain -- observational
+        only, deliberately NOT run through _with_retry: a stale/missing
+        liquidity reading on the dashboard is harmless, but burning the
+        retry/backoff schedule on a non-critical call would slow down the
+        real trading loop for no benefit. A single failed attempt simply
+        means no quote this cycle -- never raises, never affects trading.
+        """
+        try:
+            return await self._broker.get_quote(contract)
+        except Exception as exc:  # noqa: BLE001 - observational, must never propagate.
+            log_event(self._log, "get_quote_failed", err=str(exc))
+            return None
+
+    async def get_option_chain(self, underlying: str, spot: float, strike_count: int = 5):
+        """Best-effort real option-chain OI for the Structure Brain -- same
+        single-attempt, never-raises discipline as get_quote above.
+        """
+        try:
+            return await self._broker.get_option_chain(underlying, spot, strike_count)
+        except Exception as exc:  # noqa: BLE001 - observational, must never propagate.
+            log_event(self._log, "get_option_chain_failed", err=str(exc))
+            return None
+
+    async def get_vix(self):
+        """Best-effort real India VIX for the Event Brain's VIX half --
+        same single-attempt, never-raises discipline as get_quote/
+        get_option_chain above.
+        """
+        try:
+            return await self._broker.get_vix()
+        except Exception as exc:  # noqa: BLE001 - observational, must never propagate.
+            log_event(self._log, "get_vix_failed", err=str(exc))
+            return None
+
     # ------------------------------------------------------------------ #
     # Reconciliation & recovery
     # ------------------------------------------------------------------ #

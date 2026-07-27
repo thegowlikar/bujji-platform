@@ -143,6 +143,7 @@ class FyersBroker(Broker):
         "historical": "history",
         "place_order": "place_order",
         "cancel_order": "cancel_order",
+        "optionchain": "optionchain",
     }
 
     async def _call(self, action: str, **params: Any) -> dict:
@@ -311,6 +312,48 @@ class FyersBroker(Broker):
         ]
         return candles[-count:] if count else candles
 
+    async def get_option_candles(
+        self, contract: OptionContract, minutes: int, count: int
+    ) -> list[Candle]:
+        """Real per-candle OHLC+volume for a SPECIFIC option contract --
+        used to build a genuine volume-weighted Premium VWAP (as opposed to
+        get_ltp(), which only returns a last-traded-price snapshot with no
+        volume attached at all).
+
+        VERIFIED LIVE 2026-07-19 (during the volume-weighted VWAP design
+        pass): real FYERS ATM option 5-minute candles carry genuine,
+        substantial, non-zero volume throughout the trading day -- e.g. a
+        real NIFTY ATM CE showed 75/75 candles with real volume (2M-12M
+        range) across a full session, zero zero-volume candles. This
+        contradicts get_recent_candles' index-only note above (index
+        QUOTES report volume=0; option candles genuinely do not, at least
+        for ATM strikes) -- see docs/AUDIT_LOG.md.
+        """
+        from datetime import timedelta
+        from ..core.clock import now_ist
+        today = now_ist().date()
+        lookback_days = max(5, (count // 75) + 3)
+        data = await self._call(
+            "historical",
+            symbol=contract.symbol,
+            resolution=str(minutes),
+            date_format="1",
+            range_from=(today - timedelta(days=lookback_days)).isoformat(),
+            range_to=today.isoformat(),
+            cont_flag="1",
+        )
+        self._raise_if_auth_error(data)
+        self._raise_if_error(data, "historical")
+        candles = [
+            Candle(
+                timestamp=epoch_to_ist(row[0]),
+                open=row[1], high=row[2], low=row[3], close=row[4],
+                volume=row[5] if len(row) > 5 else 0.0,
+            )
+            for row in data.get("candles", [])
+        ]
+        return candles[-count:] if count else candles
+
     async def resolve_atm_contract(
         self, underlying, spot, direction, strike_interval, lot_size
     ) -> OptionContract:
@@ -337,6 +380,87 @@ class FyersBroker(Broker):
 
     async def get_ltp(self, contract: OptionContract) -> float:
         return await self._quote(contract.symbol)
+
+    async def get_quote(self, contract: OptionContract) -> Optional[dict]:
+        """LIVE-VERIFIED (2026-07-20, see docs/MARKET_INTELLIGENCE_CORE.md's
+        Liquidity Brain section): the real quotes response's `v` dict
+        includes `bid`, `ask`, `spread`, with `spread == ask - bid`
+        confirmed to hold exactly on real NIFTY weekly ATM CE/PE quotes.
+        Deliberately does NOT use the same response's `volume` field
+        (see the Liquidity Brain's docstring for why -- it returned an
+        implausible per-symbol figure that was never corroborated).
+        """
+        data = await self._call("ltp", symbols=contract.symbol)
+        self._raise_if_auth_error(data)
+        for row in data.get("d", []):
+            if row.get("n") == contract.symbol:
+                v = row.get("v", {})
+                bid, ask = v.get("bid"), v.get("ask")
+                if bid is None or ask is None or bid <= 0 or ask <= 0:
+                    return None
+                spread = v.get("spread")
+                return {
+                    "bid": float(bid), "ask": float(ask),
+                    "spread": float(spread) if spread is not None else float(ask) - float(bid),
+                }
+        return None
+
+    async def get_vix(self) -> Optional[dict]:
+        """LIVE-VERIFIED (2026-07-20, see docs/MARKET_INTELLIGENCE_CORE.md's
+        Event Brain section): NSE:INDIAVIX-INDEX is a real, live-quotable
+        symbol via the same 'quotes' endpoint get_quote() uses -- confirmed
+        live with lp=13.02, prev_close_price=13.15, a plausible historical
+        India VIX level. Uses the same 'ltp' action/symbol-list response
+        shape already verified for get_spot()/_quote().
+        """
+        data = await self._call("ltp", symbols="NSE:INDIAVIX-INDEX")
+        self._raise_if_auth_error(data)
+        for row in data.get("d", []):
+            if row.get("n") == "NSE:INDIAVIX-INDEX":
+                v = row.get("v", {})
+                level, prev_close = v.get("lp"), v.get("prev_close_price")
+                if level is None or level <= 0:
+                    return None
+                result = {"level": float(level)}
+                if prev_close is not None and prev_close > 0:
+                    result["prev_close"] = float(prev_close)
+                return result
+        return None
+
+    async def get_option_chain(
+        self, underlying: str, spot: float, strike_count: int = 5
+    ) -> Optional[list[tuple[float, float, float]]]:
+        """LIVE-VERIFIED (2026-07-20, see docs/MARKET_INTELLIGENCE_CORE.md's
+        Structure Brain section): the real `optionchain` endpoint (distinct
+        from the plain `quotes` call `get_quote` uses above) returns
+        per-strike `oi`/`prev_oi`/`oich` for both CE and PE, with
+        `oich == oi - prev_oi` confirmed to hold exactly on real NIFTY
+        strikes -- genuine, internally consistent open interest.
+        """
+        data = await self._call(
+            "optionchain", symbol=_index_symbol(underlying),
+            strikecount=strike_count, timestamp="",
+        )
+        self._raise_if_auth_error(data)
+        self._raise_if_error(data, "optionchain")
+        # Verified live (2026-07-20): unlike the plain `quotes` endpoint
+        # (which nests its list under "d"), `optionchain`'s payload is
+        # nested under a top-level "data" key -- confirmed by direct
+        # inspection of the raw response, not assumed from the SDK docstring.
+        rows = data.get("data", {}).get("optionsChain", [])
+        by_strike: dict[float, dict[str, float]] = {}
+        for row in rows:
+            strike = row.get("strike_price")
+            opt_type = row.get("option_type")
+            oi = row.get("oi")
+            if strike is None or strike < 0 or opt_type not in ("CE", "PE") or oi is None:
+                continue  # Skips the underlying/VIX rows (strike_price=-1, option_type="").
+            entry = by_strike.setdefault(float(strike), {})
+            entry["ce_oi" if opt_type == "CE" else "pe_oi"] = float(oi)
+        return [
+            (strike, values.get("ce_oi", 0.0), values.get("pe_oi", 0.0))
+            for strike, values in sorted(by_strike.items())
+        ]
 
     async def place_order(self, request: OrderRequest) -> OrderResult:
         # C3 IDEMPOTENCY REQUIREMENT: the ExecutionEngine guarantees at-most-once
@@ -432,6 +556,155 @@ class FyersBroker(Broker):
                 "avg_price": p.get("netAvg", p.get("avgPrice", 0.0)),
             })
         return normalized
+
+    async def get_funds(self) -> Optional[dict]:
+        """Account funds snapshot for the Capital Management Engine.
+
+        ✅ LIVE-CERTIFIED 2026-07-19 against a real FYERS account (see
+        docs/CAPITAL_MANAGEMENT_ENGINE.md). The real "fund_limit" row
+        titles, confirmed live (NOT the guessed "Clear Cash" this method
+        used before certification -- the actual title is "Clear Balance"):
+
+            id=1  "Total Balance"              -> account_equity
+            id=2  "Utilized Amount"             -> used_margin
+            id=3  "Clear Balance"                -> cash_balance
+            id=4  "Realized Profit and Loss"
+            id=5  "Collaterals"                  -> collateral
+            id=6  "Fund Transfer"
+            id=7  "Receivables"
+            id=8  "Adhoc Limit"
+            id=9  "Limit at start of the day"
+            id=10 "Available Balance"            -> available_funds / available_margin
+
+        `available_exposure`/`peak_margin` have no corresponding row in the
+        real response and remain unmapped (None) rather than guessed.
+        """
+        data = await self._call("funds")
+        try:
+            self._raise_if_auth_error(data)
+        except AuthenticationError:
+            raise
+        if str(data.get("s", "")).lower() != "ok":
+            return None
+        rows = data.get("fund_limit", [])
+        by_title = {str(r.get("title", "")).strip(): r for r in rows if isinstance(r, dict)}
+
+        def _amount(title: str) -> Optional[float]:
+            row = by_title.get(title)
+            if row is None:
+                return None
+            try:
+                return float(row.get("equityAmount"))
+            except (TypeError, ValueError):
+                return None
+
+        return {
+            "account_equity": _amount("Total Balance"),
+            "available_funds": _amount("Available Balance"),
+            "available_margin": _amount("Available Balance"),
+            "cash_balance": _amount("Clear Balance"),
+            "used_margin": _amount("Utilized Amount"),
+            "collateral": _amount("Collaterals"),
+            # available_exposure/peak_margin: no corresponding row in the
+            # real, live-verified response -- left unmapped (None) rather
+            # than guessed.
+        }
+
+    async def get_order_margin(self, ce_contract: OptionContract,
+                               pe_contract: OptionContract) -> Optional[dict]:
+        """Broker-quoted margin required for one lot of this exact CE+PE
+        straddle.
+
+        ✅ LIVE-CERTIFIED 2026-07-19 against a real FYERS account (see
+        docs/CAPITAL_MANAGEMENT_ENGINE.md, "span_margin Live Certification"
+        section, for the full raw request/response evidence and
+        docs/AUDIT_LOG.md Pass 8). Endpoint, auth, request schema, response
+        schema, multi-leg hedging benefit, error codes, and repeatability
+        were all independently verified with real API calls, not
+        documentation or community reports.
+
+            POST https://api.fyers.in/api/v2/span_margin
+            Header: Authorization: "{app_id}:{access_token}"
+            Body:   {"data": [{"symbol", "qty", "side" (1=buy/-1=sell),
+                              "type" (2=market), "productType"
+                              ("INTRADAY"), "limitPrice", "stopLoss"}, ...]}
+
+        VERIFIED response shape (the figures are nested under "data" — this
+        was WRONG in the pre-certification implementation, which read
+        top-level "total"/"span" keys that do not exist; that bug is what
+        this fix corrects):
+
+            {"code": 200, "message": "", "s": "ok", "latency": "",
+             "data": {"span": <float>, "expo": <float>, "total": <float>,
+                     "benefit": <float>},
+             "individual_info": {"<internal_id>": {"ltp_info", "span",
+                                                    "expo", "total"}, ...}}
+
+        VERIFIED error responses:
+            invalid symbol      -> HTTP 400, {"s":"error","code":-310,
+                                   "message":"Please provide valid symbols"}
+            malformed payload   -> HTTP 400, {"s":"error","code":-50,
+                                   "message":"Invalid input"}
+            invalid/expired auth-> HTTP 401, {"s":"error","code":-17,
+                                   "message":"Could not authenticate the user"}
+
+        VERIFIED: `data.total` for a real CE+PE short straddle correctly
+        reflects the exchange's SPAN hedging benefit — combined margin was
+        barely above a single leg's margin (not additive), with `benefit`
+        showing the exact SPAN credit applied. Two identical back-to-back
+        calls returned byte-identical responses (deterministic).
+
+        `verified` is still returned as False here — certification is a
+        human, config-level decision (`bujji.capital.providers
+        .CertifiedBrokerMarginProvider`, gated by
+        `risk.margin_provider_certified: true`), never automatic inside the
+        broker adapter itself, even after this live verification.
+        """
+        import asyncio as _asyncio
+        import requests as _requests
+
+        def _call_span_margin() -> dict:
+            payload = {"data": [
+                {
+                    "symbol": ce_contract.symbol, "qty": ce_contract.lot_size,
+                    "side": -1, "type": 2, "productType": "INTRADAY",
+                    "limitPrice": 0, "stopLoss": 0,
+                },
+                {
+                    "symbol": pe_contract.symbol, "qty": pe_contract.lot_size,
+                    "side": -1, "type": 2, "productType": "INTRADAY",
+                    "limitPrice": 0, "stopLoss": 0,
+                },
+            ]}
+            headers = {"Authorization": f"{self._cfg.app_id}:{self._cfg.access_token}"}
+            resp = _requests.post(
+                "https://api.fyers.in/api/v2/span_margin",
+                json=payload, headers=headers, timeout=15.0,
+            )
+            return resp.json()
+
+        try:
+            response = await _asyncio.to_thread(_call_span_margin)
+        except Exception as exc:  # noqa: BLE001 - network/transport failure.
+            self._log.warning("fyers_span_margin_call_failed", extra={"data": {"err": str(exc)}})
+            return None
+
+        if str(response.get("s", "")).lower() != "ok":
+            self._log.warning("fyers_span_margin_error_response",
+                              extra={"data": {"response": response}})
+            return None
+        try:
+            total_for_both_legs = float(response["data"]["total"])
+        except (KeyError, TypeError, ValueError):
+            self._log.warning("fyers_span_margin_unexpected_shape",
+                              extra={"data": {"response": response}})
+            return None
+        return {
+            "margin_per_lot": total_for_both_legs,
+            "verified": False,  # Certification promotion happens at the
+                                 # provider tier, not here — see docstring.
+            "source": "fyers_span_margin",
+        }
 
     def _map_order(self, client_order_id: str, data: dict) -> OrderResult:
         status = _ORDER_STATUS_MAP.get(data.get("status"), OrderStatus.UNKNOWN)

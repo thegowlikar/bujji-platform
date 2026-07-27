@@ -14,6 +14,8 @@ from typing import Optional
 from .broker.errors import AuthenticationError
 from .broker.factory import build_broker
 from .broker.fyers_ws import FyersTickFeed
+from .capital.engine import CapitalManagementEngine
+from .capital.policy import CapitalPolicy, build_margin_provider
 from .core.banner import render_startup_banner
 from .core.clock import ClockGuard, now_ist
 from .core.config import AppConfig
@@ -61,12 +63,32 @@ class Application:
         self._exec = ExecutionEngine(broker, config, self._log)
         self._signal = SignalEngine(config, self._log)
         self._trade = TradeManager(config, self._log)
-        self._journal = TradeJournal(config.paths.journal_csv, config.paths.database)
+        self._journal = TradeJournal(config.paths.journal_csv, config.paths.database, self._log)
         self._store = SessionStore(config.paths.state_file)
         self._bus = EventBus(self._log)
+        # Capital Management Engine: policy is an EXPLICIT, environment-
+        # level decision made HERE, at the real composition root -- never
+        # inferred from the broker name or hidden inside Orchestrator's own
+        # (deliberately conservative, backward-compatible) default
+        # construction. See docs/CAPITAL_MANAGEMENT_ENGINE.md.
+        capital_policy = CapitalPolicy(config.risk.capital_policy)
+        margin_provider = build_margin_provider(
+            capital_policy, broker, self._log,
+            estimated_margin_per_lot=config.risk.estimated_margin_per_lot,
+            simulated_margin_per_lot=config.risk.simulated_margin_per_lot,
+            margin_provider_certified=config.risk.margin_provider_certified,
+        )
+        self._capital = CapitalManagementEngine(
+            broker, self._log,
+            safety_buffer=config.risk.margin_safety_buffer,
+            configured_max_lots=config.risk.lots,
+            margin_provider=margin_provider,
+            require_verified_margin=capital_policy in (CapitalPolicy.STRICT, CapitalPolicy.CERTIFIED),
+        )
         self._orch = Orchestrator(
             config, self._log, self._signal, self._trade, self._exec,
             self._journal, self._store, self._status, self._bus,
+            capital_engine=self._capital,
         )
 
         # Tick/Health Engines: separate from candle-driven Signal Engine by
@@ -216,7 +238,7 @@ class Application:
                 # classified here so an auth failure during candle fetch is
                 # never mistaken for a generic/transient error.
                 candles = await self._exec._broker.get_recent_candles(  # noqa: SLF001
-                    self._cfg.market.underlying, minutes, 1
+                    self._cfg.market.underlying, minutes, 2
                 )
             except AuthenticationError as exc:
                 self._log.critical("auth_expired_candle_fetch: %s", exc)
@@ -231,7 +253,7 @@ class Application:
 
             if candles:
                 try:
-                    await self._orch.on_candle(candles[-1])
+                    await self._orch.on_candle(candles[-2])
                 except AuthenticationError as exc:
                     # Defense-in-depth: the orchestrator already handles this
                     # internally on every broker-calling path; this guards
@@ -269,7 +291,7 @@ class Application:
 def main() -> None:
     import argparse
 
-    parser = argparse.ArgumentParser(description="Bujji ORB-VWAP ATM Seller")
+    parser = argparse.ArgumentParser(description="Bujji VWAP Premium Straddle Seller")
     parser.add_argument("--config", default="config/config.yaml")
     args = parser.parse_args()
     config = AppConfig.load(args.config)

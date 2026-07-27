@@ -97,6 +97,38 @@ class HybridPaperBroker(Broker):
     async def get_ltp(self, contract: OptionContract) -> float:
         return await self._live_data.get_ltp(contract)
 
+    async def get_option_candles(self, contract: OptionContract, minutes: int,
+                                 count: int):
+        # Read-only market data -- delegates to the live leg, same pattern
+        # as get_ltp/resolve_atm_contract/get_funds above.
+        return await self._live_data.get_option_candles(contract, minutes, count)
+
+    async def get_funds(self):
+        # Read-only data query -- delegates to the live leg exactly like
+        # get_ltp/resolve_atm_contract. fyers_paper mode therefore shares
+        # the SAME funds-mapping limitations as full live mode (see
+        # FyersBroker.get_funds's docstring) -- correctly, since this is
+        # genuinely live account data either way, not paper-simulated.
+        return await self._live_data.get_funds()
+
+    async def get_order_margin(self, ce_contract, pe_contract):
+        return await self._live_data.get_order_margin(ce_contract, pe_contract)
+
+    async def get_quote(self, contract: OptionContract):
+        # Read-only market data -- delegates to the live leg, same pattern
+        # as get_ltp/get_funds above. Feeds the Liquidity Brain's dashboard
+        # card in fyers_paper mode with genuine live bid/ask.
+        return await self._live_data.get_quote(contract)
+
+    async def get_option_chain(self, underlying: str, spot: float, strike_count: int = 5):
+        return await self._live_data.get_option_chain(underlying, spot, strike_count)
+
+    async def get_vix(self):
+        # Read-only market data -- delegates to the live leg, same pattern
+        # as get_quote/get_option_chain above. Feeds the Event Brain's
+        # VIX half in fyers_paper mode with genuine live India VIX.
+        return await self._live_data.get_vix()
+
     # ------------------------------------------------------------------ #
     # Execution — every method delegates EXCLUSIVELY to the paper ledger.
     # `self._live_data` is never referenced below, by construction.

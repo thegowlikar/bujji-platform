@@ -29,6 +29,7 @@ class Direction(str, Enum):
 
     BULLISH = "BULLISH"  # Sell ATM Put.
     BEARISH = "BEARISH"  # Sell ATM Call.
+    NEUTRAL = "NEUTRAL"  # Straddle — both CE and PE sold.
 
 
 class OptionType(str, Enum):
@@ -49,6 +50,7 @@ class SignalType(str, Enum):
     """Output of the Signal Engine."""
 
     ENTER_LONG_PREMIUM_SELL = "ENTER_LONG_PREMIUM_SELL"
+    ENTER_STRADDLE = "ENTER_STRADDLE"
     NO_TRADE = "NO_TRADE"
 
 

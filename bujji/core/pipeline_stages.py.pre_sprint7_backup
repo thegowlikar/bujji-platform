@@ -1,0 +1,59 @@
+"""BUJJI Options OS — Decision Pipeline stage instrumentation.
+
+Production Engineering Sprint 1 (Decision Pipeline Refactor, Zero
+Behavioural Change): this module adds ONLY observability around the
+seven documented pipeline stages --
+
+    1. Market Observation
+    2. Market Intelligence
+    3. Strategy Evaluation
+    4. Risk Validation
+    5. Execution Decision
+    6. Order Dispatch
+    7. Journal Recording
+
+It contains NO trading logic, NO decision logic, and NO control-flow
+change. `stage()` is a context manager that logs start/finish/duration/
+outcome/failure_reason around a block of EXISTING code, left in its
+original place and order in orchestrator.py -- it never runs code, never
+short-circuits a candle, and never suppresses an exception (any raised
+exception is logged with outcome="error" and then re-raised unchanged,
+so every existing try/except in orchestrator.py sees exactly the same
+exception it always did).
+
+See docs/PIPELINE_STAGES.md for the full stage-by-stage mapping to the
+existing code this wraps.
+"""
+from __future__ import annotations
+
+import logging
+import time
+from contextlib import contextmanager
+from typing import Any, Iterator
+
+from .logging_setup import log_event
+
+
+@contextmanager
+def stage(logger: logging.Logger, name: str, **context: Any) -> Iterator[None]:
+    """Logs pipeline_stage_start / pipeline_stage_finish around a block.
+
+    On success: pipeline_stage_finish with outcome="ok" and duration_ms.
+    On exception: pipeline_stage_finish with outcome="error",
+    failure_reason=str(exc), and duration_ms -- then the exception is
+    re-raised unmodified. Never swallows, never alters, never delays
+    beyond the block's own natural execution time.
+    """
+    log_event(logger, "pipeline_stage_start", stage=name, **context)
+    start = time.perf_counter()
+    try:
+        yield
+    except Exception as exc:
+        duration_ms = round((time.perf_counter() - start) * 1000, 3)
+        log_event(logger, "pipeline_stage_finish", stage=name, outcome="error",
+                  failure_reason=str(exc), duration_ms=duration_ms, **context)
+        raise
+    else:
+        duration_ms = round((time.perf_counter() - start) * 1000, 3)
+        log_event(logger, "pipeline_stage_finish", stage=name, outcome="ok",
+                  duration_ms=duration_ms, **context)

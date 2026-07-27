@@ -1,5 +1,8 @@
 # Paper Trading Mode — Live Data, Paper Execution (Composite Broker)
 
+> **Staleness notice:** this document predates the VWAP Premium Straddle Seller strategy and describes the earlier ORB-VWAP breakout strategy in places. For the current strategy/architecture, see ARCHITECTURE.md; for the current bug/fix history, see AUDIT_LOG.md; for current operational procedures, see OPERATIONS_RUNBOOK.md.
+
+
 **Status: implemented, and the default operating mode** (`broker.name:
 fyers_paper` in `config/config.yaml`). This is an essential validation
 capability, not a strategy enhancement — it lets the bot run against real

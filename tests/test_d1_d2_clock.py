@@ -146,8 +146,8 @@ async def test_clock_distrust_does_not_affect_existing_position(config, logger, 
     assert orch.has_open_position()
 
     orch.set_clock_trust(False, "simulated drift")
-    # A candle that would trigger an exit (loses VWAP) must still be honored.
-    await orch.on_candle(c(9, 25, 22078, 22079, 21950, 21951, vol=1000))
+    # Hard exit at 15:05 must still fire even with clock distrust.
+    await orch.on_candle(c(15, 5, 22000, 22010, 21990, 22005, vol=1000))
 
     assert orch.state is State.DONE_FOR_DAY
     assert not orch.has_open_position()    # Exit was NOT blocked by distrust.

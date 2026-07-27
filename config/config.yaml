@@ -20,11 +20,40 @@ timing:
   orb_start: "09:15"
   orb_end: "09:20"
   trading_start: "09:20"
-  trading_end: "15:15"
-  hard_exit: "15:15"
+  trading_end: "15:05"
+  hard_exit: "15:05"
 
 risk:
+  # This is now a CEILING, not a fixed quantity -- the Capital Management
+  # Engine (bujji/capital/) may approve FEWER lots than this if available
+  # broker margin does not support it, but will never approve more. See
+  # docs/CAPITAL_MANAGEMENT_ENGINE.md.
   lots: 1
+  # Only this fraction of available broker margin may be allocated to a
+  # trade; the rest stays unused headroom. 0.90 = use at most 90%.
+  margin_safety_buffer: 0.90
+  # Capital policy -- see docs/CAPITAL_MANAGEMENT_ENGINE.md for the full
+  # contract. Current setting (STRICT) means: no trade will be placed
+  # unless a broker-CERTIFIED margin figure is available. As of this
+  # writing FYERS's margin-calculator endpoint is UNCERTIFIED in this
+  # codebase (see AUDIT_LOG.md) -- so with STRICT + fyers_paper, entries
+  # will be blocked until either (a) the endpoint is live-verified and
+  # margin_provider_certified is set true below, or (b) this is
+  # deliberately relaxed to ESTIMATED or SIMULATION for paper trading.
+  #   STRICT     -- only certified broker margin; safest, blocks otherwise.
+  #   ESTIMATED  -- uses estimated_margin_per_lot below (operator guess).
+  #   SIMULATION -- uses simulated_margin_per_lot below (synthetic; replay/dev).
+  #   CERTIFIED  -- broker margin calculator; ALSO requires
+  #                 margin_provider_certified: true below.
+  #
+  # LIVE-CERTIFIED 2026-07-19 against a real FYERS account -- see
+  # docs/AUDIT_LOG.md Pass 8 and docs/CAPITAL_MANAGEMENT_ENGINE.md for the
+  # full raw request/response evidence, error-code behavior, multi-leg
+  # hedging-benefit verification, and repeatability proof.
+  capital_policy: CERTIFIED
+  # estimated_margin_per_lot: 130000   # required if capital_policy: ESTIMATED
+  simulated_margin_per_lot: 100000
+  margin_provider_certified: true
   max_mtm_loss: 6000
   daily_loss_limit: 6000
   breakout_body_ratio: 0.60

@@ -38,20 +38,6 @@ def test_fallback_when_explicitly_enabled():
     assert abs(vt.value - 105.0) < 1e-6
 
 
-def test_engine_refuses_trade_without_real_vwap(config, logger):
-    config.market.vwap_equal_weight_fallback = False
-    eng = SignalEngine(config, logger)
-    # Zero-volume candles: ORB builds, but a breakout must NOT signal.
-    eng.on_candle(c(9, 15, 100, 110, 90, 105, vol=0))
-    sig = eng.on_candle(c(9, 20, 111, 130, 110, 129, vol=0))
-    assert sig.type is SignalType.NO_TRADE
-    assert sig.reason == "vwap_not_ready"
-
-
-def test_engine_trades_with_real_volume(config, logger):
-    config.market.vwap_equal_weight_fallback = False
-    eng = SignalEngine(config, logger)
-    eng.on_candle(c(9, 15, 100, 110, 90, 105, vol=1000))
-    sig = eng.on_candle(c(9, 20, 111, 130, 110, 129, vol=1000))
-    assert sig.is_trade
-    assert eng.vwap_is_real
+# Engine-level VWAP guard tests removed — the new straddle strategy enters
+# unconditionally at 09:20 and does not gate on index VWAP.  Premium VWAP
+# (equal-weight, no volume) is tested in test_trade_manager.py instead.

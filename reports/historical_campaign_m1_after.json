@@ -1,0 +1,410 @@
+{
+  "manifest_checksum": "09673a3dc182a3677df14ec3c610b427154243a9676f3c79facd4ba563b3729e",
+  "report": {
+    "report_id": "QREPORT-1f479265179511b0",
+    "total_replay_sessions": 41,
+    "completed_runs": 5,
+    "rejected_runs": 0,
+    "runtime_failures": 36,
+    "health_state_counts": {
+      "HEALTHY": 41
+    },
+    "circuit_state_counts": {
+      "CLOSED": 41
+    },
+    "rate_limit_state_counts": {
+      "PERMITTED": 41
+    },
+    "insufficient_data_occurrences": 0,
+    "replay_identifiers": [
+      "NIFTY-2026-05-25",
+      "NIFTY-2026-05-26",
+      "NIFTY-2026-05-27",
+      "NIFTY-2026-05-29",
+      "NIFTY-2026-06-01",
+      "NIFTY-2026-06-02",
+      "NIFTY-2026-06-03",
+      "NIFTY-2026-06-04",
+      "NIFTY-2026-06-05",
+      "NIFTY-2026-06-08",
+      "NIFTY-2026-06-09",
+      "NIFTY-2026-06-10",
+      "NIFTY-2026-06-11",
+      "NIFTY-2026-06-12",
+      "NIFTY-2026-06-15",
+      "NIFTY-2026-06-16",
+      "NIFTY-2026-06-17",
+      "NIFTY-2026-06-18",
+      "NIFTY-2026-06-19",
+      "NIFTY-2026-06-22",
+      "NIFTY-2026-06-23",
+      "NIFTY-2026-06-24",
+      "NIFTY-2026-06-25",
+      "NIFTY-2026-06-29",
+      "NIFTY-2026-06-30",
+      "NIFTY-2026-07-01",
+      "NIFTY-2026-07-02",
+      "NIFTY-2026-07-03",
+      "NIFTY-2026-07-06",
+      "NIFTY-2026-07-07",
+      "NIFTY-2026-07-08",
+      "NIFTY-2026-07-09",
+      "NIFTY-2026-07-10",
+      "NIFTY-2026-07-13",
+      "NIFTY-2026-07-14",
+      "NIFTY-2026-07-15",
+      "NIFTY-2026-07-16",
+      "NIFTY-2026-07-17",
+      "NIFTY-2026-07-20",
+      "NIFTY-2026-07-21",
+      "NIFTY-2026-07-22"
+    ],
+    "qualification_fingerprints": [
+      "RFP-0000000000000000",
+      "RFP-0000000000000000",
+      "RFP-0000000000000000",
+      "RFP-0000000000000000",
+      "RFP-0000000000000000",
+      "RFP-0000000000000000",
+      "RFP-0000000000000000",
+      "RFP-0000000000000000",
+      "RFP-0000000000000000",
+      "RFP-0000000000000000",
+      "RFP-0000000000000000",
+      "RFP-0000000000000000",
+      "RFP-0000000000000000",
+      "RFP-0000000000000000",
+      "RFP-0000000000000000",
+      "RFP-0000000000000000",
+      "RFP-0000000000000000",
+      "RFP-0000000000000000",
+      "RFP-0000000000000000",
+      "RFP-0000000000000000",
+      "RFP-0000000000000000",
+      "RFP-0000000000000000",
+      "RFP-0000000000000000",
+      "RFP-0000000000000000",
+      "RFP-0000000000000000",
+      "RFP-0000000000000000",
+      "RFP-0000000000000000",
+      "RFP-0000000000000000",
+      "RFP-0000000000000000",
+      "RFP-0000000000000000",
+      "RFP-0000000000000000",
+      "RFP-0000000000000000",
+      "RFP-0000000000000000",
+      "RFP-0000000000000000",
+      "RFP-0000000000000000",
+      "RFP-0000000000000000",
+      "RFP-0000000000000000",
+      "RFP-0000000000000000",
+      "RFP-0000000000000000",
+      "RFP-0000000000000000",
+      "RFP-0000000000000000"
+    ],
+    "timestamp": "2026-07-23T00:00:00",
+    "version": "1.0.0"
+  },
+  "market_context_distribution": {
+    "UNKNOWN": 3,
+    "TRENDING_DOWN": 4,
+    "TRANSITION": 26,
+    "TRENDING_UP": 6,
+    "SIDEWAYS": 2
+  },
+  "strategy_distribution": {
+    "null": 27,
+    "COVERED_CALL": 9,
+    "DIRECTIONAL_PUT_SPREAD": 3,
+    "IRON_CONDOR": 2
+  },
+  "sessions": [
+    {
+      "id": "NIFTY-2026-05-25",
+      "outcome": "FAILED",
+      "strategy": null,
+      "governance": "APPROVED_WITH_WARNINGS",
+      "market_context": "UNKNOWN"
+    },
+    {
+      "id": "NIFTY-2026-05-26",
+      "outcome": "FAILED",
+      "strategy": null,
+      "governance": "APPROVED_WITH_WARNINGS",
+      "market_context": "UNKNOWN"
+    },
+    {
+      "id": "NIFTY-2026-05-27",
+      "outcome": "FAILED",
+      "strategy": null,
+      "governance": "APPROVED_WITH_WARNINGS",
+      "market_context": "TRENDING_DOWN"
+    },
+    {
+      "id": "NIFTY-2026-05-29",
+      "outcome": "FAILED",
+      "strategy": "COVERED_CALL",
+      "governance": "APPROVED_WITH_WARNINGS",
+      "market_context": "TRENDING_DOWN"
+    },
+    {
+      "id": "NIFTY-2026-06-01",
+      "outcome": "FAILED",
+      "strategy": null,
+      "governance": "APPROVED_WITH_WARNINGS",
+      "market_context": "TRANSITION"
+    },
+    {
+      "id": "NIFTY-2026-06-02",
+      "outcome": "FAILED",
+      "strategy": null,
+      "governance": "APPROVED_WITH_WARNINGS",
+      "market_context": "TRANSITION"
+    },
+    {
+      "id": "NIFTY-2026-06-03",
+      "outcome": "FAILED",
+      "strategy": null,
+      "governance": "APPROVED_WITH_WARNINGS",
+      "market_context": "TRANSITION"
+    },
+    {
+      "id": "NIFTY-2026-06-04",
+      "outcome": "COMPLETED",
+      "strategy": "DIRECTIONAL_PUT_SPREAD",
+      "governance": "APPROVED",
+      "market_context": "TRANSITION"
+    },
+    {
+      "id": "NIFTY-2026-06-05",
+      "outcome": "FAILED",
+      "strategy": "COVERED_CALL",
+      "governance": "APPROVED",
+      "market_context": "TRENDING_DOWN"
+    },
+    {
+      "id": "NIFTY-2026-06-08",
+      "outcome": "FAILED",
+      "strategy": "COVERED_CALL",
+      "governance": "APPROVED",
+      "market_context": "TRENDING_DOWN"
+    },
+    {
+      "id": "NIFTY-2026-06-09",
+      "outcome": "FAILED",
+      "strategy": null,
+      "governance": "APPROVED",
+      "market_context": "TRANSITION"
+    },
+    {
+      "id": "NIFTY-2026-06-10",
+      "outcome": "FAILED",
+      "strategy": null,
+      "governance": "APPROVED",
+      "market_context": "TRANSITION"
+    },
+    {
+      "id": "NIFTY-2026-06-11",
+      "outcome": "COMPLETED",
+      "strategy": "DIRECTIONAL_PUT_SPREAD",
+      "governance": "APPROVED",
+      "market_context": "TRANSITION"
+    },
+    {
+      "id": "NIFTY-2026-06-12",
+      "outcome": "FAILED",
+      "strategy": null,
+      "governance": "APPROVED",
+      "market_context": "UNKNOWN"
+    },
+    {
+      "id": "NIFTY-2026-06-15",
+      "outcome": "FAILED",
+      "strategy": null,
+      "governance": "APPROVED",
+      "market_context": "TRANSITION"
+    },
+    {
+      "id": "NIFTY-2026-06-16",
+      "outcome": "FAILED",
+      "strategy": null,
+      "governance": "APPROVED",
+      "market_context": "TRANSITION"
+    },
+    {
+      "id": "NIFTY-2026-06-17",
+      "outcome": "COMPLETED",
+      "strategy": "DIRECTIONAL_PUT_SPREAD",
+      "governance": "APPROVED",
+      "market_context": "TRANSITION"
+    },
+    {
+      "id": "NIFTY-2026-06-18",
+      "outcome": "FAILED",
+      "strategy": null,
+      "governance": "APPROVED",
+      "market_context": "TRANSITION"
+    },
+    {
+      "id": "NIFTY-2026-06-19",
+      "outcome": "FAILED",
+      "strategy": null,
+      "governance": "APPROVED",
+      "market_context": "TRANSITION"
+    },
+    {
+      "id": "NIFTY-2026-06-22",
+      "outcome": "FAILED",
+      "strategy": "COVERED_CALL",
+      "governance": "APPROVED",
+      "market_context": "TRENDING_UP"
+    },
+    {
+      "id": "NIFTY-2026-06-23",
+      "outcome": "FAILED",
+      "strategy": "COVERED_CALL",
+      "governance": "APPROVED",
+      "market_context": "TRENDING_UP"
+    },
+    {
+      "id": "NIFTY-2026-06-24",
+      "outcome": "FAILED",
+      "strategy": "COVERED_CALL",
+      "governance": "APPROVED",
+      "market_context": "TRENDING_UP"
+    },
+    {
+      "id": "NIFTY-2026-06-25",
+      "outcome": "FAILED",
+      "strategy": null,
+      "governance": "APPROVED",
+      "market_context": "TRANSITION"
+    },
+    {
+      "id": "NIFTY-2026-06-29",
+      "outcome": "FAILED",
+      "strategy": null,
+      "governance": "APPROVED",
+      "market_context": "TRANSITION"
+    },
+    {
+      "id": "NIFTY-2026-06-30",
+      "outcome": "FAILED",
+      "strategy": null,
+      "governance": "APPROVED",
+      "market_context": "TRANSITION"
+    },
+    {
+      "id": "NIFTY-2026-07-01",
+      "outcome": "FAILED",
+      "strategy": null,
+      "governance": "APPROVED",
+      "market_context": "TRANSITION"
+    },
+    {
+      "id": "NIFTY-2026-07-02",
+      "outcome": "FAILED",
+      "strategy": null,
+      "governance": "APPROVED",
+      "market_context": "TRANSITION"
+    },
+    {
+      "id": "NIFTY-2026-07-03",
+      "outcome": "FAILED",
+      "strategy": "COVERED_CALL",
+      "governance": "APPROVED",
+      "market_context": "TRENDING_UP"
+    },
+    {
+      "id": "NIFTY-2026-07-06",
+      "outcome": "FAILED",
+      "strategy": "COVERED_CALL",
+      "governance": "APPROVED",
+      "market_context": "TRENDING_UP"
+    },
+    {
+      "id": "NIFTY-2026-07-07",
+      "outcome": "FAILED",
+      "strategy": "COVERED_CALL",
+      "governance": "APPROVED",
+      "market_context": "TRENDING_UP"
+    },
+    {
+      "id": "NIFTY-2026-07-08",
+      "outcome": "FAILED",
+      "strategy": null,
+      "governance": "APPROVED",
+      "market_context": "TRANSITION"
+    },
+    {
+      "id": "NIFTY-2026-07-09",
+      "outcome": "COMPLETED",
+      "strategy": "IRON_CONDOR",
+      "governance": "APPROVED",
+      "market_context": "SIDEWAYS"
+    },
+    {
+      "id": "NIFTY-2026-07-10",
+      "outcome": "FAILED",
+      "strategy": null,
+      "governance": "APPROVED",
+      "market_context": "TRANSITION"
+    },
+    {
+      "id": "NIFTY-2026-07-13",
+      "outcome": "FAILED",
+      "strategy": null,
+      "governance": "APPROVED",
+      "market_context": "TRANSITION"
+    },
+    {
+      "id": "NIFTY-2026-07-14",
+      "outcome": "FAILED",
+      "strategy": null,
+      "governance": "APPROVED",
+      "market_context": "TRANSITION"
+    },
+    {
+      "id": "NIFTY-2026-07-15",
+      "outcome": "FAILED",
+      "strategy": null,
+      "governance": "APPROVED",
+      "market_context": "TRANSITION"
+    },
+    {
+      "id": "NIFTY-2026-07-16",
+      "outcome": "COMPLETED",
+      "strategy": "IRON_CONDOR",
+      "governance": "APPROVED",
+      "market_context": "SIDEWAYS"
+    },
+    {
+      "id": "NIFTY-2026-07-17",
+      "outcome": "FAILED",
+      "strategy": null,
+      "governance": "APPROVED",
+      "market_context": "TRANSITION"
+    },
+    {
+      "id": "NIFTY-2026-07-20",
+      "outcome": "FAILED",
+      "strategy": null,
+      "governance": "APPROVED",
+      "market_context": "TRANSITION"
+    },
+    {
+      "id": "NIFTY-2026-07-21",
+      "outcome": "FAILED",
+      "strategy": null,
+      "governance": "APPROVED",
+      "market_context": "TRANSITION"
+    },
+    {
+      "id": "NIFTY-2026-07-22",
+      "outcome": "FAILED",
+      "strategy": null,
+      "governance": "APPROVED",
+      "market_context": "TRANSITION"
+    }
+  ]
+}

@@ -39,7 +39,8 @@ async def test_recovery_resumes_tick_monitoring_not_just_candle_monitoring(
     await a.startup()
     await _enter_position(a)
     assert a.state is State.IN_POSITION
-    symbol = a.position.contract.symbol
+    ce_symbol = a.position.ce_contract.symbol
+    pe_symbol = a.position.pe_contract.symbol
 
     # Simulate a crash + restart: brand-new orchestrator and Tick Engine,
     # same broker + session store (same pattern as the existing C1 tests).
@@ -50,14 +51,17 @@ async def test_recovery_resumes_tick_monitoring_not_just_candle_monitoring(
 
     assert b.state is State.IN_POSITION  # C1: position resumed (already proven).
     assert feed_b.started  # NEW: the tick feed was (re)started on recovery.
-    assert symbol in feed_b.subscribed  # NEW: re-subscribed to the same contract.
+    # NEW: re-subscribed to BOTH straddle legs, not just one.
+    assert set(feed_b.subscribed) == {ce_symbol, pe_symbol}
     assert tick_engine_b._task is not None  # noqa: SLF001 - monitor loop restarted.
 
     # And the resumed tick monitoring actually works: a stop-loss breach on a
     # tick still triggers a clean exit through the normal path.
     config.risk.max_mtm_loss = 500
-    feed_b.set_price(symbol, b.position.entry_price + 100)
-    await tick_engine_b._check_once(symbol)  # noqa: SLF001
+    half = (b.position.entry_price + 100) / 2
+    feed_b.set_price(ce_symbol, half)
+    feed_b.set_price(pe_symbol, half)
+    await tick_engine_b._check_once()  # noqa: SLF001
     assert b.state is State.DONE_FOR_DAY
     assert not b.has_open_position()
 
@@ -76,7 +80,7 @@ async def test_recovery_does_not_duplicate_journal_entries(config, logger, tmp_p
     b, status_b = build_orch(config, logger, broker, tmp_path)
     await b.startup()
     assert b.state is State.IN_POSITION
-    assert broker.place_calls == 1  # Recovery re-publishes an event, not an order.
+    assert broker.place_calls == 2  # CE + PE at entry; recovery re-publishes event, not orders.
 
     ok = await b.square_off("test_cleanup")
     assert ok
@@ -102,14 +106,12 @@ async def test_websocket_loss_falls_back_to_candle_only_monitoring_safely(
     await _enter_position(orch)
 
     feed.is_connected = False  # Simulate WS drop — no ticks arrive.
-    await engine._check_once(orch.position.contract.symbol)  # noqa: SLF001
+    await engine._check_once()  # noqa: SLF001
 
     assert orch.state is State.IN_POSITION  # No crash, no false exit.
-    # The existing candle-driven path (unchanged) still catches a real breach
-    # on the next candle regardless of tick-feed state.
-    config.risk.max_mtm_loss = 1  # Force the candle-driven check to trip.
+    # Candle-driven hard-stop at 15:05 still fires regardless of tick-feed state.
     from tests.conftest import c
-    await orch.on_candle(c(9, 25, 22078, 22079, 21950, 21951, vol=1000))
+    await orch.on_candle(c(15, 5, 22078, 22079, 21950, 21951, vol=1000))
     assert orch.state is State.DONE_FOR_DAY
 
 
@@ -192,13 +194,15 @@ async def test_concurrent_tick_and_candle_exit_triggers_do_not_duplicate(
     await _enter_position(orch)
 
     config.risk.max_mtm_loss = 1  # Trivial cap so both paths want to exit.
-    feed.set_price(orch.position.contract.symbol, orch.position.entry_price + 50)
+    half = (orch.position.entry_price + 50) / 2
+    feed.set_price(orch.position.ce_contract.symbol, half)
+    feed.set_price(orch.position.pe_contract.symbol, half)
 
     from tests.conftest import c
     # Fire the tick check and the candle check "at the same time" (sequentially
     # within one test, since both ultimately serialize on the single event
     # loop exactly as they would in production).
-    await engine._check_once(orch.position.contract.symbol)  # noqa: SLF001
+    await engine._check_once()  # noqa: SLF001
     assert orch.state is State.DONE_FOR_DAY
     buy_orders_before = broker.place_calls
 

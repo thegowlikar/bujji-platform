@@ -1,0 +1,479 @@
+{
+  "sprint": "Data Acquisition Sprint C \u2014 Historical Evidence Population",
+  "status": "COMPLETE",
+  "fields_populated": [
+    {
+      "field": "option_chain_liquidity[].open_interest",
+      "source": "NSE official Bhavcopy (OpnIntrst column)"
+    },
+    {
+      "field": "option_chain_liquidity[].change_in_open_interest",
+      "source": "NSE official Bhavcopy (ChngInOpnIntrst column)"
+    },
+    {
+      "field": "session_exchange",
+      "source": "NSE official Bhavcopy (Src column)"
+    },
+    {
+      "field": "session_segment",
+      "source": "NSE official Bhavcopy (Sgmt column)"
+    },
+    {
+      "field": "vix",
+      "source": "FYERS MCP fyers_historical, NSE:INDIAVIX-INDEX"
+    },
+    {
+      "field": "vix_as_of",
+      "source": "Session close timestamp, paired with vix"
+    }
+  ],
+  "fields_deliberately_not_populated": [
+    {
+      "field": "option_chain_liquidity[].bid/.ask",
+      "reason": "No authorized source exists; bhavcopy has no bid/ask column"
+    },
+    {
+      "field": "certification input",
+      "reason": "Not a market-data field; internal BUJJI concept with no external source"
+    }
+  ],
+  "coverage_statistics": {
+    "13_session_corpus": {
+      "oi_total_entries": 21292,
+      "oi_entries_with_value": 21292,
+      "oi_coverage_pct": 100.0,
+      "vix_sessions": 13,
+      "vix_sessions_with_value": 13,
+      "vix_coverage_pct": 100.0
+    },
+    "41_session_corpus": {
+      "oi_total_entries": 70932,
+      "oi_entries_with_value": 70932,
+      "oi_coverage_pct": 100.0,
+      "vix_sessions": 41,
+      "vix_sessions_with_value": 41,
+      "vix_coverage_pct": 100.0
+    }
+  },
+  "missing_value_statistics": {
+    "oi_missing": 0,
+    "vix_missing": 0,
+    "note": "Zero missing values observed across both real corpora (54 trading days total); missing-value handling itself verified separately via unit tests with deliberately incomplete synthetic rows."
+  },
+  "files_modified": [
+    "bujji/replay/option_chain_ingestion.py"
+  ],
+  "files_created": [
+    "tests/test_historical_evidence_population.py",
+    "docs/HISTORICAL_EVIDENCE_POPULATION.md",
+    "reports/historical_evidence_population.md",
+    "reports/historical_evidence_population.json"
+  ],
+  "new_tests": 15,
+  "regression": {
+    "total_tests": 1983,
+    "passed": 1983,
+    "failed": 0
+  },
+  "qualification_fingerprint": {
+    "production_baselines_md5": "2328e0f77ec312eeca318946df293d91",
+    "unchanged": true
+  },
+  "replay_comparison": {
+    "13_session": {
+      "manifest_checksum_unchanged": true,
+      "report_id": "QREPORT-bbe021ca1cfcc16f",
+      "report_id_unchanged": true,
+      "completed_runs": 0
+    },
+    "41_session": {
+      "manifest_checksum_unchanged": true,
+      "report_id": "QREPORT-1f479265179511b0",
+      "report_id_unchanged": true,
+      "completed_runs": 2
+    }
+  },
+  "sessions_13": [
+    {
+      "id": "NIFTY-2026-07-06",
+      "outcome": "FAILED",
+      "strategy": null,
+      "health": "HEALTHY",
+      "market_context": "UNKNOWN"
+    },
+    {
+      "id": "NIFTY-2026-07-07",
+      "outcome": "FAILED",
+      "strategy": null,
+      "health": "HEALTHY",
+      "market_context": "UNKNOWN"
+    },
+    {
+      "id": "NIFTY-2026-07-08",
+      "outcome": "FAILED",
+      "strategy": null,
+      "health": "HEALTHY",
+      "market_context": "TRENDING_DOWN"
+    },
+    {
+      "id": "NIFTY-2026-07-09",
+      "outcome": "FAILED",
+      "strategy": "COVERED_CALL",
+      "health": "HEALTHY",
+      "market_context": "TRENDING_DOWN"
+    },
+    {
+      "id": "NIFTY-2026-07-10",
+      "outcome": "FAILED",
+      "strategy": null,
+      "health": "HEALTHY",
+      "market_context": "TRANSITION"
+    },
+    {
+      "id": "NIFTY-2026-07-13",
+      "outcome": "FAILED",
+      "strategy": null,
+      "health": "HEALTHY",
+      "market_context": "TRANSITION"
+    },
+    {
+      "id": "NIFTY-2026-07-14",
+      "outcome": "FAILED",
+      "strategy": null,
+      "health": "HEALTHY",
+      "market_context": "SIDEWAYS"
+    },
+    {
+      "id": "NIFTY-2026-07-15",
+      "outcome": "FAILED",
+      "strategy": null,
+      "health": "HEALTHY",
+      "market_context": "SIDEWAYS"
+    },
+    {
+      "id": "NIFTY-2026-07-16",
+      "outcome": "FAILED",
+      "strategy": null,
+      "health": "HEALTHY",
+      "market_context": "SIDEWAYS"
+    },
+    {
+      "id": "NIFTY-2026-07-17",
+      "outcome": "FAILED",
+      "strategy": null,
+      "health": "HEALTHY",
+      "market_context": "SIDEWAYS"
+    },
+    {
+      "id": "NIFTY-2026-07-20",
+      "outcome": "FAILED",
+      "strategy": null,
+      "health": "HEALTHY",
+      "market_context": "TRANSITION"
+    },
+    {
+      "id": "NIFTY-2026-07-21",
+      "outcome": "FAILED",
+      "strategy": null,
+      "health": "HEALTHY",
+      "market_context": "TRANSITION"
+    },
+    {
+      "id": "NIFTY-2026-07-22",
+      "outcome": "FAILED",
+      "strategy": null,
+      "health": "HEALTHY",
+      "market_context": "TRANSITION"
+    }
+  ],
+  "sessions_41": [
+    {
+      "id": "NIFTY-2026-05-25",
+      "outcome": "FAILED",
+      "strategy": null,
+      "health": "HEALTHY",
+      "market_context": "UNKNOWN"
+    },
+    {
+      "id": "NIFTY-2026-05-26",
+      "outcome": "FAILED",
+      "strategy": null,
+      "health": "HEALTHY",
+      "market_context": "UNKNOWN"
+    },
+    {
+      "id": "NIFTY-2026-05-27",
+      "outcome": "FAILED",
+      "strategy": null,
+      "health": "HEALTHY",
+      "market_context": "TRENDING_DOWN"
+    },
+    {
+      "id": "NIFTY-2026-05-29",
+      "outcome": "FAILED",
+      "strategy": "COVERED_CALL",
+      "health": "HEALTHY",
+      "market_context": "TRENDING_DOWN"
+    },
+    {
+      "id": "NIFTY-2026-06-01",
+      "outcome": "FAILED",
+      "strategy": null,
+      "health": "HEALTHY",
+      "market_context": "TRANSITION"
+    },
+    {
+      "id": "NIFTY-2026-06-02",
+      "outcome": "FAILED",
+      "strategy": null,
+      "health": "HEALTHY",
+      "market_context": "TRANSITION"
+    },
+    {
+      "id": "NIFTY-2026-06-03",
+      "outcome": "FAILED",
+      "strategy": null,
+      "health": "HEALTHY",
+      "market_context": "TRANSITION"
+    },
+    {
+      "id": "NIFTY-2026-06-04",
+      "outcome": "FAILED",
+      "strategy": null,
+      "health": "HEALTHY",
+      "market_context": "TRANSITION"
+    },
+    {
+      "id": "NIFTY-2026-06-05",
+      "outcome": "FAILED",
+      "strategy": null,
+      "health": "HEALTHY",
+      "market_context": "TRENDING_DOWN"
+    },
+    {
+      "id": "NIFTY-2026-06-08",
+      "outcome": "FAILED",
+      "strategy": null,
+      "health": "HEALTHY",
+      "market_context": "TRENDING_DOWN"
+    },
+    {
+      "id": "NIFTY-2026-06-09",
+      "outcome": "FAILED",
+      "strategy": null,
+      "health": "HEALTHY",
+      "market_context": "TRANSITION"
+    },
+    {
+      "id": "NIFTY-2026-06-10",
+      "outcome": "FAILED",
+      "strategy": null,
+      "health": "HEALTHY",
+      "market_context": "TRANSITION"
+    },
+    {
+      "id": "NIFTY-2026-06-11",
+      "outcome": "FAILED",
+      "strategy": null,
+      "health": "HEALTHY",
+      "market_context": "TRANSITION"
+    },
+    {
+      "id": "NIFTY-2026-06-12",
+      "outcome": "FAILED",
+      "strategy": null,
+      "health": "HEALTHY",
+      "market_context": "TRANSITION"
+    },
+    {
+      "id": "NIFTY-2026-06-15",
+      "outcome": "FAILED",
+      "strategy": null,
+      "health": "HEALTHY",
+      "market_context": "TRANSITION"
+    },
+    {
+      "id": "NIFTY-2026-06-16",
+      "outcome": "FAILED",
+      "strategy": null,
+      "health": "HEALTHY",
+      "market_context": "TRANSITION"
+    },
+    {
+      "id": "NIFTY-2026-06-17",
+      "outcome": "FAILED",
+      "strategy": null,
+      "health": "HEALTHY",
+      "market_context": "TRANSITION"
+    },
+    {
+      "id": "NIFTY-2026-06-18",
+      "outcome": "FAILED",
+      "strategy": null,
+      "health": "HEALTHY",
+      "market_context": "TRANSITION"
+    },
+    {
+      "id": "NIFTY-2026-06-19",
+      "outcome": "FAILED",
+      "strategy": null,
+      "health": "HEALTHY",
+      "market_context": "TRANSITION"
+    },
+    {
+      "id": "NIFTY-2026-06-22",
+      "outcome": "FAILED",
+      "strategy": "COVERED_CALL",
+      "health": "HEALTHY",
+      "market_context": "TRENDING_UP"
+    },
+    {
+      "id": "NIFTY-2026-06-23",
+      "outcome": "FAILED",
+      "strategy": "COVERED_CALL",
+      "health": "HEALTHY",
+      "market_context": "TRENDING_UP"
+    },
+    {
+      "id": "NIFTY-2026-06-24",
+      "outcome": "FAILED",
+      "strategy": "COVERED_CALL",
+      "health": "HEALTHY",
+      "market_context": "TRENDING_UP"
+    },
+    {
+      "id": "NIFTY-2026-06-25",
+      "outcome": "FAILED",
+      "strategy": null,
+      "health": "HEALTHY",
+      "market_context": "TRANSITION"
+    },
+    {
+      "id": "NIFTY-2026-06-29",
+      "outcome": "FAILED",
+      "strategy": null,
+      "health": "HEALTHY",
+      "market_context": "TRANSITION"
+    },
+    {
+      "id": "NIFTY-2026-06-30",
+      "outcome": "FAILED",
+      "strategy": null,
+      "health": "HEALTHY",
+      "market_context": "TRANSITION"
+    },
+    {
+      "id": "NIFTY-2026-07-01",
+      "outcome": "FAILED",
+      "strategy": null,
+      "health": "HEALTHY",
+      "market_context": "TRANSITION"
+    },
+    {
+      "id": "NIFTY-2026-07-02",
+      "outcome": "FAILED",
+      "strategy": null,
+      "health": "HEALTHY",
+      "market_context": "TRANSITION"
+    },
+    {
+      "id": "NIFTY-2026-07-03",
+      "outcome": "FAILED",
+      "strategy": null,
+      "health": "HEALTHY",
+      "market_context": "TRANSITION"
+    },
+    {
+      "id": "NIFTY-2026-07-06",
+      "outcome": "FAILED",
+      "strategy": null,
+      "health": "HEALTHY",
+      "market_context": "TRANSITION"
+    },
+    {
+      "id": "NIFTY-2026-07-07",
+      "outcome": "FAILED",
+      "strategy": null,
+      "health": "HEALTHY",
+      "market_context": "TRANSITION"
+    },
+    {
+      "id": "NIFTY-2026-07-08",
+      "outcome": "FAILED",
+      "strategy": null,
+      "health": "HEALTHY",
+      "market_context": "TRANSITION"
+    },
+    {
+      "id": "NIFTY-2026-07-09",
+      "outcome": "COMPLETED",
+      "strategy": "IRON_CONDOR",
+      "health": "HEALTHY",
+      "market_context": "SIDEWAYS"
+    },
+    {
+      "id": "NIFTY-2026-07-10",
+      "outcome": "FAILED",
+      "strategy": null,
+      "health": "HEALTHY",
+      "market_context": "TRANSITION"
+    },
+    {
+      "id": "NIFTY-2026-07-13",
+      "outcome": "FAILED",
+      "strategy": null,
+      "health": "HEALTHY",
+      "market_context": "TRANSITION"
+    },
+    {
+      "id": "NIFTY-2026-07-14",
+      "outcome": "FAILED",
+      "strategy": null,
+      "health": "HEALTHY",
+      "market_context": "TRANSITION"
+    },
+    {
+      "id": "NIFTY-2026-07-15",
+      "outcome": "FAILED",
+      "strategy": null,
+      "health": "HEALTHY",
+      "market_context": "TRANSITION"
+    },
+    {
+      "id": "NIFTY-2026-07-16",
+      "outcome": "COMPLETED",
+      "strategy": "IRON_CONDOR",
+      "health": "HEALTHY",
+      "market_context": "SIDEWAYS"
+    },
+    {
+      "id": "NIFTY-2026-07-17",
+      "outcome": "FAILED",
+      "strategy": null,
+      "health": "HEALTHY",
+      "market_context": "TRANSITION"
+    },
+    {
+      "id": "NIFTY-2026-07-20",
+      "outcome": "FAILED",
+      "strategy": null,
+      "health": "HEALTHY",
+      "market_context": "TRANSITION"
+    },
+    {
+      "id": "NIFTY-2026-07-21",
+      "outcome": "FAILED",
+      "strategy": null,
+      "health": "HEALTHY",
+      "market_context": "TRANSITION"
+    },
+    {
+      "id": "NIFTY-2026-07-22",
+      "outcome": "FAILED",
+      "strategy": null,
+      "health": "HEALTHY",
+      "market_context": "TRANSITION"
+    }
+  ],
+  "recommendation": "Evidence is real, populated, and proven at 100% coverage across 54 real trading days -- sufficient to justify scoping a future, separately-justified sprint on consuming Option OI and India VIX inside MIC v2. Recommend broadening the coverage window further before that sprint, since a consumption/weighting decision deserves a longer, more market-regime-diverse window than 2.5 months."
+}
