@@ -13,6 +13,20 @@ Verified live (see docs/TICK_ENGINE_READINESS.md): `access_token` must be
 ``{"symbol": ..., "ltp": ..., "type": ...}`` for tradable-instrument ticks
 (other `type` values are connection/subscription acks, not price ticks, and
 are ignored here).
+
+`litemode` (Sprint 114 Day 1 finding, docs/DAY1_LIVE_SESSION_FINDINGS.md):
+defaults to `True`, preserving this class's existing, already-verified
+behavior for every current caller. Read directly in the installed
+`fyers_apiv3` SDK source (`FyersWebsocket/data_ws.py`): for an INDEX
+symbol specifically, lite mode's update path only invokes the message
+callback when the raw LTP value differs from the previously stored one
+-- the *only* field it compares. Full mode compares every field in the
+index payload, including a feed timestamp that changes on nearly every
+real broadcast regardless of whether price moved. A live session on
+2026-07-28 received exactly one real tick all day for `NSE:NIFTY50-INDEX`
+in lite mode -- this parameter exists so an index subscription can opt
+out of lite mode without changing behavior for any other symbol/caller,
+including the legacy production stack's own existing use of this class.
 """
 from __future__ import annotations
 
@@ -28,11 +42,12 @@ class FyersTickFeed:
     """One WebSocket session; thread-safe last-tick store + health counters."""
 
     def __init__(self, app_id: str, access_token: str, logger: logging.Logger,
-                 log_path: str = "logs") -> None:
+                 log_path: str = "logs", litemode: bool = True) -> None:
         self._app_id = app_id
         self._access_token = access_token
         self._log = logger
         self._log_path = log_path
+        self._litemode = litemode
         self._socket: Optional[data_ws.FyersDataSocket] = None
         self._lock = threading.Lock()
         self._ltp: dict[str, float] = {}
@@ -88,7 +103,7 @@ class FyersTickFeed:
         self._socket = data_ws.FyersDataSocket(
             access_token=f"{self._app_id}:{self._access_token}",
             log_path=self._log_path,
-            litemode=True,       # Only need LTP, not full market depth.
+            litemode=self._litemode,
             write_to_file=False,
             reconnect=True,       # SDK's own reconnect loop (verified live).
             on_connect=on_connect,

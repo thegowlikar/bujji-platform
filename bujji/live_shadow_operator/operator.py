@@ -80,7 +80,7 @@ class LiveShadowOperator:
         assert_shadow_safe()
         self._log = logger or logging.getLogger("bujji.live_shadow_operator")
         self._lock = ProcessLock(lock_path)
-        self._journal = OperatorJournal(Path(journal_dir))
+        self._journal = OperatorJournal(Path(journal_dir), logger=self._log)
         self._underlying = underlying
         self._driver: Optional[SessionDriver] = None
         self._portfolio = PortfolioState()
@@ -228,6 +228,7 @@ class LiveShadowOperator:
             api_retry_count=self._rate_limiter.metrics.total_retries,
             api_dropped_requests=self._rate_limiter.metrics.dropped_requests,
             journal_path=str(self._journal._path),
+            journal_failed_writes=self._journal.failed_writes,
         )
 
     # -- Deliverable 7: end-of-day report ----------------------------------

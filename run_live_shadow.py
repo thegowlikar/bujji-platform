@@ -45,8 +45,9 @@ from datetime import date, datetime
 from pathlib import Path
 
 from bujji.live_shadow_operator import LiveShadowOperator, render_shadow_banner
+from bujji.live_shadow_operator.operator import DecisionGenerationPaused
 from bujji.market_calendar import MarketCalendar
-from bujji.core.clock import now_ist
+from bujji.core.clock import now_ist, epoch_to_ist
 
 LOCK_PATH = "data/live_shadow_operator.lock"
 JOURNAL_DIR = "data/live_shadow_journal"
@@ -162,7 +163,7 @@ def _pre_market_checklist(*, bhavcopy_path: str, log: logging.Logger) -> tuple:
         ok = False
         reasons.append("MANDATORY FAIL: broker has no live tick credentials")
         return ok, reasons, {"broker": broker}
-    tick_feed = FyersTickFeed(tick_creds[0], tick_creds[1], log, log_path="logs")
+    tick_feed = FyersTickFeed(tick_creds[0], tick_creds[1], log, log_path="logs", litemode=False)  # Day 1 finding: index lite-mode updates went silent, see docs/DAY1_LIVE_SESSION_FINDINGS.md
     tick_feed.start()
     tick_feed.subscribe([UNDERLYING_SYMBOL])
     deadline = time.monotonic() + 15.0
@@ -248,7 +249,14 @@ def _run_live(args) -> int:
     op.resume_state()
     op.start_session(prior_closes_with_ts=prior_closes)
     op.load_option_chain(bhav_text, day)
-    log.info("session started: chain structure sourced from real EOD Bhavcopy day=%s", day)
+    # Day 1 finding (docs/DAY1_LIVE_SESSION_FINDINGS.md): freshness must
+    # measure how long THIS SESSION has been using its loaded chain, not
+    # the Bhavcopy file's own dated market-close timestamp -- that is
+    # ALWAYS >900s in the past by design (EOD data, no live chain feed
+    # exists), which made option_chain register STALE on the very first
+    # check, every session, independent of tick health entirely.
+    chain_loaded_at = now_ist().replace(tzinfo=None)
+    log.info("session started: chain structure sourced from real EOD Bhavcopy day=%s, loaded_at=%s", day, chain_loaded_at)
 
     last_tick_ts = None
     last_cadence_monotonic = time.monotonic()
@@ -260,7 +268,14 @@ def _run_live(args) -> int:
             price = tick_feed.latest(UNDERLYING_SYMBOL)
             age = tick_feed.tick_age_seconds(UNDERLYING_SYMBOL)
             if price is not None and age is not None:
-                ts_iso = datetime.fromtimestamp(time.time() - age).isoformat(timespec="seconds")
+                # Deep audit finding (2026-07-28): must use epoch_to_ist, never naive
+                # datetime.fromtimestamp -- that interprets the epoch using the HOST's
+                # local timezone, which happens to be IST on this droplet but is a real
+                # redeploy trap (bujji/core/clock.py's own module docstring warns against
+                # this exact pattern). Strip tzinfo after conversion since the rest of this
+                # pipeline (SessionDriver, freshness checks) consistently uses naive IST
+                # timestamps, matching this project's real recorded-data convention.
+                ts_iso = epoch_to_ist(time.time() - age).replace(tzinfo=None).isoformat(timespec="seconds")
                 if ts_iso != last_tick_ts:
                     op.process_tick("NIFTY", ts_iso, price, source="live_websocket")
                     last_tick_ts = ts_iso
@@ -270,7 +285,7 @@ def _run_live(args) -> int:
                 now = now_ist().replace(tzinfo=None)
                 freshness = op.check_freshness(
                     last_tick_timestamp=(datetime.fromisoformat(last_tick_ts) if last_tick_ts else None),
-                    last_chain_timestamp=datetime.fromisoformat(f"{day}T15:30:00"),
+                    last_chain_timestamp=chain_loaded_at,
                 )
                 try:
                     spot = next((row.underlying_price for row in op._driver._chain if row.underlying_price is not None), None)
@@ -279,8 +294,19 @@ def _run_live(args) -> int:
                     log.info("cadence complete: thesis=%s family=%s decision=%s",
                             cadence.decision.trade_thesis.thesis_type, cadence.selection.selected_strategy_family,
                             cadence.decision.decision_id)
-                except Exception as exc:  # noqa: BLE001 -- Deliverable 3: never crash the session on a paused cadence
+                except DecisionGenerationPaused as exc:
+                    # Expected, routine: a mandatory input is genuinely
+                    # stale. Never crash the session on this.
                     log.warning("cadence_skipped: %s", exc)
+                except Exception as exc:  # noqa: BLE001
+                    # Deep audit finding (2026-07-28): a bare except here
+                    # previously logged EVERY failure -- routine staleness
+                    # pause OR a genuine bug anywhere in the full decision
+                    # chain -- identically at WARNING, indistinguishable
+                    # in the log. Log this class at ERROR with a full
+                    # traceback so a real defect is visibly different from
+                    # an expected pause, never crash the session either way.
+                    log.error("cadence_failed_unexpectedly: %s", exc, exc_info=True)
 
             time.sleep(args.poll_interval_seconds)
     except KeyboardInterrupt:

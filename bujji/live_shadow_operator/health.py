@@ -68,6 +68,7 @@ def build_health_snapshot(
     freshness: Optional[FreshnessReport] = None,
     api_retry_count: int = 0, api_dropped_requests: int = 0,
     journal_path: Optional[str] = None, disk_check_path: str = ".",
+    journal_failed_writes: int = 0,
 ) -> HealthSnapshot:
     usage = resource.getrusage(resource.RUSAGE_SELF)
     websocket_status = "CONNECTED" if result.observations else "IDLE"
@@ -78,10 +79,19 @@ def build_health_snapshot(
             f"{r.source}={r.state}: {r.reason}" for r in freshness.readings.values() if r.state in (WARNING, STALE)
         )
 
+    # Deep audit finding (2026-07-28): file EXISTENCE alone never proves
+    # writes are actually succeeding -- a disk-full/permissions failure
+    # mid-session would keep this HEALTHY forever. `journal_failed_writes`
+    # is the real signal, sourced from `OperatorJournal.failed_writes`.
     journal_health = "UNKNOWN"
     if journal_path is not None:
         import os
-        journal_health = "HEALTHY" if os.path.exists(journal_path) else "MISSING"
+        if not os.path.exists(journal_path):
+            journal_health = "MISSING"
+        elif journal_failed_writes > 0:
+            journal_health = "DEGRADED"
+        else:
+            journal_health = "HEALTHY"
 
     disk_free_pct = None
     try:
@@ -112,6 +122,8 @@ def build_health_snapshot(
         reasons.append(f"disk_free_pct={disk_free_pct:.1f} <= DISK_WARNING_FREE_PCT={DISK_WARNING_FREE_PCT}")
     if journal_health == "MISSING":
         status, reasons = STATUS_RED, reasons + ["journal file is missing"]
+    elif journal_health == "DEGRADED":
+        status, reasons = STATUS_RED, reasons + [f"journal has {journal_failed_writes} failed write(s) -- real data may be lost"]
     if not reasons:
         reasons = ["all monitored inputs within tolerance"]
 

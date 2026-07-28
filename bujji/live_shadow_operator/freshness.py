@@ -39,8 +39,8 @@ TICK_STALE_SECONDS = STALE_CANDLE_CRITICAL_SECONDS
 # wider windows -- structural, never tuned against any outcome.
 QUOTE_WARNING_SECONDS = 60.0
 QUOTE_STALE_SECONDS = 180.0
-CHAIN_WARNING_SECONDS = 300.0
-CHAIN_STALE_SECONDS = 900.0
+CHAIN_WARNING_SECONDS = 28800.0  # 8h -- Day 1 fix: chain is loaded ONCE per session from EOD Bhavcopy, valid all day by design (docs/DAY1_LIVE_SESSION_FINDINGS.md)
+CHAIN_STALE_SECONDS = 72000.0  # 20h -- flags a genuinely cross-day-stale chain, not a normal single session
 VOLATILITY_WARNING_SECONDS = 300.0
 VOLATILITY_STALE_SECONDS = 900.0
 OBSERVATION_WARNING_SECONDS = TICK_WARNING_SECONDS

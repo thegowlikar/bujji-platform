@@ -123,7 +123,7 @@ def test_freshness_classifies_real_ages_into_correct_bands():
 
 def test_freshness_mandatory_stale_gates_correctly():
     now = datetime(2026, 5, 25, 15, 15, 0)
-    stale_chain = assess_freshness(now=now, last_chain_timestamp=now - timedelta(seconds=2000))
+    stale_chain = assess_freshness(now=now, last_chain_timestamp=now - timedelta(hours=25))  # Day 1 fix: chain is valid ~20h, genuinely stale past that
     assert stale_chain.mandatory_stale() is True
     stale_vol_only = assess_freshness(now=now, last_volatility_timestamp=now - timedelta(seconds=2000))
     assert stale_vol_only.mandatory_stale() is False  # volatility_input is not in MANDATORY_SOURCES
@@ -140,7 +140,7 @@ def test_run_cadence_pauses_when_mandatory_input_is_stale(tmp_path):
     op.load_option_chain(bhav_text, DAY)
     for c in candles:
         op.process_tick("NIFTY", c["ts"], c["close"])
-    stale_report = assess_freshness(now=datetime(2026, 5, 25, 15, 15, 0), last_chain_timestamp=datetime(2026, 5, 25, 14, 0, 0))
+    stale_report = assess_freshness(now=datetime(2026, 5, 27, 15, 15, 0), last_chain_timestamp=datetime(2026, 5, 25, 14, 0, 0))  # Day 1 fix: genuinely cross-day stale (>20h)
     with pytest.raises(DecisionGenerationPaused):
         op.run_cadence(day=DAY, spot=24000.0, timestamp=candles[-1]["ts"], freshness=stale_report)
     op.shutdown()
@@ -245,7 +245,7 @@ def test_health_overall_status_green_when_all_fresh_and_healthy():
 
 def test_health_overall_status_red_when_mandatory_input_stale():
     now = datetime(2026, 5, 25, 15, 15, 0)
-    stale = assess_freshness(now=now, last_chain_timestamp=now - timedelta(seconds=2000))
+    stale = assess_freshness(now=now, last_chain_timestamp=now - timedelta(hours=25))  # Day 1 fix: chain is valid ~20h, genuinely stale past that
     snapshot = build_health_snapshot(SessionResult(), reconnect_count=0, process_start_monotonic=0.0, freshness=stale)
     assert snapshot.overall_status == STATUS_RED
     assert len(snapshot.status_reasons) > 0

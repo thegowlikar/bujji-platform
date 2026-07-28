@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import gzip
 import json
+import logging
 import shutil
 from dataclasses import asdict, is_dataclass
 from datetime import date, timedelta
@@ -44,11 +45,20 @@ class OperatorJournal:
     journal write failing silently for one field is preferable to it
     taking down the whole operator)."""
 
-    def __init__(self, directory: Path) -> None:
+    def __init__(self, directory: Path, logger: Optional[logging.Logger] = None) -> None:
         self._dir = Path(directory)
         self._dir.mkdir(parents=True, exist_ok=True)
         self._path = self._dir / "operator_journal.jsonl"
         self._entries: List[dict] = []
+        self._log = logger or logging.getLogger("bujji.live_shadow_operator.journal")
+        # Deep audit finding (2026-07-28): `_append`'s own bare except
+        # previously swallowed a write failure with zero signal, and
+        # `health.py`'s `journal_health` only checked file EXISTENCE, not
+        # whether writes were actually succeeding -- a disk-full/
+        # permissions mid-session failure would report HEALTHY all day
+        # while every entry silently vanished. This counter is the real
+        # signal `build_health_snapshot` now reads.
+        self.failed_writes: int = 0
 
     def record_cadence(
         self, day: str, timestamp: str, result: SessionResult, cadence: FullCadenceResult,
@@ -89,8 +99,10 @@ class OperatorJournal:
         try:
             with open(self._path, "a", encoding="utf-8") as f:
                 f.write(json.dumps(entry, default=str) + "\n")
-        except Exception:  # noqa: BLE001 -- persistence must never crash the session
-            pass
+        except Exception as exc:  # noqa: BLE001 -- persistence must never crash the session
+            self.failed_writes += 1
+            self._log.error("journal_write_failed entry_type=%s failed_writes=%d: %s",
+                            entry.get("type"), self.failed_writes, exc, exc_info=True)
 
     def flush(self) -> None:
         pass  # every _append already wrote through; nothing buffered.
