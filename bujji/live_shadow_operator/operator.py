@@ -218,7 +218,14 @@ class LiveShadowOperator:
         )
 
     # -- Deliverable 4 / Sprint 112 Deliverable 7: health snapshot --------
-    def health_snapshot(self, *, token_expires_in_seconds: Optional[float] = None) -> HealthSnapshot:
+    def health_snapshot(self, *, token_expires_in_seconds: Optional[float] = None,
+                         watchdog_state: Optional[str] = None, watchdog_reconnect_attempt: int = 0,
+                         watchdog_reconnect_reason: Optional[str] = None,
+                         subscription_state: Optional[str] = None) -> HealthSnapshot:
+        # Sprint P1: real, disclosed watchdog metrics -- all optional,
+        # defaulted, additive-only kwargs (this project's own established
+        # schema-evolution convention). Purely observational: nothing
+        # here feeds back into `_driver`/any decision path.
         result = self._driver.result if self._driver else SessionResult()
         return build_health_snapshot(
             result, reconnect_count=self._reconnect_count,
@@ -229,6 +236,8 @@ class LiveShadowOperator:
             api_dropped_requests=self._rate_limiter.metrics.dropped_requests,
             journal_path=str(self._journal._path),
             journal_failed_writes=self._journal.failed_writes,
+            watchdog_state=watchdog_state, watchdog_reconnect_attempt=watchdog_reconnect_attempt,
+            watchdog_reconnect_reason=watchdog_reconnect_reason, subscription_state=subscription_state,
         )
 
     # -- Deliverable 7: end-of-day report ----------------------------------

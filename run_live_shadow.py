@@ -48,6 +48,7 @@ from bujji.live_shadow_operator import LiveShadowOperator, render_shadow_banner
 from bujji.live_shadow_operator.operator import DecisionGenerationPaused
 from bujji.market_calendar import MarketCalendar
 from bujji.core.clock import now_ist, epoch_to_ist
+from bujji.broker.fyers_ws import TickSilenceWatchdog  # Sprint P1 -- tick-silence detection & forced reconnect.
 
 LOCK_PATH = "data/live_shadow_operator.lock"
 JOURNAL_DIR = "data/live_shadow_journal"
@@ -88,9 +89,20 @@ def _run_recorded_day(day: str) -> int:
     return 0
 
 
-def render_health_dashboard_safe(op: LiveShadowOperator) -> str:
+def render_health_dashboard_safe(op: LiveShadowOperator, watchdog=None, tick_feed=None) -> str:
     from bujji.live_shadow_operator.health import render_health_dashboard
-    return render_health_dashboard(op.health_snapshot())
+    # Sprint P1: real, disclosed watchdog/subscription metrics, threaded
+    # through only when a real watchdog/tick_feed is supplied (the
+    # `--day` replay path calls this with neither -- no live feed exists
+    # there, so these stay None, exactly as before this sprint).
+    kwargs = {}
+    if watchdog is not None:
+        kwargs.update(watchdog_state=watchdog.watchdog_state,
+                      watchdog_reconnect_attempt=watchdog.reconnect_attempt,
+                      watchdog_reconnect_reason=watchdog.reconnect_reason)
+    if tick_feed is not None:
+        kwargs["subscription_state"] = tick_feed.subscription_state
+    return render_health_dashboard(op.health_snapshot(**kwargs))
 
 
 # ---------------------------------------------------------------------------
@@ -261,12 +273,32 @@ def _run_live(args) -> int:
     last_tick_ts = None
     last_cadence_monotonic = time.monotonic()
     cadence_results = []
+    market_open = now_ist().replace(hour=9, minute=15, second=0, microsecond=0)
     market_close = now_ist().replace(hour=15, minute=30, second=0, microsecond=0)
+
+    # Sprint P1: real, external tick-silence watchdog. Activates only
+    # during real market hours while the feed reports itself connected
+    # (its own real, disclosed activation rule) -- see
+    # docs/TICK_SILENCE_INCIDENT_P1.md for why the SDK's own internal
+    # reconnect path cannot be trusted to self-heal or self-report this
+    # failure mode. silence_threshold_seconds is deliberately well under
+    # the 900s mandatory-input STALE gate so the watchdog reacts and
+    # (attempts to) recover long before a cadence would ever be skipped.
+    watchdog = TickSilenceWatchdog(silence_threshold_seconds=120.0, max_consecutive_failures=3,
+                                   backoff_base_seconds=30.0, logger=log)
 
     try:
         while now_ist().replace(tzinfo=None) < market_close.replace(tzinfo=None):
             price = tick_feed.latest(UNDERLYING_SYMBOL)
             age = tick_feed.tick_age_seconds(UNDERLYING_SYMBOL)
+
+            now_naive = now_ist().replace(tzinfo=None)
+            in_market_hours = market_open.replace(tzinfo=None) <= now_naive < market_close.replace(tzinfo=None)
+            watchdog.check(
+                tick_age=age, is_connected=tick_feed.is_connected, market_hours=in_market_hours,
+                now_monotonic=time.monotonic(), force_reconnect_fn=tick_feed.force_reconnect,
+            )
+
             if price is not None and age is not None:
                 # Deep audit finding (2026-07-28): must use epoch_to_ist, never naive
                 # datetime.fromtimestamp -- that interprets the epoch using the HOST's
@@ -314,7 +346,7 @@ def _run_live(args) -> int:
 
     outcome = op.end_of_day(day, cadence_results)
     print("\n" + outcome.report_text)
-    print("\n" + render_health_dashboard_safe(op))
+    print("\n" + render_health_dashboard_safe(op, watchdog=watchdog, tick_feed=tick_feed))
 
     tick_feed.stop()
     op.shutdown()
