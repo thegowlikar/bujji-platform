@@ -49,6 +49,10 @@ from bujji.live_shadow_operator.operator import DecisionGenerationPaused
 from bujji.market_calendar import MarketCalendar
 from bujji.core.clock import now_ist, epoch_to_ist
 from bujji.broker.fyers_ws import TickSilenceWatchdog  # Sprint P1 -- tick-silence detection & forced reconnect.
+from bujji.broker.paper import PaperBroker
+from bujji.trading_brain.portfolio_valuation.engine import revalue
+from bujji.trading_brain.portfolio_valuation.dashboard import render_portfolio_dashboard
+from bujji.journal.portfolio_valuation_journal import PortfolioValuationJournal
 
 LOCK_PATH = "data/live_shadow_operator.lock"
 JOURNAL_DIR = "data/live_shadow_journal"
@@ -287,6 +291,16 @@ def _run_live(args) -> int:
     watchdog = TickSilenceWatchdog(silence_threshold_seconds=120.0, max_consecutive_failures=3,
                                    backoff_base_seconds=30.0, logger=log)
 
+    # Live Shadow Real-Time Paper Execution sprint: real, tick-driven
+    # portfolio valuation wiring. No order-construction step exists in
+    # this script yet (disclosed, unchanged here) -- paper_broker will
+    # report zero open positions until that is added, so every
+    # valuation below will be an honest, empty (never fabricated)
+    # PortfolioValuation until real paper orders exist to revalue.
+    paper_broker = PaperBroker()
+    portfolio_journal = PortfolioValuationJournal(f"{JOURNAL_DIR}/portfolio_valuation.jsonl")
+    latest_prices: dict = {}
+
     try:
         while now_ist().replace(tzinfo=None) < market_close.replace(tzinfo=None):
             price = tick_feed.latest(UNDERLYING_SYMBOL)
@@ -311,6 +325,15 @@ def _run_live(args) -> int:
                 if ts_iso != last_tick_ts:
                     op.process_tick("NIFTY", ts_iso, price, source="live_websocket")
                     last_tick_ts = ts_iso
+
+                    latest_prices[UNDERLYING_SYMBOL] = price
+                    positions = asyncio.run(paper_broker.get_open_positions())
+                    valuation = revalue(
+                        positions, latest_prices, {}, triggering_symbol=UNDERLYING_SYMBOL,
+                        triggering_tick_timestamp=ts_iso, clock=lambda: datetime.fromisoformat(ts_iso),
+                    )
+                    portfolio_journal.record_valuation(valuation)
+                    log.info("portfolio_valuation legs=%d total_pnl=%s", len(valuation.legs), valuation.total_pnl)
 
             if time.monotonic() - last_cadence_monotonic >= args.cadence_seconds:
                 last_cadence_monotonic = time.monotonic()
@@ -347,6 +370,12 @@ def _run_live(args) -> int:
     outcome = op.end_of_day(day, cadence_results)
     print("\n" + outcome.report_text)
     print("\n" + render_health_dashboard_safe(op, watchdog=watchdog, tick_feed=tick_feed))
+
+    final_positions = asyncio.run(paper_broker.get_open_positions())
+    final_valuation = revalue(
+        final_positions, latest_prices, {}, triggering_symbol=None, triggering_tick_timestamp=None,
+    )
+    print("\n" + render_portfolio_dashboard(final_valuation))
 
     tick_feed.stop()
     op.shutdown()
