@@ -263,7 +263,24 @@ def _run_live(args) -> int:
 
     op = LiveShadowOperator(lock_path=LOCK_PATH, journal_dir=JOURNAL_DIR, underlying="NIFTY", logger=log)
     op.acquire()
-    tick_feed.on_disconnect(op.note_reconnect)  # Deliverable 3: real reconnect counting
+    # reconnect_count fix (TODO.md P2-4, live-confirmed dead in Session #3
+    # and again in LSQ-1 Day 1: read 1, real count ~9): this used to wire
+    # note_reconnect() to on_disconnect(), but bujji/broker/fyers_ws.py's
+    # own module docstring already root-causes why that's wrong -- the
+    # FYERS SDK's internal __on_close retry path (reconnect=True, which
+    # every real caller including this one always passes) NEVER calls our
+    # on_close hook, so on_disconnect only ever fired for our own explicit
+    # force_reconnect() calls, missing every one of the SDK's own silent
+    # internal reconnects. on_connect, by contrast, DOES reliably fire on
+    # every real (re)connect, including the SDK's internal ones (see the
+    # same docstring) -- FyersTickFeed already increments _connect_count
+    # there. Registering this hook here, not earlier, is deliberate and
+    # safe, not incidental: the mandatory checklist above (tick_feed.start()
+    # at line ~187, then blocking until tick_feed.latest(...) is non-None)
+    # guarantees the FIRST connect has already completed by this point, so
+    # every future on_connect firing from here on is a genuine reconnect,
+    # never the initial one -- no off-by-one counting needed.
+    tick_feed.on_connect(op.note_reconnect)  # Deliverable 3: real reconnect counting
 
     prior_closes = op.resume_prior_closes()
     op.resume_state()
