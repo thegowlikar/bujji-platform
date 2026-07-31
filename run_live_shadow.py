@@ -52,7 +52,11 @@ from bujji.broker.fyers_ws import TickSilenceWatchdog  # Sprint P1 -- tick-silen
 from bujji.broker.paper import PaperBroker
 from bujji.trading_brain.portfolio_valuation.engine import revalue
 from bujji.trading_brain.portfolio_valuation.dashboard import render_portfolio_dashboard
-from bujji.journal.portfolio_valuation_journal import PortfolioValuationJournal
+from bujji.journal.portfolio_valuation_journal import PortfolioValuationJournal, TradeLifecycleTracker
+from bujji.trading_brain.exit_engine.config import ExitRuleConfig
+from bujji.trading_brain.exit_engine.engine import evaluate as evaluate_exit
+from bujji.trading_brain.exit_engine.order_builder import build_closing_orders
+from bujji.trading_brain.exit_engine.dashboard import render_exit_dashboard, render_exit_completion
 
 LOCK_PATH = "data/live_shadow_operator.lock"
 JOURNAL_DIR = "data/live_shadow_journal"
@@ -299,7 +303,17 @@ def _run_live(args) -> int:
     # PortfolioValuation until real paper orders exist to revalue.
     paper_broker = PaperBroker()
     portfolio_journal = PortfolioValuationJournal(f"{JOURNAL_DIR}/portfolio_valuation.jsonl")
+    trade_lifecycle_tracker = TradeLifecycleTracker()
     latest_prices: dict = {}
+
+    # Exit Engine v1 sprint: v1 rule set, real config -- hard time exit
+    # at real market close minus 15 minutes (never later than the
+    # session's own hard market_close), max_loss/profit_target left
+    # disabled by default (None) since this script has no real capital
+    # sizing wired in yet to make a real Rupee threshold meaningful --
+    # an operator running with real paper positions should set these
+    # explicitly, not inherit a guessed default.
+    exit_config = ExitRuleConfig(hard_time_exit="15:15", max_loss=None, profit_target=None)
 
     try:
         while now_ist().replace(tzinfo=None) < market_close.replace(tzinfo=None):
@@ -333,7 +347,37 @@ def _run_live(args) -> int:
                         triggering_tick_timestamp=ts_iso, clock=lambda: datetime.fromisoformat(ts_iso),
                     )
                     portfolio_journal.record_valuation(valuation)
+                    trade_lifecycle_tracker.observe(valuation)
                     log.info("portfolio_valuation legs=%d total_pnl=%s", len(valuation.legs), valuation.total_pnl)
+
+                    if positions:
+                        now_hhmm = now_ist().strftime("%H:%M")
+                        exit_decision = evaluate_exit(valuation, positions, exit_config, now_ist_time=now_hhmm)
+                        log.info("exit_decision should_exit=%s reason=%s confidence=%s",
+                                exit_decision.should_exit, exit_decision.reason, exit_decision.confidence)
+                        if exit_decision.should_exit:
+                            closing_orders = build_closing_orders(positions, valuation)
+                            for closing_order in closing_orders:
+                                exit_result = asyncio.run(paper_broker.place_order(closing_order))
+                                symbol = closing_order.contract.symbol
+                                summary = trade_lifecycle_tracker.summary(symbol)
+                                portfolio_journal.record_exit(
+                                    symbol=symbol,
+                                    entry_ltp=(summary["entry_ltp"] if summary else None),
+                                    exit_ltp=exit_result.average_price,
+                                    running_mtm=(valuation.total_pnl or 0.0),
+                                    max_profit=(summary["max_profit"] if summary else None),
+                                    max_drawdown=(summary["max_drawdown"] if summary else None),
+                                    exit_reason=exit_decision.reason,
+                                    entry_timestamp=(summary["entry_timestamp"] if summary else None),
+                                    exit_timestamp=ts_iso,
+                                    final_mtm=paper_broker.get_realized_pnl(symbol),
+                                    exit_decision_timestamp=exit_decision.timestamp,
+                                )
+                                log.warning("%s", render_exit_completion(
+                                    symbol=symbol, exit_reason=exit_decision.reason, exit_timestamp=ts_iso,
+                                    exit_price=exit_result.average_price, final_pnl=paper_broker.get_realized_pnl(symbol),
+                                ).replace("\n", " | "))
 
             if time.monotonic() - last_cadence_monotonic >= args.cadence_seconds:
                 last_cadence_monotonic = time.monotonic()
@@ -376,6 +420,9 @@ def _run_live(args) -> int:
         final_positions, latest_prices, {}, triggering_symbol=None, triggering_tick_timestamp=None,
     )
     print("\n" + render_portfolio_dashboard(final_valuation))
+
+    final_exit_decision = evaluate_exit(final_valuation, final_positions, exit_config, now_ist_time=now_ist().strftime("%H:%M"))
+    print("\n" + render_exit_dashboard(final_valuation, final_exit_decision, exit_config, now_ist_time=now_ist().strftime("%H:%M")))
 
     tick_feed.stop()
     op.shutdown()

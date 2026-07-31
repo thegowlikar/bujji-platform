@@ -40,12 +40,23 @@ class PortfolioValuationJournal:
         self, *, symbol: str, entry_ltp: float, exit_ltp: float, running_mtm: float,
         max_profit: float, max_drawdown: float, exit_reason: str,
         entry_timestamp: Optional[str], exit_timestamp: str,
+        final_mtm: Optional[float] = None, exit_decision_timestamp: Optional[str] = None,
     ) -> None:
+        # Exit Engine v1 sprint (Part 7): final_mtm / exit_decision_timestamp
+        # added additively (both optional, backward compatible with every
+        # existing caller) -- final_mtm is the realized P&L for this
+        # closed trade specifically (distinct from running_mtm, which is
+        # the last live/unrealized reading before the close);
+        # exit_decision_timestamp is when ExitEngine.evaluate() produced
+        # the ExitDecision, distinct from exit_timestamp (when the
+        # closing fill actually confirmed) -- kept separate since a real
+        # fill can lag its own triggering decision.
         payload = {
             "schema_version": SCHEMA_VERSION, "type": "EXIT",
             "symbol": symbol, "entry_ltp": entry_ltp, "exit_ltp": exit_ltp,
             "running_mtm": running_mtm, "max_profit": max_profit, "max_drawdown": max_drawdown,
             "exit_reason": exit_reason, "entry_timestamp": entry_timestamp, "exit_timestamp": exit_timestamp,
+            "final_mtm": final_mtm, "exit_decision_timestamp": exit_decision_timestamp,
         }
         with open(self._path, "a") as fh:
             fh.write(json.dumps(payload) + "\n")
