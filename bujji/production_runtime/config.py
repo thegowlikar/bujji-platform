@@ -61,6 +61,21 @@ class RuntimeConfig:
             raise InvalidRuntimeConfig(f"Unrecognized broker_name: {self.broker_name!r}")
         if self.market_source not in ALL_MARKET_SOURCES:
             raise InvalidRuntimeConfig(f"Unrecognized market_source: {self.market_source!r}")
+        # P1-1 fix (TODO.md): a live-capable broker must never be
+        # constructible outside Mode 3. Before this check, `RuntimeConfig(
+        # mode="SHADOW", broker_name="fyers")` constructed successfully and
+        # produced a real, unguarded FyersBroker with a live place_order --
+        # confirmed by direct execution, not a hypothetical. This is the
+        # primary fix layer (reject at config construction, before the
+        # composition root ever runs); see composition_root.py's
+        # `_build_broker` for the defense-in-depth second layer.
+        if self.broker_name == "fyers" and self.mode != RUNTIME_MODE_PRODUCTION_READY:
+            raise InvalidRuntimeConfig(
+                f"broker_name='fyers' is only permitted in mode="
+                f"{RUNTIME_MODE_PRODUCTION_READY!r} (got mode={self.mode!r}). "
+                f"Outside Mode 3, use broker_name='paper' -- a live broker "
+                f"must never be constructible in READ_ONLY or SHADOW mode."
+            )
 
 
 def load_config(values: Dict[str, Any]) -> RuntimeConfig:

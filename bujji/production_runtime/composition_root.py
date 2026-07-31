@@ -25,6 +25,7 @@ from dataclasses import dataclass
 from typing import Any, Optional
 
 from ..authentication.models import AuthenticationPolicy
+from ..broker.guard import disable_live_execution
 from ..broker.paper import PaperBroker
 from ..core.config import AppConfig, BrokerConfig
 from ..execution.engine import ExecutionEngine
@@ -35,7 +36,7 @@ from ..runtime_session.models import RuntimeSessionPolicy
 from ..trading_brain.order_construction.models import ExecutionPolicy, TradingConfiguration
 from ..trading_brain.position_sizing.config import PositionSizingConfig
 from ..trading_brain.position_sizing.models import CapitalPolicy, LotSpecification
-from .config import RuntimeConfig
+from .config import RUNTIME_MODE_PRODUCTION_READY, RuntimeConfig
 
 
 class CompositionError(Exception):
@@ -74,6 +75,16 @@ def _build_broker(config: RuntimeConfig, logger: logging.Logger) -> Any:
     unmodified) performs no network I/O of its own -- it only builds an
     internal `FyersTokenManager` instance -- so constructing it here,
     even in Mode 3 (Production Ready), never touches a live broker.
+
+    P1-1 fix (TODO.md), defense-in-depth layer: `RuntimeConfig.__post_init__`
+    already rejects `broker_name="fyers"` outside Mode 3, so this branch
+    should be unreachable for a non-PRODUCTION_READY config in normal use.
+    It is guarded again here anyway -- the same "not by convention, by
+    construction" principle `bujji.broker.guard.disable_live_execution`
+    already applies to Paper mode's live-data leg -- so that a future
+    RuntimeConfig subclass, a manually-bypassed dataclass, or a new mode
+    added later without updating the config-level check still cannot
+    produce a live-order-capable broker outside Mode 3.
     """
     if config.broker_name == "paper":
         return PaperBroker()
@@ -81,7 +92,10 @@ def _build_broker(config: RuntimeConfig, logger: logging.Logger) -> Any:
         from ..broker.fyers import FyersBroker
 
         broker_config = BrokerConfig(name="fyers")
-        return FyersBroker(broker_config, logger)
+        broker = FyersBroker(broker_config, logger)
+        if config.mode != RUNTIME_MODE_PRODUCTION_READY:
+            broker = disable_live_execution(broker)
+        return broker
     raise CompositionError(f"Unrecognized broker_name: {config.broker_name!r}")
 
 
