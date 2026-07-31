@@ -45,6 +45,14 @@ class PaperBroker(Broker):
         self._orders: dict[str, OrderResult] = {}
         self._positions: dict[str, dict] = {}
         self._premium: dict[str, float] = {}
+        # Live Shadow Real-Time Paper Execution sprint (Part 2): a plain
+        # position LEDGER only -- entry timestamp, entry price, qty,
+        # direction, and REALIZED P&L (once a position closes or is
+        # reduced). No MTM/unrealized figure is computed here -- that is
+        # the Portfolio Valuation engine's own, separate responsibility
+        # (bujji/trading_brain/portfolio_valuation/), which this broker
+        # never imports and knows nothing about.
+        self._realized_pnl: dict[str, float] = {}
         # Fault-injection hooks (test-only; benign by default).
         self._partial_fill_qty = partial_fill_qty
         self._raise_on_place_after_record = raise_on_place_after_record
@@ -120,6 +128,7 @@ class PaperBroker(Broker):
         """Inject a pre-existing broker position (simulates a live holding)."""
         self._positions[symbol] = {
             "symbol": symbol, "side": side, "qty": qty, "avg_price": avg_price,
+            "entry_timestamp": now_ist().isoformat(),
         }
         self._premium.setdefault(symbol, avg_price)
 
@@ -229,22 +238,55 @@ class PaperBroker(Broker):
         return result
 
     def _apply_fill(self, request: OrderRequest, filled: int, price: float) -> None:
-        """Net the filled quantity into the position book (BUY closes SELL)."""
+        """Net the filled quantity into the position book (BUY closes SELL),
+        realizing PnL on whatever portion of this fill closes or reduces an
+        existing position (Part 2: a plain ledger, never a MTM/valuation
+        engine -- realized PnL only, computed here because it depends on
+        this broker's own fill/netting mechanics, nothing else)."""
         symbol = request.contract.symbol
         prev = self._positions.get(symbol)
         prev_net = 0
+        prev_avg = None
+        prev_entry_ts = None
         if prev:
             prev_net = prev["qty"] if prev["side"] == Side.BUY.value else -prev["qty"]
+            prev_avg = prev["avg_price"]
+            prev_entry_ts = prev.get("entry_timestamp")
         delta = filled if request.side is Side.BUY else -filled
         net = prev_net + delta
+
+        # Realize PnL for whatever portion of this fill reduces/closes the
+        # PRIOR position (i.e. this fill's side is opposite prev_net's sign).
+        if prev_net != 0 and (prev_net > 0) != (delta > 0):
+            closing_qty = min(abs(delta), abs(prev_net))
+            # Long position (prev_net>0) closed by a SELL: profit = (fill - entry) * qty.
+            # Short position (prev_net<0) closed by a BUY: profit = (entry - fill) * qty.
+            sign = 1 if prev_net > 0 else -1
+            realized = sign * (price - prev_avg) * closing_qty
+            self._realized_pnl[symbol] = self._realized_pnl.get(symbol, 0.0) + realized
+
         if net == 0:
             self._positions.pop(symbol, None)
         else:
+            # A fresh open from flat (prev is None) gets a new entry
+            # timestamp; a same-direction add or a partial reduction that
+            # leaves the position open PRESERVES the original entry
+            # timestamp -- this ledger never claims a position was
+            # "re-entered" just because its size changed.
+            # Preserve the original entry timestamp whenever the position
+            # stays open in the SAME direction it was already in (whether
+            # added-to or partially reduced); a fresh open from flat, or a
+            # flip to the opposite direction in one fill, starts a new one.
+            if prev is not None and prev_net != 0 and (net > 0) == (prev_net > 0):
+                entry_ts = prev_entry_ts
+            else:
+                entry_ts = now_ist().isoformat()
             self._positions[symbol] = {
                 "symbol": symbol,
                 "side": Side.BUY.value if net > 0 else Side.SELL.value,
                 "qty": abs(net),
                 "avg_price": price,
+                "entry_timestamp": entry_ts,
             }
 
     async def get_order(self, client_order_id: str) -> OrderResult:
@@ -261,3 +303,10 @@ class PaperBroker(Broker):
     async def get_open_positions(self) -> list[dict]:
         self._check_auth()
         return list(self._positions.values())
+
+    def get_realized_pnl(self, symbol: Optional[str] = None) -> float:
+        """Real, already-realized PnL only -- never an estimate, never
+        MTM. Per-symbol if `symbol` is given, else the ledger total."""
+        if symbol is not None:
+            return self._realized_pnl.get(symbol, 0.0)
+        return sum(self._realized_pnl.values())

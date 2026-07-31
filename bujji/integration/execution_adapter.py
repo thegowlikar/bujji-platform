@@ -91,13 +91,16 @@ def _translate_order_request(
     42) does not itself carry a lot size and this adapter never
     fabricates or infers one.
 
-    `limit_price` is always `None` in this v1 adapter: Order
-    Construction (Series 44) never persists a numeric price onto the
-    final `OrderRequest` object (only the finite `execution_policy`
-    name), so a price-bearing policy (`LIMIT`/`STOP`/`STOP_LIMIT`)
-    cannot yet carry a real price through to production -- a disclosed
-    v1 limitation, not a silent gap. Only `MARKET` orders are fully
-    supported end-to-end this sprint.
+    `limit_price` is populated from `runtime_order.reference_price`
+    (Live Shadow Real-Time Paper Execution sprint) -- the contract's own
+    last observed price, carried forward from whatever chain/tick
+    snapshot Contract Construction was given, unchanged since. This
+    adapter never re-derives or estimates a price; when
+    `reference_price` is `None` (no observed price was available
+    upstream), `limit_price` is `None` here too, exactly as before --
+    a downstream broker interprets `None` as its own honest default
+    behavior (e.g. `PaperBroker` fills at its own synthetic default),
+    never fabricated by this adapter.
     """
     contract = OptionContract(
         symbol=runtime_order.contract.contract_symbol,
@@ -113,7 +116,7 @@ def _translate_order_request(
         side=Side(runtime_order.side),
         quantity=runtime_order.quantity,
         client_order_id=runtime_order.client_order_id,
-        limit_price=None,
+        limit_price=runtime_order.reference_price,
         tag=tag,
     )
 

@@ -300,6 +300,7 @@ def build_contracts(
             construction_trace=selection_reason,
             timestamp=timestamp,
             version=taxonomy.NIFTY_CONTRACT_BUILDER_VERSION,
+            last_price=entry.last_price,
         )
         contracts.append(contract)
         leg_summaries.append(f"{strike}{leg.option_type}")

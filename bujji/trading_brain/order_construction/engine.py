@@ -139,6 +139,7 @@ def construct_orders(
                 creation_trace=trace,
                 timestamp=timestamp,
                 version=taxonomy.ORDER_CONSTRUCTION_VERSION,
+                reference_price=contract.last_price,
             )
         )
 
