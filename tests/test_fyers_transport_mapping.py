@@ -195,6 +195,43 @@ async def test_place_order_buy_and_limit(config, logger):
 
 
 @pytest.mark.asyncio
+async def test_market_order_with_reference_price_still_sends_market(config, logger):
+    """Semantic Cleanup Sprint: a MARKET order carrying an observed
+    reference_price (limit_price left None) must still reach the real
+    SDK as type=2 (Market), not be silently converted to a Limit order.
+    This is the exact production safety issue the sprint's own
+    micro-review found and this sprint closes."""
+    broker = RecordingFyers(_creds(config).broker, logger)
+    broker.responses["place_order"] = {"s": "ok", "id": "FY-3", "status": 2}
+    contract = OptionContract("NSE:NIFTY25JAN22000CE", "NIFTY", 22000,
+                              OptionType.CE, "25JAN", 75)
+    req = OrderRequest(contract, Side.SELL, 75, "CID-3", reference_price=124.15)
+    await broker.place_order(req)
+    _, params = broker.calls[0]
+    assert params["type"] == 2  # Market, unaffected by reference_price.
+    assert params["limitPrice"] == 0  # reference_price never reaches limitPrice.
+
+
+@pytest.mark.asyncio
+async def test_fyers_broker_ignores_reference_price_entirely(config, logger):
+    """FyersBroker must never read reference_price for anything --
+    varying it while holding limit_price constant must produce an
+    identical SDK call every time."""
+    broker = RecordingFyers(_creds(config).broker, logger)
+    broker.responses["place_order"] = {"s": "ok", "id": "FY-4", "status": 1}
+    contract = OptionContract("NSE:NIFTY25JAN22000CE", "NIFTY", 22000,
+                              OptionType.CE, "25JAN", 75)
+    req_a = OrderRequest(contract, Side.BUY, 75, "CID-A", limit_price=100.0, reference_price=1.0)
+    req_b = OrderRequest(contract, Side.BUY, 75, "CID-B", limit_price=100.0, reference_price=9999.0)
+    await broker.place_order(req_a)
+    await broker.place_order(req_b)
+    _, params_a = broker.calls[0]
+    _, params_b = broker.calls[1]
+    assert params_a["type"] == params_b["type"] == 1
+    assert params_a["limitPrice"] == params_b["limitPrice"] == 100.0
+
+
+@pytest.mark.asyncio
 async def test_get_order_uses_cached_order_id_when_known(config, logger):
     """No separate order-history-by-id method exists on the real SDK —
     get_order always fetches the full orderbook and filters locally."""

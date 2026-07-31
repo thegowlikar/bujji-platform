@@ -116,22 +116,25 @@ class TestSuccessfulExecutionTranslation:
         assert production_order.client_order_id == "COID-1"
         assert production_order.limit_price is None
 
-    def test_reference_price_flows_through_to_limit_price(self):
-        """Live Shadow Real-Time Paper Execution sprint: when the
-        upstream contract carried a real observed price
-        (NiftyOptionContract.last_price -> OrderRequest.reference_price),
-        the adapter must carry it through to limit_price verbatim, not
-        hardcode None -- this is the fix for the EQ1 sprint's own
-        micro-investigation finding (both simulated fills defaulting to
-        Rs 120 because this exact translation step discarded the real
-        price)."""
+    def test_reference_price_flows_through_but_never_as_limit_price(self):
+        """Semantic Cleanup Sprint (corrects the prior sprint's own
+        interim fix, per its micro-review finding): the observed market
+        price (NiftyOptionContract.last_price -> OrderRequest.reference_price)
+        must reach ProductionOrderRequest.reference_price verbatim --
+        but limit_price must stay None, since this pipeline never
+        produces a real trader-specified LIMIT order. Reusing limit_price
+        for the observed price would flip FyersBroker.place_order()'s
+        real order type from MARKET to LIMIT (fyers.py's own
+        `type = 2 if request.limit_price is None else 1`) -- a real
+        production safety issue, now closed."""
         engine = _StubExecutionEngine(result=_filled_result())
         adapter = ProductionExecutionAdapter(engine, lot_size=75, clock=FIXED_CLOCK)
         order = _runtime_order()
         order_with_price = OrderRequest(**{**order.__dict__, "reference_price": 124.15})
         adapter.submit_and_confirm(order_with_price)
         production_order = engine.calls[0]
-        assert production_order.limit_price == 124.15
+        assert production_order.reference_price == 124.15
+        assert production_order.limit_price is None
 
 
 # ---------------------------------------------------------------------------

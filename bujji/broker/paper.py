@@ -214,9 +214,17 @@ class PaperBroker(Broker):
             status = (OrderStatus.FILLED if filled >= request.quantity
                       else OrderStatus.PARTIAL)
 
-        price = request.limit_price or self._premium.get(
-            request.contract.symbol, 120.0
-        )
+        # Semantic Cleanup Sprint: reference_price (the observed market
+        # price at decision time -- simulation-only, never an execution
+        # instruction) takes priority for a paper fill. limit_price is
+        # preserved as a fallback for real limit-order simulation
+        # (unchanged existing behavior for any caller constructing an
+        # OrderRequest with only limit_price set, e.g. legacy tests).
+        price = request.reference_price
+        if price is None:
+            price = request.limit_price or self._premium.get(
+                request.contract.symbol, 120.0
+            )
         result = OrderResult(
             client_order_id=request.client_order_id,
             status=status,

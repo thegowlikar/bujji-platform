@@ -91,16 +91,26 @@ def _translate_order_request(
     42) does not itself carry a lot size and this adapter never
     fabricates or infers one.
 
-    `limit_price` is populated from `runtime_order.reference_price`
-    (Live Shadow Real-Time Paper Execution sprint) -- the contract's own
-    last observed price, carried forward from whatever chain/tick
-    snapshot Contract Construction was given, unchanged since. This
-    adapter never re-derives or estimates a price; when
-    `reference_price` is `None` (no observed price was available
-    upstream), `limit_price` is `None` here too, exactly as before --
-    a downstream broker interprets `None` as its own honest default
-    behavior (e.g. `PaperBroker` fills at its own synthetic default),
-    never fabricated by this adapter.
+    `limit_price` and `reference_price` are DELIBERATELY separate here
+    (Semantic Cleanup Sprint, correcting a real issue found in the prior
+    Live Shadow Real-Time Paper Execution sprint's own micro-review):
+
+    `limit_price` is always `None` -- this pipeline has no path today
+    that produces a real, trader-specified LIMIT order (Order
+    Construction's own `ExecutionPolicy.limit_price` is not even
+    threaded into this function's signature; only `MARKET` orders are
+    supported end-to-end, unchanged, disclosed limitation). `None` here
+    means exactly one thing to production's own broker layer: submit a
+    real MARKET instruction. It is never populated from an observed
+    price.
+
+    `reference_price` carries `runtime_order.reference_price` verbatim
+    -- the contract's own last observed price, from whatever
+    chain/tick snapshot Contract Construction was given. Production's
+    real broker layer never reads this field (confirmed: it has zero
+    effect on real order type or execution); the paper simulator reads
+    it as its own simulated fill price. `None` when no observed price
+    was available upstream -- never fabricated by this adapter.
     """
     contract = OptionContract(
         symbol=runtime_order.contract.contract_symbol,
@@ -116,7 +126,8 @@ def _translate_order_request(
         side=Side(runtime_order.side),
         quantity=runtime_order.quantity,
         client_order_id=runtime_order.client_order_id,
-        limit_price=runtime_order.reference_price,
+        limit_price=None,
+        reference_price=runtime_order.reference_price,
         tag=tag,
     )
 

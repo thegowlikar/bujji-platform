@@ -111,6 +111,51 @@ async def test_realized_pnl_total_sums_across_symbols():
 
 
 @pytest.mark.asyncio
+async def test_paper_broker_fills_at_reference_price_when_present():
+    """Semantic Cleanup Sprint: reference_price is what PaperBroker
+    fills a market order at now -- not limit_price."""
+    broker = PaperBroker()
+    await broker.connect()
+    await broker.place_order(OrderRequest(CONTRACT, Side.BUY, 150, "CID-1", reference_price=124.15))
+    positions = await broker.get_open_positions()
+    assert positions[0]["avg_price"] == 124.15
+
+
+@pytest.mark.asyncio
+async def test_paper_broker_falls_back_to_limit_price_when_no_reference_price():
+    """Unchanged existing behavior: a caller that only ever set
+    limit_price (e.g. simulating a real limit order in paper mode)
+    must still fill at that price, exactly as before this sprint."""
+    broker = PaperBroker()
+    await broker.connect()
+    await broker.place_order(OrderRequest(CONTRACT, Side.BUY, 150, "CID-1", limit_price=100.0))
+    positions = await broker.get_open_positions()
+    assert positions[0]["avg_price"] == 100.0
+
+
+@pytest.mark.asyncio
+async def test_paper_broker_prefers_reference_price_over_limit_price_when_both_set():
+    broker = PaperBroker()
+    await broker.connect()
+    await broker.place_order(OrderRequest(CONTRACT, Side.BUY, 150, "CID-1", limit_price=100.0, reference_price=124.15))
+    positions = await broker.get_open_positions()
+    assert positions[0]["avg_price"] == 124.15
+
+
+@pytest.mark.asyncio
+async def test_paper_broker_default_fill_price_unchanged_when_neither_set():
+    """Existing behavior fully preserved: with neither field set, the
+    old synthetic default (120.0 on first sight of a symbol) still
+    applies -- this sprint only reprioritizes which real field wins,
+    it does not touch the no-price-at-all fallback."""
+    broker = PaperBroker()
+    await broker.connect()
+    await broker.place_order(OrderRequest(CONTRACT, Side.BUY, 150, "CID-1"))
+    positions = await broker.get_open_positions()
+    assert positions[0]["avg_price"] == 120.0
+
+
+@pytest.mark.asyncio
 async def test_paper_broker_never_computes_unrealized_mtm_itself():
     """Structural check (Part 2's own explicit requirement): PaperBroker
     must never compute or expose an MTM/unrealized figure -- that
