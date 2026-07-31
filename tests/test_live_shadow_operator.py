@@ -2,6 +2,7 @@
 import ast
 import json
 import shutil
+import time
 from pathlib import Path
 
 import pytest
@@ -128,6 +129,55 @@ def test_health_snapshot_reflects_real_session_counters():
     text = render_health_dashboard(snapshot)
     assert "reconnect_count" in text
     assert "UNKNOWN (no authenticated broker session supplied)" in text
+
+
+# ------------------------------------------------------------------------ #
+# cadence_duration_seconds fix (TODO.md P2-4). Live-confirmed dead in
+# Session #3 and LSQ-1 Day 1: previously reported total session uptime
+# (elapsed hours) instead of a real per-cadence duration (sub-second).
+# Root cause: close_cadence_metrics() computed
+# `time.monotonic() - self._started_monotonic` -- session-start-to-now --
+# rather than reading the real t2-t0 measurement run_cadence() already
+# computes and journals correctly. Fixed by retaining that real value on
+# the operator instance.
+# ------------------------------------------------------------------------ #
+
+def test_cadence_duration_seconds_reflects_real_per_cadence_time_not_session_uptime():
+    op = LiveShadowOperator(
+        lock_path="data/test_cadence_duration.lock", journal_dir="data/test_cadence_duration_journal"
+    )
+    op.acquire()
+    op.authenticate(None)
+    candles, bhav_text = _load_real_day()
+    op.start_session()
+    time.sleep(0.05)  # session uptime must end up meaningfully larger than one cadence's real duration
+    op.load_option_chain(bhav_text, DAY)
+    for c in candles:
+        op.process_tick("NIFTY", c["ts"], c["close"], source="recorded_stream")
+    last_ts = candles[-1]["ts"]
+    spot = next((row.underlying_price for row in op._driver._chain if row.underlying_price is not None), None)
+    op.run_cadence(day=DAY, spot=spot, timestamp=last_ts)
+
+    metrics = op.close_cadence_metrics(DAY)
+    session_uptime_seconds = time.monotonic() - op._started_monotonic
+
+    assert metrics.cadence_duration_seconds > 0.0
+    # The original bug: this metric equalled (approximately) session
+    # uptime. The fix: it must be a real, much-smaller, single-cadence
+    # measurement -- proven here by requiring it stay well under the
+    # uptime accumulated since start_session(), not just "not exactly equal".
+    assert metrics.cadence_duration_seconds < session_uptime_seconds / 2
+
+
+def test_cadence_duration_seconds_is_zero_before_any_cadence_has_run():
+    op = LiveShadowOperator(
+        lock_path="data/test_cadence_duration_zero.lock",
+        journal_dir="data/test_cadence_duration_zero_journal",
+    )
+    op.acquire()
+    op.start_session()
+    metrics = op.close_cadence_metrics(DAY)
+    assert metrics.cadence_duration_seconds == 0.0
 
 
 def test_journal_is_append_only_and_survives_reopen():
