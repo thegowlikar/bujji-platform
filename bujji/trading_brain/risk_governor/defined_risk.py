@@ -96,7 +96,13 @@ def _vertical_spread_max_loss(
         raise IllegalDefinedRiskInputError("vertical spread requires a reference_price on both legs")
     quantity = min(abs(leg_quantities["SHORT_LEG"]), abs(leg_quantities["LONG_LEG"]))
     lots_equiv = quantity / profile.lot_size
-    return (strike_width * profile.lot_size * lots_equiv) - (net_credit * quantity)
+    max_loss = (strike_width * profile.lot_size * lots_equiv) - (net_credit * quantity)
+    if max_loss < 0:
+        raise IllegalDefinedRiskInputError(
+            f"vertical spread computed a negative max_loss ({max_loss!r}) -- "
+            "net_credit cannot legitimately exceed strike_width for a valid defined-risk spread"
+        )
+    return max_loss
 
 
 def _long_option_max_loss(
@@ -135,10 +141,57 @@ def _multi_leg_long_premium_paid(
     return total
 
 
+def _iron_condor_max_loss(
+    contracts_by_role: Dict[str, "NiftyOptionContract"],
+    orders_by_role: Dict[str, OrderRequest],
+    profile: StrategyRiskProfile,
+    leg_quantities: Dict[str, int],
+) -> float:
+    """An iron condor is two independent vertical credit spreads (a
+    bear call spread: SHORT_LEG_CE + LONG_LEG_CE, and a bull put
+    spread: SHORT_LEG_PE + LONG_LEG_PE) sharing one position. Standard,
+    textbook-correct formula: at expiry, at most ONE side can be
+    breached (price cannot be simultaneously above the call wing and
+    below the put wing), and the unbreached spread always expires
+    worthless, keeping its own credit in full. Maximum loss is
+    therefore the WIDER of the two wing widths, times quantity, minus
+    the TOTAL combined credit from both spreads (never just the
+    breached side's own credit) -- if the two wings happen to be equal
+    width (the common, symmetric case), this reduces to the familiar
+    "width minus total credit" figure; asymmetric wings are handled
+    correctly by taking the max, not assuming symmetry."""
+    if profile.lot_size <= 0:
+        raise IllegalDefinedRiskInputError(f"StrategyRiskProfile.lot_size must be positive, got {profile.lot_size!r}")
+
+    required = ("SHORT_LEG_CE", "SHORT_LEG_PE", "LONG_LEG_CE", "LONG_LEG_PE")
+    prices = {r: orders_by_role[r].reference_price for r in required}
+    if any(p is None for p in prices.values()):
+        raise IllegalDefinedRiskInputError("iron condor requires a reference_price on all four legs")
+
+    call_width = abs(contracts_by_role["LONG_LEG_CE"].strike - contracts_by_role["SHORT_LEG_CE"].strike)
+    put_width = abs(contracts_by_role["SHORT_LEG_PE"].strike - contracts_by_role["LONG_LEG_PE"].strike)
+
+    call_spread_credit = prices["SHORT_LEG_CE"] - prices["LONG_LEG_CE"]
+    put_spread_credit = prices["SHORT_LEG_PE"] - prices["LONG_LEG_PE"]
+    total_credit = call_spread_credit + put_spread_credit
+
+    quantity = min(abs(leg_quantities[r]) for r in required)
+    lots_equiv = quantity / profile.lot_size
+    max_width = max(call_width, put_width)
+    max_loss = (max_width * profile.lot_size * lots_equiv) - (total_credit * quantity)
+    if max_loss < 0:
+        raise IllegalDefinedRiskInputError(
+            f"iron condor computed a negative max_loss ({max_loss!r}) -- "
+            "total_credit cannot legitimately exceed max_width for a valid defined-risk condor"
+        )
+    return max_loss
+
+
 _FORMULAS = {
     "VERTICAL_SPREAD_WIDTH_MINUS_CREDIT": _vertical_spread_max_loss,
     "LONG_OPTION_PREMIUM_PAID": _long_option_max_loss,
     "MULTI_LEG_LONG_PREMIUM_PAID": _multi_leg_long_premium_paid,
+    "IRON_CONDOR_MAX_WING_WIDTH_MINUS_TOTAL_CREDIT": _iron_condor_max_loss,
 }
 
 

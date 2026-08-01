@@ -27,7 +27,7 @@ Gate B's engine.assess() and MIL Next's snapshot_builder.build_snapshot():
   4. ALLOW -> build real OrderRequest objects (never before this point)
      VETO  -> stop; zero OrderRequest objects are ever constructed
 
-DISCLOSED, HONEST STATUS: exactly THREE real MSI strategy families have
+DISCLOSED, HONEST STATUS: exactly FOUR real MSI strategy families have
 a reviewed, closed-form defined-risk formula wired:
 
   - LONG_DIRECTIONAL (a single long option leg, `bujji.
@@ -47,23 +47,44 @@ a reviewed, closed-form defined-risk formula wired:
     delta-targeted ones). Mechanically identical payoff shape, so this
     reuses MULTI_LEG_LONG_PREMIUM_PAID and the same role-translation
     logic verbatim -- no new formula math was needed for this one.
+  - IRON_CONDOR (four legs: short CE + short PE at delta-targeted
+    strikes, long CE + long PE wings at short_strike +/- a configured
+    width). A genuinely NEW formula, IRON_CONDOR_MAX_WING_WIDTH_MINUS_
+    TOTAL_CREDIT: an iron condor is two independent vertical credit
+    spreads sharing one position; at expiry at most one side can be
+    breached, so maximum loss is the WIDER of the two wing widths minus
+    the TOTAL combined credit from both spreads (never just the
+    breached side's own credit, and never assuming symmetric wings).
+    `_build_legs` assigns taxonomy.ROLE_SHORT to BOTH the short call
+    and short put (same collision class NEUTRAL_PREMIUM_BUYING already
+    surfaced -- disambiguated by option_type), but taxonomy.
+    ROLE_WING_UPPER/ROLE_WING_LOWER are already distinct per leg by
+    construction (WING_UPPER is always the long call, WING_LOWER always
+    the long put -- confirmed by reading `_build_legs` directly).
 
 Audited finding NEUTRAL_PREMIUM_BUYING's addition surfaced: `_build_legs`
 assigns the SAME MSI role string ("LONG") to BOTH legs of a
 straddle/strangle -- a flat role-string translation would have
 collided and silently dropped one leg. Role translation is therefore a
-per-leg FUNCTION (disambiguating by `leg.option_type`), not a flat
-dict, for every family from here on.
+per-leg FUNCTION (disambiguating by `leg.option_type` where needed),
+not a flat dict, for every family from here on.
 
-Every OTHER real MSI strategy family (BUTTERFLY/COVERED/IRON_CONDOR/
-IRON_FLY/NEUTRAL_PREMIUM_SELLING/RATIO/SHORT_DIRECTIONAL/SYNTHETIC/
-CALENDAR/VOLATILITY_COMPRESSION) still has NO formula and still VETOes
-UNDEFINED_RISK_NO_STRESS_MODEL, unconditionally.
-VOLATILITY_COMPRESSION in particular is VOLATILITY_EXPANSION's naked-
-short twin (SELL both legs instead of BUY) from the exact same
-`_build_legs` branch -- sharing the branch does NOT mean sharing
-defined-risk eligibility; it stays vetoed, genuinely unbounded, tested
-explicitly. COVERED can never be safely treated as
+Every OTHER real MSI strategy family (BUTTERFLY/COVERED/IRON_FLY/
+NEUTRAL_PREMIUM_SELLING/RATIO/SHORT_DIRECTIONAL/SYNTHETIC/CALENDAR/
+VOLATILITY_COMPRESSION) still has NO formula and still VETOes
+UNDEFINED_RISK_NO_STRESS_MODEL, unconditionally. IRON_FLY in particular
+shares IRON_CONDOR's exact 4-role shape (short CE/PE + wing CE/PE) via
+the SAME `_build_legs` branch, and its payoff is genuinely the SAME
+"max wing width minus total credit" formula (an iron fly is just an
+iron condor with the short strikes collapsed to the same ATM strike,
+i.e. a butterfly-shaped condor) -- NOT wired in this pass, deliberately
+scoped to one new family at a time, same discipline as
+VOLATILITY_EXPANSION's own prior round. VOLATILITY_COMPRESSION is
+VOLATILITY_EXPANSION's naked-short twin (SELL both legs instead of
+BUY) from the exact same `_build_legs` branch -- sharing the branch
+does NOT mean sharing defined-risk eligibility; it stays vetoed,
+genuinely unbounded, tested explicitly. COVERED can never be safely
+treated as
 defined-risk through this path: its short call leg is only bounded if
 genuinely covered by a real underlying equity position, which this
 options-leg-only bridge has no way to confirm -- vetoing it is
@@ -124,6 +145,25 @@ _MSI_FORMULA_SPECS: Dict[str, Tuple[Tuple[str, ...], str, Callable[["StrikeLeg"]
     "VOLATILITY_EXPANSION": (
         ("LONG_LEG_CE", "LONG_LEG_PE"), "MULTI_LEG_LONG_PREMIUM_PAID",
         lambda leg: f"LONG_LEG_{leg.option_type}",
+    ),
+    # Four legs: bujji.msi_trade_construction.engine._build_legs's
+    # IRON_CONDOR branch assigns taxonomy.ROLE_SHORT to BOTH the short
+    # call and short put (same collision class as NEUTRAL_PREMIUM_BUYING
+    # -- disambiguated by option_type), and taxonomy.ROLE_WING_UPPER /
+    # ROLE_WING_LOWER to the long call / long put respectively -- those
+    # two are already distinct role strings by construction (WING_UPPER
+    # is always the long CALL, WING_LOWER is always the long PUT,
+    # confirmed by reading _build_legs directly, never assumed), so no
+    # option_type suffix is needed for them.
+    "IRON_CONDOR": (
+        ("SHORT_LEG_CE", "SHORT_LEG_PE", "LONG_LEG_CE", "LONG_LEG_PE"),
+        "IRON_CONDOR_MAX_WING_WIDTH_MINUS_TOTAL_CREDIT",
+        lambda leg: (
+            f"SHORT_LEG_{leg.option_type}" if leg.role == "SHORT"
+            else "LONG_LEG_CE" if leg.role == "WING_UPPER"
+            else "LONG_LEG_PE" if leg.role == "WING_LOWER"
+            else leg.role
+        ),
     ),
 }
 

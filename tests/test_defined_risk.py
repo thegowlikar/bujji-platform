@@ -339,3 +339,65 @@ def test_zero_lot_size_never_crashes_with_zero_division(tmp_path):
     result = assess_defined_risk(state, contracts, orders, roles, zero_lot_profile, clock=_clock())
     assert result.decision == "VETO"
     assert result.blocking_reason == "INCOMPLETE_DEFINED_RISK_GROUP"
+
+
+def test_vertical_spread_credit_exceeding_width_fails_closed_never_negative(tmp_path):
+    """Audit finding (IRON_CONDOR round): a net_credit that exceeds the
+    strike_width is economically impossible for a legitimate defined-risk
+    spread and signals malformed/stale premium data -- the formula used
+    to silently return a negative max_loss (claiming a guaranteed profit
+    floor) and let it through as ALLOW instead of failing closed."""
+    journal = _journal(tmp_path)
+    pg_id = _mint_and_construct(
+        journal, "PLAN-BADCREDIT", {"C-SHORT": "COID-SHORT", "C-LONG": "COID-LONG"},
+        {"COID-SHORT": 50, "COID-LONG": 50},
+    )
+    _submit_ack_fill(journal, pg_id, "COID-SHORT", 50, 100.0)
+    _submit_ack_fill(journal, pg_id, "COID-LONG", 50, 5.0)
+    state = fold(journal.read_events(pg_id))
+    short_contract = _contract("C-SHORT", strike=24900)
+    long_contract = _contract("C-LONG", strike=24950)  # width = 50
+    short_order = _order("COID-SHORT", short_contract, "LIMIT", 100.0)
+    long_order = _order("COID-LONG", long_contract, "LIMIT", 5.0)  # net_credit = 95 > width 50
+    contracts = {"COID-SHORT": short_contract, "COID-LONG": long_contract}
+    orders = {"COID-SHORT": short_order, "COID-LONG": long_order}
+    roles = {"COID-SHORT": "SHORT_LEG", "COID-LONG": "LONG_LEG"}
+    result = assess_defined_risk(state, contracts, orders, roles, VERTICAL_SPREAD_PROFILE, clock=_clock())
+    assert result.decision == "VETO"
+    assert result.blocking_reason == "INCOMPLETE_DEFINED_RISK_GROUP"
+    assert result.max_loss is None
+
+
+IRON_CONDOR_PROFILE = StrategyRiskProfile(
+    strategy_id="IRON_CONDOR", required_leg_roles=("SHORT_LEG_CE", "SHORT_LEG_PE", "LONG_LEG_CE", "LONG_LEG_PE"),
+    formula="IRON_CONDOR_MAX_WING_WIDTH_MINUS_TOTAL_CREDIT", lot_size=75,
+)
+
+
+def test_iron_condor_credit_exceeding_width_fails_closed_never_negative(tmp_path):
+    """Same audit finding, iron condor formula: an implausibly rich
+    combined credit relative to the wider wing must fail closed rather
+    than silently return a negative max_loss as ALLOW."""
+    journal = _journal(tmp_path)
+    pg_id = _mint_and_construct(
+        journal, "PLAN-CONDOR-BADCREDIT",
+        {"C-SC": "SC", "C-LC": "LC", "C-SP": "SP", "C-LP": "LP"},
+        {"SC": 75, "LC": 75, "SP": 75, "LP": 75},
+    )
+    for coid, qty, price in (("SC", 75, 100.0), ("LC", 75, 5.0), ("SP", 75, 90.0), ("LP", 75, 3.0)):
+        _submit_ack_fill(journal, pg_id, coid, qty, price)
+    state = fold(journal.read_events(pg_id))
+    sc = _contract("SC", 24900, "CE")
+    lc = _contract("LC", 24950, "CE")
+    sp = _contract("SP", 24700, "PE")
+    lp = _contract("LP", 24650, "PE")
+    contracts = {"SC": sc, "LC": lc, "SP": sp, "LP": lp}
+    orders = {
+        "SC": _order("SC", sc, "LIMIT", 100.0), "LC": _order("LC", lc, "LIMIT", 5.0),
+        "SP": _order("SP", sp, "LIMIT", 90.0), "LP": _order("LP", lp, "LIMIT", 3.0),
+    }
+    roles = {"SC": "SHORT_LEG_CE", "LC": "LONG_LEG_CE", "SP": "SHORT_LEG_PE", "LP": "LONG_LEG_PE"}
+    result = assess_defined_risk(state, contracts, orders, roles, IRON_CONDOR_PROFILE, clock=_clock())
+    assert result.decision == "VETO"
+    assert result.blocking_reason == "INCOMPLETE_DEFINED_RISK_GROUP"
+    assert result.max_loss is None

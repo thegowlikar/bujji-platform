@@ -363,14 +363,16 @@ def test_long_directional_missing_premium_fails_closed(tmp_path):
 
 
 def test_other_strategy_families_still_have_no_formula(tmp_path):
-    """Regression guard: only LONG_DIRECTIONAL is wired. Every other
-    real family must still VETO UNDEFINED_RISK_NO_STRESS_MODEL,
-    unconditionally -- confirming this change didn't accidentally widen
-    coverage beyond the one formula actually reviewed and tested."""
+    """Regression guard: families with NO formula wired at all must
+    still VETO UNDEFINED_RISK_NO_STRESS_MODEL, unconditionally --
+    confirming coverage hasn't accidentally widened beyond what was
+    actually reviewed and tested. IRON_CONDOR is excluded from this
+    generic loop now that it has a real formula -- see its own
+    dedicated positive tests instead."""
     journal = _journal(tmp_path)
     for family in (
-        "BUTTERFLY", "COVERED", "IRON_CONDOR", "RATIO", "SHORT_DIRECTIONAL", "SYNTHETIC",
-        "NEUTRAL_PREMIUM_SELLING", "VOLATILITY_COMPRESSION", "CALENDAR",
+        "BUTTERFLY", "COVERED", "RATIO", "SHORT_DIRECTIONAL", "SYNTHETIC",
+        "NEUTRAL_PREMIUM_SELLING", "VOLATILITY_COMPRESSION", "CALENDAR", "IRON_FLY",
     ):
         trade = dataclasses.replace(_constructed_trade(strategy_family=family))
         result = construct_and_gate_entry(
@@ -557,5 +559,175 @@ def test_neutral_premium_selling_the_naked_twin_still_vetoes(tmp_path):
     )
     result = construct_and_gate_entry(
         "DEC-SHORT-STRANGLE", trade, "NIFTY", 75, journal, [], {}, _LIMITS, 100000.0, clock=_clock(),
+    )
+    assert "DEFINED_RISK_UNDEFINED_RISK_NO_STRESS_MODEL" in result.verdict.failed_checks
+
+
+# --------------------------------------------------------------------- #
+# IRON_CONDOR — fourth real, reviewed defined-risk formula
+# --------------------------------------------------------------------- #
+
+def _iron_condor_trade(
+    short_call_strike=24900, short_put_strike=24700, long_call_strike=25000, long_put_strike=24600,
+    sc_premium=60.0, sp_premium=55.0, lc_premium=20.0, lp_premium=18.0, ratio=1,
+):
+    return dataclasses.replace(
+        _constructed_trade(strategy_family="IRON_CONDOR"),
+        legs=(
+            _leg("SHORT", "CE", short_call_strike, "SELL", premium=sc_premium, ratio=ratio),
+            _leg("SHORT", "PE", short_put_strike, "SELL", premium=sp_premium, ratio=ratio),
+            StrikeLeg(role="WING_UPPER", option_type="CE", strike=long_call_strike, expiry="2026-08-27",
+                      delta=0.1, premium=lc_premium, open_interest=500.0, side="BUY", ratio=ratio,
+                      reasoning=("t",)),
+            StrikeLeg(role="WING_LOWER", option_type="PE", strike=long_put_strike, expiry="2026-08-27",
+                      delta=0.1, premium=lp_premium, open_interest=500.0, side="BUY", ratio=ratio,
+                      reasoning=("t",)),
+        ),
+    )
+
+
+def test_iron_condor_symmetric_wings_defined_risk_allows(tmp_path):
+    """Symmetric wings (both 100 pts wide): total_credit = (60-20) +
+    (55-18) = 40 + 37 = 77. max_loss = 100*75 - 77*75 = (100-77)*75 =
+    1725.0 -- proves the four-leg role disambiguation (SHORT_LEG_CE vs
+    SHORT_LEG_PE, and WING_UPPER/WING_LOWER mapping to LONG_LEG_CE/PE)
+    works correctly, since a mixed-up leg would produce a different,
+    wrong figure."""
+    journal = _journal(tmp_path)
+    trade = _iron_condor_trade(
+        short_call_strike=24900, long_call_strike=25000,  # 100pt call wing
+        short_put_strike=24700, long_put_strike=24600,     # 100pt put wing
+        sc_premium=60.0, lc_premium=20.0, sp_premium=55.0, lp_premium=18.0,
+    )
+    result = construct_and_gate_entry(
+        "DEC-CONDOR-1", trade, "NIFTY", 75, journal, [], {}, _LIMITS, 100000.0, clock=_clock(),
+    )
+    assert result.verdict.decision == "VETO"  # capital remains the sole real blocker
+    assert "DEFINED_RISK_WITHIN_BOUNDS" in result.verdict.passed_checks
+    assert not any(f.startswith("DEFINED_RISK_") for f in result.verdict.failed_checks)
+    assert "CAPITAL_MARGIN_NOT_CERTIFIED" in result.verdict.failed_checks
+
+
+def test_iron_condor_max_loss_computed_correctly_symmetric_wings(tmp_path):
+    journal = _journal(tmp_path)
+    trade = _iron_condor_trade(
+        short_call_strike=24900, long_call_strike=25000,
+        short_put_strike=24700, long_put_strike=24600,
+        sc_premium=60.0, lc_premium=20.0, sp_premium=55.0, lp_premium=18.0,
+    )
+    pg = mint_position_group_id(journal, "DEC-CONDOR-2", trade.strategy_family, "NIFTY", clock=_clock())
+    pg_id = pg.position_group_id
+    coids = {f"{pg_id}-LEG-{i}": leg for i, leg in enumerate(trade.legs)}
+    journal.append_event(
+        pg_id, "CONSTRUCTED", f"{pg_id}:CONSTRUCTED:0",
+        {"contract_client_order_map": {f"C{i}": coid for i, coid in enumerate(coids)},
+         "requested_quantities": {coid: 75 for coid in coids},
+         "actions": {}, "target_position_group_ids": {}, "target_contract_ids": {}, "flip_link_ids": {}},
+        clock=_clock(),
+    )
+    state = fold(journal.read_events(pg_id))
+
+    role_map = {}
+    contracts = {}
+    orders = {}
+    for coid, leg in coids.items():
+        gate_b_role = (
+            f"SHORT_LEG_{leg.option_type}" if leg.role == "SHORT"
+            else "LONG_LEG_CE" if leg.role == "WING_UPPER"
+            else "LONG_LEG_PE"
+        )
+        role_map[coid] = gate_b_role
+        contracts[coid] = NiftyOptionContract(
+            contract_id=coid, underlying="NIFTY", expiry="2026-08-27", strike=leg.strike,
+            option_type=leg.option_type, side=leg.side, contract_symbol=f"NIFTY{coid}",
+            capital_intent="STANDARD", strategy_id="IRON_CONDOR", selection_reason="t",
+            construction_trace="t", timestamp="2026-08-05T09:15:00+00:00", version="1.0.0",
+        )
+        orders[coid] = SimpleNamespace(order_type="LIMIT", reference_price=leg.premium)
+
+    profile = StrategyRiskProfile(
+        strategy_id="IRON_CONDOR",
+        required_leg_roles=("SHORT_LEG_CE", "SHORT_LEG_PE", "LONG_LEG_CE", "LONG_LEG_PE"),
+        formula="IRON_CONDOR_MAX_WING_WIDTH_MINUS_TOTAL_CREDIT", lot_size=75,
+    )
+    result = assess_defined_risk(state, contracts, orders, role_map, profile, clock=_clock())
+    assert result.decision == "ALLOW"
+    # width=100 both sides, total_credit=(60-20)+(55-18)=77, qty=75
+    assert result.max_loss == pytest.approx((100 * 75) - (77.0 * 75))
+
+
+def test_iron_condor_asymmetric_wings_uses_max_not_sum_or_average(tmp_path):
+    """The formula must take the WIDER wing, not sum or average both --
+    a wrong implementation using (call_width+put_width) or their
+    average would produce a materially different, incorrect figure
+    here, since the wings are deliberately very different widths."""
+    journal = _journal(tmp_path)
+    trade = _iron_condor_trade(
+        short_call_strike=24900, long_call_strike=25200,   # 300pt call wing (wide)
+        short_put_strike=24700, long_put_strike=24650,      # 50pt put wing (narrow)
+        sc_premium=60.0, lc_premium=10.0, sp_premium=30.0, lp_premium=25.0,
+    )
+    pg = mint_position_group_id(journal, "DEC-CONDOR-3", trade.strategy_family, "NIFTY", clock=_clock())
+    pg_id = pg.position_group_id
+    coids = {f"{pg_id}-LEG-{i}": leg for i, leg in enumerate(trade.legs)}
+    journal.append_event(
+        pg_id, "CONSTRUCTED", f"{pg_id}:CONSTRUCTED:0",
+        {"contract_client_order_map": {f"C{i}": coid for i, coid in enumerate(coids)},
+         "requested_quantities": {coid: 75 for coid in coids},
+         "actions": {}, "target_position_group_ids": {}, "target_contract_ids": {}, "flip_link_ids": {}},
+        clock=_clock(),
+    )
+    state = fold(journal.read_events(pg_id))
+    role_map, contracts, orders = {}, {}, {}
+    for coid, leg in coids.items():
+        gate_b_role = (
+            f"SHORT_LEG_{leg.option_type}" if leg.role == "SHORT"
+            else "LONG_LEG_CE" if leg.role == "WING_UPPER"
+            else "LONG_LEG_PE"
+        )
+        role_map[coid] = gate_b_role
+        contracts[coid] = NiftyOptionContract(
+            contract_id=coid, underlying="NIFTY", expiry="2026-08-27", strike=leg.strike,
+            option_type=leg.option_type, side=leg.side, contract_symbol=f"NIFTY{coid}",
+            capital_intent="STANDARD", strategy_id="IRON_CONDOR", selection_reason="t",
+            construction_trace="t", timestamp="2026-08-05T09:15:00+00:00", version="1.0.0",
+        )
+        orders[coid] = SimpleNamespace(order_type="LIMIT", reference_price=leg.premium)
+    profile = StrategyRiskProfile(
+        strategy_id="IRON_CONDOR",
+        required_leg_roles=("SHORT_LEG_CE", "SHORT_LEG_PE", "LONG_LEG_CE", "LONG_LEG_PE"),
+        formula="IRON_CONDOR_MAX_WING_WIDTH_MINUS_TOTAL_CREDIT", lot_size=75,
+    )
+    result = assess_defined_risk(state, contracts, orders, role_map, profile, clock=_clock())
+    assert result.decision == "ALLOW"
+    # call_width=300, put_width=50 -> max=300. total_credit=(60-10)+(30-25)=55. qty=75.
+    expected = (300 * 75) - (55.0 * 75)
+    wrong_sum = ((300 + 50) * 75) - (55.0 * 75)
+    wrong_avg = (175 * 75) - (55.0 * 75)
+    assert result.max_loss == pytest.approx(expected)
+    assert result.max_loss != pytest.approx(wrong_sum)
+    assert result.max_loss != pytest.approx(wrong_avg)
+
+
+def test_iron_condor_missing_wing_price_fails_closed(tmp_path):
+    journal = _journal(tmp_path)
+    trade = _iron_condor_trade(lc_premium=None)
+    result = construct_and_gate_entry(
+        "DEC-CONDOR-4", trade, "NIFTY", 75, journal, [], {}, _LIMITS, 100000.0, clock=_clock(),
+    )
+    # missing premium on one leg -> exposure untrusted -> portfolio-limits
+    # fail-closed veto fires before defined-risk math would even be needed
+    assert "PORTFOLIO_LIMITS_EXPOSURE_DATA_MISSING" in result.verdict.failed_checks
+
+
+def test_iron_fly_same_shape_still_not_wired(tmp_path):
+    """Explicit regression pin: IRON_FLY shares IRON_CONDOR's exact
+    4-role shape via the same _build_legs branch and could reuse the
+    identical formula, but was deliberately not wired in this pass."""
+    journal = _journal(tmp_path)
+    trade = _iron_condor_trade()
+    trade = dataclasses.replace(trade, strategy_family="IRON_FLY")
+    result = construct_and_gate_entry(
+        "DEC-FLY", trade, "NIFTY", 75, journal, [], {}, _LIMITS, 100000.0, clock=_clock(),
     )
     assert "DEFINED_RISK_UNDEFINED_RISK_NO_STRESS_MODEL" in result.verdict.failed_checks
