@@ -27,7 +27,7 @@ Gate B's engine.assess() and MIL Next's snapshot_builder.build_snapshot():
   4. ALLOW -> build real OrderRequest objects (never before this point)
      VETO  -> stop; zero OrderRequest objects are ever constructed
 
-DISCLOSED, HONEST STATUS: exactly SIX real MSI strategy families have
+DISCLOSED, HONEST STATUS: exactly SEVEN real MSI strategy families have
 a reviewed, closed-form defined-risk formula wired:
 
   - LONG_DIRECTIONAL (a single long option leg, `bujji.
@@ -92,6 +92,26 @@ a reviewed, closed-form defined-risk formula wired:
     ROLE_WING_LOWER/ROLE_BODY/ROLE_WING_UPPER are already distinct role
     strings by construction (no collision class here at all, unlike
     every prior family) -- role translation is the identity function.
+  - CALENDAR (two legs, different expiries, SAME strike: sell 1x
+    near-expiry ATM CE, buy 1x far-expiry ATM CE). THE ONLY
+    MODEL-DEPENDENT FORMULA IN THIS MODULE -- every other family's
+    formula is pure combinatorial payoff-at-common-expiry algebra;
+    CALENDAR spans two expiries, so its worst case is bounded by an
+    options no-arbitrage argument instead: at the near leg's expiry
+    both legs share the same strike, so the near-short's intrinsic
+    settlement I is always <= the far-long's remaining market value V
+    (more time to expiry cannot be worth less than zero extra) --
+    combined with entry cashflow this bounds worst-case loss at the
+    net debit paid. CALENDAR_NET_DEBIT_PAID enforces the SAME strike
+    and SAME option_type across both legs (required for the V>=I bound
+    to hold at all) and, unlike every other formula's guard, FLOORS at
+    zero rather than raising when the raw computation is "negative"
+    (near_premium > far_premium) -- an inverted term structure is a
+    real market occurrence for calendars, not malformed data, and it
+    only makes the bound more conservative. taxonomy.
+    ROLE_NEAR_EXPIRY_SHORT/ROLE_FAR_EXPIRY_LONG are already distinct
+    role strings by construction -- role translation is the identity
+    function, same as BUTTERFLY.
 
 Audited finding NEUTRAL_PREMIUM_BUYING's addition surfaced: `_build_legs`
 assigns the SAME MSI role string ("LONG") to BOTH legs of a
@@ -101,7 +121,7 @@ per-leg FUNCTION (disambiguating by `leg.option_type` where needed),
 not a flat dict, for every family from here on.
 
 Every OTHER real MSI strategy family (COVERED/NEUTRAL_PREMIUM_SELLING/
-RATIO/SHORT_DIRECTIONAL/SYNTHETIC/CALENDAR/VOLATILITY_COMPRESSION)
+RATIO/SHORT_DIRECTIONAL/SYNTHETIC/VOLATILITY_COMPRESSION)
 still has NO formula and still VETOes UNDEFINED_RISK_NO_STRESS_MODEL,
 unconditionally. VOLATILITY_COMPRESSION is
 VOLATILITY_EXPANSION's naked-short twin (SELL both legs instead of
@@ -163,8 +183,8 @@ Clock = Callable[[], datetime]
 # instead.
 #
 # LONG_DIRECTIONAL, NEUTRAL_PREMIUM_BUYING, VOLATILITY_EXPANSION,
-# IRON_CONDOR, IRON_FLY, and BUTTERFLY are populated -- see module
-# docstring for why every other real MSI family still has none.
+# IRON_CONDOR, IRON_FLY, BUTTERFLY, and CALENDAR are populated -- see
+# module docstring for why every other real MSI family still has none.
 _MSI_FORMULA_SPECS: Dict[str, Tuple[Tuple[str, ...], str, Callable[["StrikeLeg"], str]]] = {
     "LONG_DIRECTIONAL": (("LONG_LEG",), "LONG_OPTION_PREMIUM_PAID", lambda leg: "LONG_LEG"),
     "NEUTRAL_PREMIUM_BUYING": (
@@ -221,6 +241,14 @@ _MSI_FORMULA_SPECS: Dict[str, Tuple[Tuple[str, ...], str, Callable[["StrikeLeg"]
     "BUTTERFLY": (
         ("WING_LOWER", "BODY", "WING_UPPER"),
         "BUTTERFLY_NET_DEBIT_PAID",
+        lambda leg: leg.role,
+    ),
+    # Two legs, different expiries, SAME strike -- already distinct
+    # role strings by construction, identity translation. See module
+    # docstring for why this is the one model-dependent formula here.
+    "CALENDAR": (
+        ("NEAR_EXPIRY_SHORT", "FAR_EXPIRY_LONG"),
+        "CALENDAR_NET_DEBIT_PAID",
         lambda leg: leg.role,
     ),
 }

@@ -13,6 +13,7 @@ priced from a market order without a certified adverse-fill bound
 """
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass
 from datetime import datetime
 from typing import Callable, Dict, Optional, Tuple
@@ -222,12 +223,84 @@ def _butterfly_max_loss(
     return max_loss
 
 
+def _calendar_max_loss(
+    contracts_by_role: Dict[str, "NiftyOptionContract"],
+    orders_by_role: Dict[str, OrderRequest],
+    profile: StrategyRiskProfile,
+    leg_quantities: Dict[str, int],
+) -> float:
+    """MODEL-DEPENDENT FORMULA -- the only one in this module that is
+    not pure static strike/premium algebra. A calendar spread (sell 1x
+    near-expiry ATM option, buy 1x far-expiry option at the SAME
+    strike) spans two different expiries, so its terminal payoff is not
+    fully determined by strikes and entry premiums alone the way every
+    other formula here is.
+
+    The bound relied on: at the near leg's expiry the near-short
+    settles to intrinsic value I; because both legs share the exact
+    same strike and option type, the far-long's remaining market value
+    V at that same instant must satisfy V >= I (a no-arbitrage
+    property -- an option can never be worth less than its own
+    intrinsic value, i.e. additional time to expiry cannot subtract
+    value). Combining entry cashflow (near_premium received, far_premium
+    paid) with this bound gives a worst case no worse than losing the
+    net debit paid (near_premium - far_premium, if negative). This is
+    the standard, textbook-recognized property calendars are valued
+    for -- but it is a MODEL assumption (relies on the option-pricing
+    no-arbitrage bound above), not pure combinatorial payoff math like
+    the vertical spread / iron condor / butterfly formulas.
+
+    Unlike those formulas, a "negative" raw result here (net_credit >
+    0, i.e. near_premium > far_premium) is NOT necessarily malformed
+    data -- an inverted term structure (near-term IV richer than
+    far-term, e.g. ahead of an event) is a real, legitimate market
+    occurrence for calendars specifically, and it only makes the
+    worst-case bound MORE conservative (floor at zero loss), never
+    less. So max_loss is floored at 0.0 here rather than raising, in
+    deliberate contrast to every other formula's negative-result guard."""
+    required = ("NEAR_EXPIRY_SHORT", "FAR_EXPIRY_LONG")
+    near_contract = contracts_by_role["NEAR_EXPIRY_SHORT"]
+    far_contract = contracts_by_role["FAR_EXPIRY_LONG"]
+    if near_contract.strike != far_contract.strike:
+        raise IllegalDefinedRiskInputError(
+            "calendar requires both legs at the identical strike -- "
+            f"got near={near_contract.strike!r} far={far_contract.strike!r}; "
+            "the V>=I no-arbitrage bound this formula relies on does not hold otherwise"
+        )
+    if near_contract.option_type != far_contract.option_type:
+        raise IllegalDefinedRiskInputError(
+            "calendar requires both legs to be the same option_type -- "
+            f"got near={near_contract.option_type!r} far={far_contract.option_type!r}"
+        )
+    if far_contract.expiry <= near_contract.expiry:
+        raise IllegalDefinedRiskInputError(
+            "calendar requires the FAR_EXPIRY_LONG leg's expiry to be strictly later "
+            f"than NEAR_EXPIRY_SHORT's -- got near={near_contract.expiry!r} far={far_contract.expiry!r}; "
+            "the V>=I no-arbitrage bound is derived at the near leg's own expiry and requires "
+            "the far leg to genuinely have more time remaining at that point, not just be labelled so"
+        )
+    prices = {r: orders_by_role[r].reference_price for r in required}
+    if any(p is None for p in prices.values()):
+        raise IllegalDefinedRiskInputError("calendar requires a reference_price on both legs")
+    for role, price in prices.items():
+        if not math.isfinite(price) or price < 0:
+            raise IllegalDefinedRiskInputError(
+                f"calendar requires a finite, non-negative reference_price on {role!r} -- got {price!r}; "
+                "the max(0.0, net_debit) floor below is only valid for a legitimate inverted term "
+                "structure, not for malformed/corrupted price data, which must fail closed here instead"
+            )
+    quantity = min(abs(leg_quantities[r]) for r in required)
+    net_debit = (prices["FAR_EXPIRY_LONG"] - prices["NEAR_EXPIRY_SHORT"]) * quantity
+    return max(0.0, net_debit)
+
+
 _FORMULAS = {
     "VERTICAL_SPREAD_WIDTH_MINUS_CREDIT": _vertical_spread_max_loss,
     "LONG_OPTION_PREMIUM_PAID": _long_option_max_loss,
     "MULTI_LEG_LONG_PREMIUM_PAID": _multi_leg_long_premium_paid,
     "IRON_CONDOR_MAX_WING_WIDTH_MINUS_TOTAL_CREDIT": _iron_condor_max_loss,
     "BUTTERFLY_NET_DEBIT_PAID": _butterfly_max_loss,
+    "CALENDAR_NET_DEBIT_PAID": _calendar_max_loss,
 }
 
 

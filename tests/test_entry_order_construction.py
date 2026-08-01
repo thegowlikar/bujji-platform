@@ -4,6 +4,7 @@ from __future__ import annotations
 import ast
 import dataclasses
 import inspect
+import math
 from datetime import datetime, timezone
 from pathlib import Path
 from types import SimpleNamespace
@@ -366,13 +367,13 @@ def test_other_strategy_families_still_have_no_formula(tmp_path):
     """Regression guard: families with NO formula wired at all must
     still VETO UNDEFINED_RISK_NO_STRESS_MODEL, unconditionally --
     confirming coverage hasn't accidentally widened beyond what was
-    actually reviewed and tested. IRON_CONDOR, IRON_FLY, and BUTTERFLY
-    are excluded from this generic loop now that each has a real
-    formula -- see their own dedicated positive tests instead."""
+    actually reviewed and tested. IRON_CONDOR, IRON_FLY, BUTTERFLY, and
+    CALENDAR are excluded from this generic loop now that each has a
+    real formula -- see their own dedicated positive tests instead."""
     journal = _journal(tmp_path)
     for family in (
         "COVERED", "RATIO", "SHORT_DIRECTIONAL", "SYNTHETIC",
-        "NEUTRAL_PREMIUM_SELLING", "VOLATILITY_COMPRESSION", "CALENDAR",
+        "NEUTRAL_PREMIUM_SELLING", "VOLATILITY_COMPRESSION",
     ):
         trade = dataclasses.replace(_constructed_trade(strategy_family=family))
         result = construct_and_gate_entry(
@@ -931,3 +932,247 @@ def test_ratio_naked_short_tail_stays_permanently_vetoed(tmp_path):
         "DEC-RATIO-1", trade, "NIFTY", 75, journal, [], {}, _LIMITS, 100000.0, clock=_clock(),
     )
     assert "DEFINED_RISK_UNDEFINED_RISK_NO_STRESS_MODEL" in result.verdict.failed_checks
+
+
+# --------------------------------------------------------------------- #
+# CALENDAR — seventh real, reviewed defined-risk formula. The only
+# model-dependent one: relies on an options no-arbitrage bound (V>=I)
+# rather than pure combinatorial payoff math, since it spans two
+# different expiries.
+# --------------------------------------------------------------------- #
+
+def _calendar_trade(
+    strike=24800, near_expiry="2026-08-27", far_expiry="2026-09-24",
+    near_premium=45.0, far_premium=70.0, ratio=1,
+):
+    return dataclasses.replace(
+        _constructed_trade(strategy_family="CALENDAR"),
+        legs=(
+            StrikeLeg(role="NEAR_EXPIRY_SHORT", option_type="CE", strike=strike, expiry=near_expiry,
+                      delta=0.5, premium=near_premium, open_interest=1000.0, side="SELL", ratio=ratio,
+                      reasoning=("t",)),
+            StrikeLeg(role="FAR_EXPIRY_LONG", option_type="CE", strike=strike, expiry=far_expiry,
+                      delta=0.5, premium=far_premium, open_interest=1000.0, side="BUY", ratio=ratio,
+                      reasoning=("t",)),
+        ),
+    )
+
+
+def test_calendar_net_debit_defined_risk_allows(tmp_path):
+    """far_premium(70) > near_premium(45) -- the ordinary case (far leg
+    costs more, more time value). net_debit = 25 per unit."""
+    journal = _journal(tmp_path)
+    trade = _calendar_trade(near_premium=45.0, far_premium=70.0)
+    result = construct_and_gate_entry(
+        "DEC-CAL-1", trade, "NIFTY", 75, journal, [], {}, _LIMITS, 100000.0, clock=_clock(),
+    )
+    assert result.verdict.decision == "VETO"  # capital remains the sole real blocker
+    assert "DEFINED_RISK_WITHIN_BOUNDS" in result.verdict.passed_checks
+    assert not any(f.startswith("DEFINED_RISK_") for f in result.verdict.failed_checks)
+    assert "CAPITAL_MARGIN_NOT_CERTIFIED" in result.verdict.failed_checks
+
+
+def test_calendar_max_loss_computed_correctly(tmp_path):
+    journal = _journal(tmp_path)
+    trade = _calendar_trade(near_premium=45.0, far_premium=70.0)
+    pg = mint_position_group_id(journal, "DEC-CAL-2", trade.strategy_family, "NIFTY", clock=_clock())
+    pg_id = pg.position_group_id
+    coids = {f"{pg_id}-LEG-{i}": leg for i, leg in enumerate(trade.legs)}
+    journal.append_event(
+        pg_id, "CONSTRUCTED", f"{pg_id}:CONSTRUCTED:0",
+        {"contract_client_order_map": {f"C{i}": coid for i, coid in enumerate(coids)},
+         "requested_quantities": {coid: 75 for coid in coids},
+         "actions": {}, "target_position_group_ids": {}, "target_contract_ids": {}, "flip_link_ids": {}},
+        clock=_clock(),
+    )
+    state = fold(journal.read_events(pg_id))
+    role_map, contracts, orders = {}, {}, {}
+    for coid, leg in coids.items():
+        role_map[coid] = leg.role
+        contracts[coid] = NiftyOptionContract(
+            contract_id=coid, underlying="NIFTY", expiry=leg.expiry, strike=leg.strike,
+            option_type=leg.option_type, side=leg.side, contract_symbol=f"NIFTY{coid}",
+            capital_intent="STANDARD", strategy_id="CALENDAR", selection_reason="t",
+            construction_trace="t", timestamp="2026-08-05T09:15:00+00:00", version="1.0.0",
+        )
+        orders[coid] = SimpleNamespace(order_type="LIMIT", reference_price=leg.premium)
+    profile = StrategyRiskProfile(
+        strategy_id="CALENDAR", required_leg_roles=("NEAR_EXPIRY_SHORT", "FAR_EXPIRY_LONG"),
+        formula="CALENDAR_NET_DEBIT_PAID", lot_size=75,
+    )
+    result = assess_defined_risk(state, contracts, orders, role_map, profile, clock=_clock())
+    assert result.decision == "ALLOW"
+    assert result.max_loss == pytest.approx((70.0 - 45.0) * 75)
+
+
+def test_calendar_inverted_term_structure_floors_at_zero_not_error(tmp_path):
+    """Audit-relevant proof: near_premium > far_premium (inverted term
+    structure, e.g. ahead of an event) is a REAL market occurrence for
+    calendars, not malformed data -- must floor max_loss at 0.0 and
+    ALLOW, never raise or silently go negative, in deliberate contrast
+    to every other formula's negative-result guard."""
+    journal = _journal(tmp_path)
+    trade = _calendar_trade(near_premium=80.0, far_premium=55.0)  # inverted
+    pg = mint_position_group_id(journal, "DEC-CAL-3", trade.strategy_family, "NIFTY", clock=_clock())
+    pg_id = pg.position_group_id
+    coids = {f"{pg_id}-LEG-{i}": leg for i, leg in enumerate(trade.legs)}
+    journal.append_event(
+        pg_id, "CONSTRUCTED", f"{pg_id}:CONSTRUCTED:0",
+        {"contract_client_order_map": {f"C{i}": coid for i, coid in enumerate(coids)},
+         "requested_quantities": {coid: 75 for coid in coids},
+         "actions": {}, "target_position_group_ids": {}, "target_contract_ids": {}, "flip_link_ids": {}},
+        clock=_clock(),
+    )
+    state = fold(journal.read_events(pg_id))
+    role_map, contracts, orders = {}, {}, {}
+    for coid, leg in coids.items():
+        role_map[coid] = leg.role
+        contracts[coid] = NiftyOptionContract(
+            contract_id=coid, underlying="NIFTY", expiry=leg.expiry, strike=leg.strike,
+            option_type=leg.option_type, side=leg.side, contract_symbol=f"NIFTY{coid}",
+            capital_intent="STANDARD", strategy_id="CALENDAR", selection_reason="t",
+            construction_trace="t", timestamp="2026-08-05T09:15:00+00:00", version="1.0.0",
+        )
+        orders[coid] = SimpleNamespace(order_type="LIMIT", reference_price=leg.premium)
+    profile = StrategyRiskProfile(
+        strategy_id="CALENDAR", required_leg_roles=("NEAR_EXPIRY_SHORT", "FAR_EXPIRY_LONG"),
+        formula="CALENDAR_NET_DEBIT_PAID", lot_size=75,
+    )
+    result = assess_defined_risk(state, contracts, orders, role_map, profile, clock=_clock())
+    assert result.decision == "ALLOW"
+    assert result.max_loss == 0.0
+
+
+def test_calendar_mismatched_strikes_fails_closed(tmp_path):
+    """Audit-relevant: the V>=I bound this formula relies on requires
+    both legs at the IDENTICAL strike -- a mismatched strike must fail
+    closed, not silently compute a meaningless number."""
+    journal = _journal(tmp_path)
+    trade = _calendar_trade()
+    mismatched_legs = (
+        trade.legs[0],
+        dataclasses.replace(trade.legs[1], strike=24900),  # far leg strike differs from near leg
+    )
+    trade = dataclasses.replace(trade, legs=mismatched_legs)
+    result = construct_and_gate_entry(
+        "DEC-CAL-4", trade, "NIFTY", 75, journal, [], {}, _LIMITS, 100000.0, clock=_clock(),
+    )
+    assert "DEFINED_RISK_INCOMPLETE_DEFINED_RISK_GROUP" in result.verdict.failed_checks
+
+
+def test_calendar_missing_price_fails_closed(tmp_path):
+    journal = _journal(tmp_path)
+    trade = _calendar_trade(far_premium=None)
+    result = construct_and_gate_entry(
+        "DEC-CAL-5", trade, "NIFTY", 75, journal, [], {}, _LIMITS, 100000.0, clock=_clock(),
+    )
+    assert "PORTFOLIO_LIMITS_EXPOSURE_DATA_MISSING" in result.verdict.failed_checks
+
+
+def test_calendar_far_expiry_not_after_near_expiry_fails_closed(tmp_path):
+    """Audit finding: the formula trusts the NEAR_EXPIRY_SHORT/
+    FAR_EXPIRY_LONG role labels without checking the far leg's expiry
+    is actually later than the near leg's. The V>=I no-arbitrage bound
+    is derived AT the near leg's own expiry and requires the far leg to
+    genuinely have more time remaining at that instant -- a same or
+    earlier far expiry breaks the derivation entirely, not just make it
+    less tight, so this must fail closed rather than silently compute
+    a number."""
+    journal = _journal(tmp_path)
+    trade = _calendar_trade(near_expiry="2026-08-27", far_expiry="2026-08-27")  # same expiry
+    result = construct_and_gate_entry(
+        "DEC-CAL-6", trade, "NIFTY", 75, journal, [], {}, _LIMITS, 100000.0, clock=_clock(),
+    )
+    assert "DEFINED_RISK_INCOMPLETE_DEFINED_RISK_GROUP" in result.verdict.failed_checks
+
+
+def test_calendar_swapped_expiry_labels_fails_closed(tmp_path):
+    """Same finding, more dangerous variant: the leg LABELLED far
+    actually expires BEFORE the leg labelled near (mislabeled/swapped
+    data). Must fail closed, never silently ALLOW."""
+    journal = _journal(tmp_path)
+    trade = _calendar_trade(near_expiry="2026-09-24", far_expiry="2026-08-27")  # swapped
+    result = construct_and_gate_entry(
+        "DEC-CAL-7", trade, "NIFTY", 75, journal, [], {}, _LIMITS, 100000.0, clock=_clock(),
+    )
+    assert "DEFINED_RISK_INCOMPLETE_DEFINED_RISK_GROUP" in result.verdict.failed_checks
+
+
+def test_calendar_negative_premium_fails_closed_not_silently_zeroed(tmp_path):
+    """Adversarial audit finding (independently verified via a control
+    test against the vertical spread formula's own negative-max_loss
+    guard): every OTHER formula's negative-result guard incidentally
+    catches a sign-corrupted premium, since it inflates or negates
+    their computed max_loss. Calendar's deliberate max(0.0, net_debit)
+    floor -- added to accept a LEGITIMATE inverted term structure --
+    removed that incidental protection without replacing it, so a
+    corrupted negative far_premium used to silently produce ALLOW with
+    max_loss=0.0 for a position with a genuine positive debit. Must
+    fail closed instead."""
+    journal = _journal(tmp_path)
+    trade = _calendar_trade(near_premium=45.0, far_premium=-70.0)
+    result = construct_and_gate_entry(
+        "DEC-CAL-8", trade, "NIFTY", 75, journal, [], {}, _LIMITS, 100000.0, clock=_clock(),
+    )
+    assert result.verdict.decision == "VETO"
+    assert "DEFINED_RISK_INCOMPLETE_DEFINED_RISK_GROUP" in result.verdict.failed_checks
+
+
+def test_calendar_nan_premium_fails_closed(tmp_path):
+    """Same finding, NaN variant: Python's max(0.0, nan) silently
+    returns 0.0 rather than propagating or raising (NaN comparisons
+    are always False), which would have produced the identical false
+    ALLOW as the negative-premium case via a realistic upstream
+    data-pipeline corruption (e.g. a 0/0 division)."""
+    journal = _journal(tmp_path)
+    pg = mint_position_group_id(journal, "DEC-CAL-9", "CALENDAR", "NIFTY", clock=_clock())
+    pg_id = pg.position_group_id
+    journal.append_event(
+        pg_id, "CONSTRUCTED", f"{pg_id}:CONSTRUCTED:0",
+        {"contract_client_order_map": {"C0": "NEAR", "C1": "FAR"},
+         "requested_quantities": {"NEAR": 75, "FAR": 75},
+         "actions": {}, "target_position_group_ids": {}, "target_contract_ids": {}, "flip_link_ids": {}},
+        clock=_clock(),
+    )
+    state = fold(journal.read_events(pg_id))
+    near_contract = NiftyOptionContract(
+        contract_id="NEAR", underlying="NIFTY", expiry="2026-08-27", strike=24800,
+        option_type="CE", side="SELL", contract_symbol="NIFTY-NEAR", capital_intent="STANDARD",
+        strategy_id="CALENDAR", selection_reason="t", construction_trace="t",
+        timestamp="2026-08-05T09:15:00+00:00", version="1.0.0",
+    )
+    far_contract = NiftyOptionContract(
+        contract_id="FAR", underlying="NIFTY", expiry="2026-09-24", strike=24800,
+        option_type="CE", side="BUY", contract_symbol="NIFTY-FAR", capital_intent="STANDARD",
+        strategy_id="CALENDAR", selection_reason="t", construction_trace="t",
+        timestamp="2026-08-05T09:15:00+00:00", version="1.0.0",
+    )
+    contracts = {"NEAR": near_contract, "FAR": far_contract}
+    orders = {
+        "NEAR": SimpleNamespace(order_type="LIMIT", reference_price=45.0),
+        "FAR": SimpleNamespace(order_type="LIMIT", reference_price=float("nan")),
+    }
+    roles = {"NEAR": "NEAR_EXPIRY_SHORT", "FAR": "FAR_EXPIRY_LONG"}
+    profile = StrategyRiskProfile(
+        strategy_id="CALENDAR", required_leg_roles=("NEAR_EXPIRY_SHORT", "FAR_EXPIRY_LONG"),
+        formula="CALENDAR_NET_DEBIT_PAID", lot_size=75,
+    )
+    result = assess_defined_risk(state, contracts, orders, roles, profile, clock=_clock())
+    assert result.decision == "VETO"
+    assert result.max_loss is None
+
+
+def test_calendar_legitimate_inverted_term_structure_still_allows(tmp_path):
+    """Regression guard for the fix above: the negative/NaN input
+    validation must NOT catch the legitimate case the max(0.0, ...)
+    floor exists for. A genuinely rich near-term premium relative to
+    a cheaper far-term one (both positive, finite) is a real market
+    occurrence and must still ALLOW with max_loss=0.0, not VETO."""
+    journal = _journal(tmp_path)
+    trade = _calendar_trade(near_premium=80.0, far_premium=55.0)  # both positive, inverted
+    result = construct_and_gate_entry(
+        "DEC-CAL-10", trade, "NIFTY", 75, journal, [], {}, _LIMITS, 100000.0, clock=_clock(),
+    )
+    assert result.verdict.decision == "VETO"  # capital remains the sole real blocker
+    assert "DEFINED_RISK_WITHIN_BOUNDS" in result.verdict.passed_checks
+    assert not any(f.startswith("DEFINED_RISK_") for f in result.verdict.failed_checks)
