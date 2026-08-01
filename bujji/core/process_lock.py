@@ -49,6 +49,16 @@ class ProcessLock:
         """Whether this platform can actually enforce the lock."""
         return _HAS_FLOCK
 
+    @property
+    def held(self) -> bool:
+        """Whether THIS instance currently holds the lock (i.e. a
+        successful acquire() has run and release() has not since).
+        Additive, read-only -- callers that need to prove exclusive
+        ownership before constructing a dispatch-/recovery-capable
+        resource (e.g. PositionGroupJournal) check this rather than
+        reaching into the private file-handle field directly."""
+        return self._fh is not None
+
     def acquire(self) -> None:
         """Acquire the lock or raise :class:`LockAcquisitionError`.
 
