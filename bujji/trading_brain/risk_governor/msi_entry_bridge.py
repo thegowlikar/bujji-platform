@@ -27,14 +27,32 @@ Gate B's engine.assess() and MIL Next's snapshot_builder.build_snapshot():
   4. ALLOW -> build real OrderRequest objects (never before this point)
      VETO  -> stop; zero OrderRequest objects are ever constructed
 
-DISCLOSED, HONEST LIMITATION: no StrategyRiskProfile formula exists yet
-for any real MSI strategy family (BUTTERFLY/COVERED/
-NEUTRAL_PREMIUM_SELLING/RATIO/SHORT_DIRECTIONAL) -- mapping each one's
-real payoff structure to a reviewed, closed-form defined-risk formula
-is separate, future work, not attempted here. Combined with Gate C's
-own still-uncertified margin provider, this means every real call
-through this bridge VETOes today, unconditionally -- by design, not by
-accident, matching this whole session's fail-closed discipline.
+DISCLOSED, HONEST STATUS: exactly ONE real MSI strategy family has a
+reviewed, closed-form defined-risk formula wired -- LONG_DIRECTIONAL
+(a single long option leg, `bujji.msi_trade_construction.engine.
+_build_legs`'s "LONG_DIRECTIONAL" branch: one BUY leg, taxonomy.
+ROLE_LONG, nothing else). Its payoff is unambiguous and already-bounded
+by construction: maximum loss is the premium paid, in full, and
+nothing else needs to be modeled (no short leg, no assignment risk, no
+undefined tail). This reuses Gate B's existing LONG_OPTION_PREMIUM_PAID
+formula verbatim -- no new formula math was written, only the mapping
+from MSI's real leg-construction output to Gate B's existing, reviewed
+formula input shape.
+
+Every OTHER real MSI strategy family (BUTTERFLY/COVERED/
+IRON_CONDOR/IRON_FLY/NEUTRAL_PREMIUM_SELLING/NEUTRAL_PREMIUM_BUYING/
+RATIO/SHORT_DIRECTIONAL/SYNTHETIC/CALENDAR/VOLATILITY_EXPANSION/
+VOLATILITY_COMPRESSION) still has NO formula and still VETOes
+UNDEFINED_RISK_NO_STRESS_MODEL, unconditionally -- each one's real
+payoff structure (multi-leg, assignment risk, ratio imbalance, calendar
+time-decay asymmetry, etc.) needs its own separately-reviewed formula,
+not attempted here. Combined with Gate C's own still-uncertified margin
+provider, this means every real call through this bridge STILL VETOes
+today (on the capital check, if not on defined risk) -- by design, not
+by accident, matching this whole session's fail-closed discipline. A
+LONG_DIRECTIONAL trade is the first to reach a genuine DEFINED_RISK
+ALLOW, isolating capital as the one remaining, honestly-disclosed
+blocker for that specific strategy shape.
 """
 from __future__ import annotations
 
@@ -56,12 +74,17 @@ from bujji.trading_brain.risk_governor.position_group_mint import mint_position_
 
 Clock = Callable[[], datetime]
 
-# No real MSI strategy family has a reviewed, closed-form defined-risk
-# formula yet -- see module docstring. Every MSI-originated trade is
-# therefore assessed with profile=None, which defined_risk.py already
-# correctly VETOes as UNDEFINED_RISK_NO_STRESS_MODEL. Extending this
-# per real strategy shape is separate, future, explicitly-scoped work.
-MSI_STRATEGY_RISK_PROFILES: Dict[str, StrategyRiskProfile] = {}
+# Per-family spec: (required Gate B role labels, Gate B formula name,
+# MSI-role -> Gate-B-role translation). `lot_size` is deliberately NOT
+# baked in here -- it's a real, caller-supplied runtime value (the
+# actual NIFTY lot size in effect), never hardcoded into a static
+# profile; the real StrategyRiskProfile is constructed per-call below.
+#
+# Only LONG_DIRECTIONAL is populated -- see module docstring for why
+# every other real MSI family still has none.
+_MSI_FORMULA_SPECS: Dict[str, Tuple[Tuple[str, ...], str, Dict[str, str]]] = {
+    "LONG_DIRECTIONAL": (("LONG_LEG",), "LONG_OPTION_PREMIUM_PAID", {"LONG": "LONG_LEG"}),
+}
 
 
 @dataclass(frozen=True)
@@ -136,6 +159,9 @@ def construct_and_gate_entry(
     core_sides: Dict[str, str] = {}
     leg_roles: Dict[str, str] = {}
 
+    formula_spec = _MSI_FORMULA_SPECS.get(trade.strategy_family)
+    role_translation = formula_spec[2] if formula_spec else {}
+
     for i, leg in enumerate(trade.legs):
         contract_id = f"C{i}"
         coid = _leg_client_order_id(pg_id, i)
@@ -144,7 +170,13 @@ def construct_and_gate_entry(
         core_contracts[coid] = _leg_to_core_contract(leg, underlying, lot_size)
         core_prices[coid] = leg.premium
         core_sides[coid] = leg.side
-        leg_roles[coid] = leg.role
+        # Translated to Gate B's own role vocabulary (LONG_LEG/SHORT_LEG)
+        # only for families with a real formula wired -- MSI's raw role
+        # string (e.g. taxonomy.ROLE_LONG == "LONG") is never assumed to
+        # match Gate B's labels by coincidence. Untranslated families
+        # keep the raw MSI role, which is harmless since profile is None
+        # for them and defined_risk.py never reaches a role lookup.
+        leg_roles[coid] = role_translation.get(leg.role, leg.role)
 
     journal.append_event(
         pg_id, "CONSTRUCTED", f"{pg_id}:CONSTRUCTED:0",
@@ -159,12 +191,16 @@ def construct_and_gate_entry(
         coid: _make_trading_brain_shaped_order(coid, core_prices[coid])
         for coid in contract_client_order_map.values()
     }
-    profile = MSI_STRATEGY_RISK_PROFILES.get(trade.strategy_family)
+    profile = None
+    if formula_spec is not None:
+        required_roles, formula_name, _ = formula_spec
+        profile = StrategyRiskProfile(
+            strategy_id=trade.strategy_family, required_leg_roles=required_roles,
+            formula=formula_name, lot_size=lot_size,
+        )
     defined_risk = assess_defined_risk(
         state,
-        contracts_by_client_order_id={},   # profile is always None today -- see module docstring;
-                                             # defined_risk.py never reaches the contract-shape lookups
-                                             # (which are Trading Brain v3-shaped) when profile is None.
+        contracts_by_client_order_id=core_contracts,
         orders_by_client_order_id=orders_for_defined_risk,
         leg_roles=leg_roles, profile=profile, clock=clock,
     )

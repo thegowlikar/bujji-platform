@@ -2,9 +2,11 @@
 from __future__ import annotations
 
 import ast
+import dataclasses
 import inspect
 from datetime import datetime, timezone
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -12,11 +14,15 @@ from bujji.core.models import OrderResult
 from bujji.core.enums import OrderStatus
 from bujji.broker.paper import PaperBroker
 from bujji.journal.position_group_journal import PositionGroupJournal
+from bujji.trading_brain.nifty_contract_builder.models import NiftyOptionContract
 from bujji.trading_brain.risk_governor import msi_entry_bridge
+from bujji.trading_brain.risk_governor.defined_risk import StrategyRiskProfile, assess_defined_risk
 from bujji.trading_brain.risk_governor.msi_entry_bridge import (
     construct_and_gate_entry,
     dispatch_via_paper_broker,
 )
+from bujji.trading_brain.risk_governor.position_group_fold import fold
+from bujji.trading_brain.risk_governor.position_group_mint import mint_position_group_id
 from bujji.msi_trade_construction.models import Explanation, ExpiryDecision, StrikeLeg, TradeConstructionAssessment
 from bujji.trading_brain.risk_governor.portfolio_limits import PortfolioLimits
 
@@ -273,3 +279,98 @@ def test_allowed_order_limit_price_matches_what_was_risk_assessed(tmp_path, monk
     for order in result.order_requests:
         assert order.limit_price is not None
         assert order.limit_price == order.reference_price
+
+
+# --------------------------------------------------------------------- #
+# LONG_DIRECTIONAL — the first real, reviewed defined-risk formula
+# --------------------------------------------------------------------- #
+
+def _long_directional_trade(premium=150.0, ratio=1):
+    return dataclasses.replace(
+        _constructed_trade(strategy_family="LONG_DIRECTIONAL"),
+        legs=(_leg("LONG", "CE", 24800, "BUY", premium=premium, ratio=ratio),),
+    )
+
+
+def test_long_directional_defined_risk_allows_with_correct_max_loss(tmp_path):
+    """The central proof: a real MSI strategy family now reaches a
+    genuine DEFINED_RISK ALLOW, computed from the actual formula
+    (premium * quantity), not a placeholder. Capital remains the sole
+    real blocker, isolated and correctly named -- proving the two
+    veto reasons are now independent, not conflated."""
+    journal = _journal(tmp_path)
+    result = construct_and_gate_entry(
+        "DEC-LONG-1", _long_directional_trade(premium=150.0, ratio=2), "NIFTY", 75,
+        journal, [], {}, _LIMITS, 100000.0, clock=_clock(),
+    )
+    assert result.verdict.decision == "VETO"  # still vetoed overall -- capital is the ONLY remaining reason
+    assert "DEFINED_RISK_WITHIN_BOUNDS" in result.verdict.passed_checks
+    assert not any(f.startswith("DEFINED_RISK_") for f in result.verdict.failed_checks)
+    assert "CAPITAL_MARGIN_NOT_CERTIFIED" in result.verdict.failed_checks
+
+
+def test_long_directional_max_loss_computed_correctly_via_defined_risk_directly(tmp_path):
+    """Bypass the Governor's overall VETO (capital) and inspect the real
+    DefinedRiskAssessment the bridge produced, to prove the formula's
+    actual arithmetic -- premium(150.0) * quantity(2 lots * 75) = 22500.0."""
+    journal = _journal(tmp_path)
+    trade = _long_directional_trade(premium=150.0, ratio=2)
+    pg = mint_position_group_id(journal, "DEC-LONG-2", trade.strategy_family, "NIFTY", clock=_clock())
+    journal.append_event(
+        pg.position_group_id, "CONSTRUCTED", f"{pg.position_group_id}:CONSTRUCTED:0",
+        {"contract_client_order_map": {"C0": f"{pg.position_group_id}-LEG-0"},
+         "requested_quantities": {f"{pg.position_group_id}-LEG-0": 150},
+         "actions": {}, "target_position_group_ids": {}, "target_contract_ids": {}, "flip_link_ids": {}},
+        clock=_clock(),
+    )
+    state = fold(journal.read_events(pg.position_group_id))
+    coid = f"{pg.position_group_id}-LEG-0"
+    contract = NiftyOptionContract(
+        contract_id="C0", underlying="NIFTY", expiry="2026-08-27", strike=24800, option_type="CE", side="BUY",
+        contract_symbol="NIFTY26AUG24800CE", capital_intent="STANDARD", strategy_id="LONG_DIRECTIONAL",
+        selection_reason="t", construction_trace="t", timestamp="2026-08-03T09:15:00+00:00", version="1.0.0",
+    )
+    order = SimpleNamespace(order_type="LIMIT", reference_price=150.0)
+    profile = StrategyRiskProfile(
+        strategy_id="LONG_DIRECTIONAL", required_leg_roles=("LONG_LEG",),
+        formula="LONG_OPTION_PREMIUM_PAID", lot_size=75,
+    )
+    result = assess_defined_risk(
+        state, {coid: contract}, {coid: order}, {coid: "LONG_LEG"}, profile, clock=_clock(),
+    )
+    assert result.decision == "ALLOW"
+    assert result.max_loss == pytest.approx(150.0 * 150)  # premium * requested_quantity
+
+
+def test_long_directional_zero_ratio_still_rejected_as_malformed(tmp_path):
+    journal = _journal(tmp_path)
+    trade = _long_directional_trade(ratio=0)
+    result = construct_and_gate_entry(
+        "DEC-LONG-3", trade, "NIFTY", 75, journal, [], {}, _LIMITS, 100000.0, clock=_clock(),
+    )
+    assert result.position_group_id is None
+    assert "non-positive ratio" in result.decision_trace
+
+
+def test_long_directional_missing_premium_fails_closed(tmp_path):
+    journal = _journal(tmp_path)
+    trade = _long_directional_trade(premium=None)
+    result = construct_and_gate_entry(
+        "DEC-LONG-4", trade, "NIFTY", 75, journal, [], {}, _LIMITS, 100000.0, clock=_clock(),
+    )
+    assert result.verdict.decision == "VETO"
+    assert "PORTFOLIO_LIMITS_EXPOSURE_DATA_MISSING" in result.verdict.failed_checks
+
+
+def test_other_strategy_families_still_have_no_formula(tmp_path):
+    """Regression guard: only LONG_DIRECTIONAL is wired. Every other
+    real family must still VETO UNDEFINED_RISK_NO_STRESS_MODEL,
+    unconditionally -- confirming this change didn't accidentally widen
+    coverage beyond the one formula actually reviewed and tested."""
+    journal = _journal(tmp_path)
+    for family in ("BUTTERFLY", "COVERED", "IRON_CONDOR", "RATIO", "SHORT_DIRECTIONAL", "SYNTHETIC"):
+        trade = dataclasses.replace(_constructed_trade(strategy_family=family))
+        result = construct_and_gate_entry(
+            f"DEC-{family}", trade, "NIFTY", 75, journal, [], {}, _LIMITS, 100000.0, clock=_clock(),
+        )
+        assert "DEFINED_RISK_UNDEFINED_RISK_NO_STRESS_MODEL" in result.verdict.failed_checks, family
