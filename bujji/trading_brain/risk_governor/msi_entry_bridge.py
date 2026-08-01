@@ -27,32 +27,48 @@ Gate B's engine.assess() and MIL Next's snapshot_builder.build_snapshot():
   4. ALLOW -> build real OrderRequest objects (never before this point)
      VETO  -> stop; zero OrderRequest objects are ever constructed
 
-DISCLOSED, HONEST STATUS: exactly ONE real MSI strategy family has a
-reviewed, closed-form defined-risk formula wired -- LONG_DIRECTIONAL
-(a single long option leg, `bujji.msi_trade_construction.engine.
-_build_legs`'s "LONG_DIRECTIONAL" branch: one BUY leg, taxonomy.
-ROLE_LONG, nothing else). Its payoff is unambiguous and already-bounded
-by construction: maximum loss is the premium paid, in full, and
-nothing else needs to be modeled (no short leg, no assignment risk, no
-undefined tail). This reuses Gate B's existing LONG_OPTION_PREMIUM_PAID
-formula verbatim -- no new formula math was written, only the mapping
-from MSI's real leg-construction output to Gate B's existing, reviewed
-formula input shape.
+DISCLOSED, HONEST STATUS: exactly TWO real MSI strategy families have a
+reviewed, closed-form defined-risk formula wired:
 
-Every OTHER real MSI strategy family (BUTTERFLY/COVERED/
-IRON_CONDOR/IRON_FLY/NEUTRAL_PREMIUM_SELLING/NEUTRAL_PREMIUM_BUYING/
-RATIO/SHORT_DIRECTIONAL/SYNTHETIC/CALENDAR/VOLATILITY_EXPANSION/
-VOLATILITY_COMPRESSION) still has NO formula and still VETOes
-UNDEFINED_RISK_NO_STRESS_MODEL, unconditionally -- each one's real
-payoff structure (multi-leg, assignment risk, ratio imbalance, calendar
-time-decay asymmetry, etc.) needs its own separately-reviewed formula,
-not attempted here. Combined with Gate C's own still-uncertified margin
-provider, this means every real call through this bridge STILL VETOes
-today (on the capital check, if not on defined risk) -- by design, not
-by accident, matching this whole session's fail-closed discipline. A
-LONG_DIRECTIONAL trade is the first to reach a genuine DEFINED_RISK
-ALLOW, isolating capital as the one remaining, honestly-disclosed
-blocker for that specific strategy shape.
+  - LONG_DIRECTIONAL (a single long option leg, `bujji.
+    msi_trade_construction.engine._build_legs`'s "LONG_DIRECTIONAL"
+    branch: one BUY leg, taxonomy.ROLE_LONG, nothing else). Maximum
+    loss is the premium paid, in full -- reuses Gate B's existing
+    LONG_OPTION_PREMIUM_PAID formula verbatim.
+  - NEUTRAL_PREMIUM_BUYING (a long strangle: buy CE + buy PE, both
+    taxonomy.ROLE_LONG -- the same `_build_legs` branch that also
+    produces VOLATILITY_EXPANSION's long straddle, which is NOT yet
+    wired despite being the same shape; see below). Maximum loss is
+    the SUM of premium paid across both legs -- textbook-correct for
+    any all-long combination regardless of strike/expiry, using the
+    new MULTI_LEG_LONG_PREMIUM_PAID formula (a genuine generalization
+    of LONG_OPTION_PREMIUM_PAID to N required long legs, reviewed and
+    added alongside this family, not borrowed from an unrelated shape).
+
+Audited finding this surfaced: `_build_legs` assigns the SAME MSI role
+string ("LONG") to BOTH legs of a straddle/strangle -- a flat
+role-string translation would have collided and silently dropped one
+leg. Role translation is therefore a per-leg FUNCTION (disambiguating
+by `leg.option_type`), not a flat dict, for every family from here on.
+
+NOT yet wired despite being the mechanically identical BUY-both-legs
+shape: VOLATILITY_EXPANSION (a long ATM straddle -- same formula would
+apply, not reviewed/added in this pass to keep this change scoped to
+one new family at a time).
+
+Every OTHER real MSI strategy family (BUTTERFLY/COVERED/IRON_CONDOR/
+IRON_FLY/NEUTRAL_PREMIUM_SELLING/RATIO/SHORT_DIRECTIONAL/SYNTHETIC/
+CALENDAR/VOLATILITY_COMPRESSION/VOLATILITY_EXPANSION) still has NO
+formula and still VETOes UNDEFINED_RISK_NO_STRESS_MODEL,
+unconditionally. COVERED in particular can never be safely treated as
+defined-risk through this path: its short call leg is only bounded if
+genuinely covered by a real underlying equity position, which this
+options-leg-only bridge has no way to confirm -- vetoing it is
+correct, not a gap to "fix" without equity-position tracking existing
+first. Combined with Gate C's own still-uncertified margin provider,
+every real call through this bridge STILL VETOes today (on the capital
+check, if not on defined risk) -- by design, matching this whole
+session's fail-closed discipline.
 """
 from __future__ import annotations
 
@@ -75,15 +91,27 @@ from bujji.trading_brain.risk_governor.position_group_mint import mint_position_
 Clock = Callable[[], datetime]
 
 # Per-family spec: (required Gate B role labels, Gate B formula name,
-# MSI-role -> Gate-B-role translation). `lot_size` is deliberately NOT
+# leg-aware role-translation function). `lot_size` is deliberately NOT
 # baked in here -- it's a real, caller-supplied runtime value (the
 # actual NIFTY lot size in effect), never hardcoded into a static
 # profile; the real StrategyRiskProfile is constructed per-call below.
 #
-# Only LONG_DIRECTIONAL is populated -- see module docstring for why
-# every other real MSI family still has none.
-_MSI_FORMULA_SPECS: Dict[str, Tuple[Tuple[str, ...], str, Dict[str, str]]] = {
-    "LONG_DIRECTIONAL": (("LONG_LEG",), "LONG_OPTION_PREMIUM_PAID", {"LONG": "LONG_LEG"}),
+# Role translation is a FUNCTION of the leg, not a flat dict keyed by
+# MSI's raw role string -- audited finding: bujji.msi_trade_construction.
+# engine._build_legs assigns the SAME MSI role ("LONG") to BOTH legs of
+# a straddle/strangle (e.g. NEUTRAL_PREMIUM_BUYING's buy-CE + buy-PE).
+# A flat string->string translation would collide and silently drop one
+# leg from the resulting dict. Disambiguating by leg.option_type (CE/PE)
+# instead.
+#
+# LONG_DIRECTIONAL and NEUTRAL_PREMIUM_BUYING are populated -- see
+# module docstring for why every other real MSI family still has none.
+_MSI_FORMULA_SPECS: Dict[str, Tuple[Tuple[str, ...], str, Callable[["StrikeLeg"], str]]] = {
+    "LONG_DIRECTIONAL": (("LONG_LEG",), "LONG_OPTION_PREMIUM_PAID", lambda leg: "LONG_LEG"),
+    "NEUTRAL_PREMIUM_BUYING": (
+        ("LONG_LEG_CE", "LONG_LEG_PE"), "MULTI_LEG_LONG_PREMIUM_PAID",
+        lambda leg: f"LONG_LEG_{leg.option_type}",
+    ),
 }
 
 
@@ -160,7 +188,7 @@ def construct_and_gate_entry(
     leg_roles: Dict[str, str] = {}
 
     formula_spec = _MSI_FORMULA_SPECS.get(trade.strategy_family)
-    role_translation = formula_spec[2] if formula_spec else {}
+    role_translation_fn = formula_spec[2] if formula_spec else None
 
     for i, leg in enumerate(trade.legs):
         contract_id = f"C{i}"
@@ -170,13 +198,17 @@ def construct_and_gate_entry(
         core_contracts[coid] = _leg_to_core_contract(leg, underlying, lot_size)
         core_prices[coid] = leg.premium
         core_sides[coid] = leg.side
-        # Translated to Gate B's own role vocabulary (LONG_LEG/SHORT_LEG)
-        # only for families with a real formula wired -- MSI's raw role
-        # string (e.g. taxonomy.ROLE_LONG == "LONG") is never assumed to
-        # match Gate B's labels by coincidence. Untranslated families
-        # keep the raw MSI role, which is harmless since profile is None
-        # for them and defined_risk.py never reaches a role lookup.
-        leg_roles[coid] = role_translation.get(leg.role, leg.role)
+        # Translated to Gate B's own role vocabulary (LONG_LEG, or
+        # LONG_LEG_CE/LONG_LEG_PE for multi-leg families) only for
+        # families with a real formula wired -- MSI's raw role string
+        # (e.g. taxonomy.ROLE_LONG == "LONG") is never assumed to match
+        # Gate B's labels by coincidence, and is disambiguated per-leg
+        # (by option_type) rather than by a flat string->string mapping,
+        # since MSI assigns the SAME role to multiple legs of a
+        # straddle/strangle. Untranslated families keep the raw MSI
+        # role, harmless since profile is None for them and
+        # defined_risk.py never reaches a role lookup.
+        leg_roles[coid] = role_translation_fn(leg) if role_translation_fn else leg.role
 
     journal.append_event(
         pg_id, "CONSTRUCTED", f"{pg_id}:CONSTRUCTED:0",

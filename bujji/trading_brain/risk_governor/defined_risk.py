@@ -111,9 +111,34 @@ def _long_option_max_loss(
     return order.reference_price * abs(leg_quantities["LONG_LEG"])
 
 
+def _multi_leg_long_premium_paid(
+    contracts_by_role: Dict[str, "NiftyOptionContract"],
+    orders_by_role: Dict[str, OrderRequest],
+    profile: StrategyRiskProfile,
+    leg_quantities: Dict[str, int],
+) -> float:
+    """Generalizes _long_option_max_loss to N required legs, ALL of
+    which must be long (BUY) positions -- e.g. a long straddle/strangle
+    (buy CE + buy PE). Textbook-correct for any all-long combination:
+    buying options can never lose more than the total premium paid,
+    regardless of how many legs or which strikes/expiries. This formula
+    must NEVER be used for a profile that includes a short leg -- the
+    caller (StrategyRiskProfile construction, reviewed at authoring
+    time) is responsible for only ever pairing this formula with an
+    all-long required_leg_roles set."""
+    total = 0.0
+    for role in profile.required_leg_roles:
+        price = orders_by_role[role].reference_price
+        if price is None:
+            raise IllegalDefinedRiskInputError(f"leg role {role!r} requires a reference_price")
+        total += price * abs(leg_quantities[role])
+    return total
+
+
 _FORMULAS = {
     "VERTICAL_SPREAD_WIDTH_MINUS_CREDIT": _vertical_spread_max_loss,
     "LONG_OPTION_PREMIUM_PAID": _long_option_max_loss,
+    "MULTI_LEG_LONG_PREMIUM_PAID": _multi_leg_long_premium_paid,
 }
 
 
