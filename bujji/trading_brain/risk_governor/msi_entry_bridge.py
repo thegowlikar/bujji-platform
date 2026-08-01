@@ -1,0 +1,269 @@
+"""MSI-to-PaperBroker entry-order-construction bridge — BUJJI Options
+OS, Numeric Risk Governor integration.
+
+STANDALONE. Not wired into run_live_shadow.py or any live entrypoint
+yet -- that is a separate, explicitly-approved step. No import of
+bujji.broker.fyers or bujji.broker.hybrid anywhere in this module --
+verified by tests/test_entry_order_construction.py's own AST-based
+import check, the same pattern already proven for
+production_runtime/d0_rehearsal_runtime.py.
+
+Bridges two generations deliberately kept separate everywhere else in
+this codebase: MSI's own `TradeConstructionAssessment`/`StrikeLeg`
+(Series 90) is the input; `bujji.core.models.OrderRequest`/
+`OptionContract` (the shape `PaperBroker.place_order()` actually
+consumes) is the only output shape ever produced. Trading Brain v3's
+OWN OrderRequest type is never touched here -- nothing on this path
+needs it.
+
+Pipeline, matching the same one-composition-owner discipline as
+Gate B's engine.assess() and MIL Next's snapshot_builder.build_snapshot():
+
+  1. mint a Gate A position group for this trade intent (or return a
+     NO_TRADE-shaped result immediately if MSI itself never
+     constructed a trade)
+  2. build defined-risk / portfolio-limit / capital-check inputs
+  3. call the real Governor assess()
+  4. ALLOW -> build real OrderRequest objects (never before this point)
+     VETO  -> stop; zero OrderRequest objects are ever constructed
+
+DISCLOSED, HONEST LIMITATION: no StrategyRiskProfile formula exists yet
+for any real MSI strategy family (BUTTERFLY/COVERED/
+NEUTRAL_PREMIUM_SELLING/RATIO/SHORT_DIRECTIONAL) -- mapping each one's
+real payoff structure to a reviewed, closed-form defined-risk formula
+is separate, future work, not attempted here. Combined with Gate C's
+own still-uncertified margin provider, this means every real call
+through this bridge VETOes today, unconditionally -- by design, not by
+accident, matching this whole session's fail-closed discipline.
+"""
+from __future__ import annotations
+
+from dataclasses import dataclass
+from datetime import datetime
+from typing import Callable, Dict, List, Optional, Tuple
+
+from bujji.core.models import OptionContract as CoreOptionContract
+from bujji.core.models import OrderRequest as CoreOrderRequest
+from bujji.core.models import OrderResult as CoreOrderResult
+from bujji.journal.position_group_journal import PositionGroupJournal
+from bujji.msi_trade_construction.models import StrikeLeg, TradeConstructionAssessment
+from bujji.trading_brain.risk_governor.capital_check import CapitalCheckAssessment, CapitalCheckInput, assess_capital
+from bujji.trading_brain.risk_governor.defined_risk import DefinedRiskAssessment, StrategyRiskProfile, assess_defined_risk
+from bujji.trading_brain.risk_governor.engine import RiskVerdict, assess
+from bujji.trading_brain.risk_governor.portfolio_limits import PortfolioLimitAssessment, PortfolioLimits, assess_portfolio_limits
+from bujji.trading_brain.risk_governor.position_group_fold import PositionGroupState, fold
+from bujji.trading_brain.risk_governor.position_group_mint import mint_position_group_id
+
+Clock = Callable[[], datetime]
+
+# No real MSI strategy family has a reviewed, closed-form defined-risk
+# formula yet -- see module docstring. Every MSI-originated trade is
+# therefore assessed with profile=None, which defined_risk.py already
+# correctly VETOes as UNDEFINED_RISK_NO_STRESS_MODEL. Extending this
+# per real strategy shape is separate, future, explicitly-scoped work.
+MSI_STRATEGY_RISK_PROFILES: Dict[str, StrategyRiskProfile] = {}
+
+
+@dataclass(frozen=True)
+class EntryOrderConstructionResult:
+    position_group_id: Optional[str]        # None when MSI never constructed a trade -- nothing minted
+    verdict: Optional[RiskVerdict]           # None for the same reason
+    order_requests: Tuple[CoreOrderRequest, ...]   # non-empty ONLY when verdict.decision == "ALLOW"
+    decision_trace: str
+
+
+def _leg_client_order_id(position_group_id: str, index: int) -> str:
+    return f"{position_group_id}-LEG-{index}"
+
+
+def _leg_to_core_contract(leg: StrikeLeg, underlying: str, lot_size: int) -> CoreOptionContract:
+    from bujji.core.enums import OptionType
+
+    symbol = f"{underlying}{leg.expiry}{int(leg.strike)}{leg.option_type}"
+    return CoreOptionContract(
+        symbol=symbol, underlying=underlying, strike=int(leg.strike),
+        option_type=OptionType.CE if leg.option_type == "CE" else OptionType.PE,
+        expiry=leg.expiry, lot_size=lot_size,
+    )
+
+
+def construct_and_gate_entry(
+    decision_id: str,
+    trade: TradeConstructionAssessment,
+    underlying: str,
+    lot_size: int,
+    journal: PositionGroupJournal,
+    active_group_states: List[PositionGroupState],
+    exposure_by_position_group_id: Dict[str, float],
+    portfolio_limits: PortfolioLimits,
+    configured_risk_capital: float,
+    clock: Clock,
+) -> EntryOrderConstructionResult:
+    """Pure w.r.t. everything except the journal append (Gate A's own,
+    already-transactional, already-tested write path). Never calls a
+    broker of any kind -- see dispatch_via_paper_broker() for the
+    ONLY function in this module that ever does, and only after this
+    function's own verdict is ALLOW."""
+    if not trade.constructed or not trade.legs:
+        return EntryOrderConstructionResult(
+            position_group_id=None, verdict=None, order_requests=(),
+            decision_trace=f"NO_TRADE: MSI did not construct a trade ({trade.rejection_reason}).",
+        )
+
+    # Audited finding: leg.ratio <= 0 would silently produce a negative
+    # or zero requested_quantity, corrupting every downstream quantity/
+    # exposure computation without ever raising. A non-positive ratio is
+    # a malformed construction, never a legitimate strategy shape --
+    # reject before minting anything, same discipline as the
+    # not-constructed/no-legs check above.
+    malformed_legs = [leg for leg in trade.legs if leg.ratio <= 0]
+    if malformed_legs:
+        return EntryOrderConstructionResult(
+            position_group_id=None, verdict=None, order_requests=(),
+            decision_trace=(
+                f"NO_TRADE: {len(malformed_legs)} leg(s) have a non-positive ratio "
+                f"(malformed construction, never a legitimate strategy shape)."
+            ),
+        )
+
+    mint = mint_position_group_id(journal, decision_id, trade.strategy_family, underlying, clock=clock)
+    pg_id = mint.position_group_id
+
+    contract_client_order_map: Dict[str, str] = {}
+    requested_quantities: Dict[str, int] = {}
+    core_contracts: Dict[str, CoreOptionContract] = {}
+    core_prices: Dict[str, Optional[float]] = {}
+    core_sides: Dict[str, str] = {}
+    leg_roles: Dict[str, str] = {}
+
+    for i, leg in enumerate(trade.legs):
+        contract_id = f"C{i}"
+        coid = _leg_client_order_id(pg_id, i)
+        contract_client_order_map[contract_id] = coid
+        requested_quantities[coid] = leg.ratio * lot_size
+        core_contracts[coid] = _leg_to_core_contract(leg, underlying, lot_size)
+        core_prices[coid] = leg.premium
+        core_sides[coid] = leg.side
+        leg_roles[coid] = leg.role
+
+    journal.append_event(
+        pg_id, "CONSTRUCTED", f"{pg_id}:CONSTRUCTED:0",
+        {"contract_client_order_map": contract_client_order_map,
+         "requested_quantities": requested_quantities,
+         "actions": {}, "target_position_group_ids": {}, "target_contract_ids": {}, "flip_link_ids": {}},
+        clock=clock,
+    )
+    state = fold(journal.read_events(pg_id))
+
+    orders_for_defined_risk = {
+        coid: _make_trading_brain_shaped_order(coid, core_prices[coid])
+        for coid in contract_client_order_map.values()
+    }
+    profile = MSI_STRATEGY_RISK_PROFILES.get(trade.strategy_family)
+    defined_risk = assess_defined_risk(
+        state,
+        contracts_by_client_order_id={},   # profile is always None today -- see module docstring;
+                                             # defined_risk.py never reaches the contract-shape lookups
+                                             # (which are Trading Brain v3-shaped) when profile is None.
+        orders_by_client_order_id=orders_for_defined_risk,
+        leg_roles=leg_roles, profile=profile, clock=clock,
+    )
+
+    all_states = list(active_group_states) + [state]
+    exposures = dict(exposure_by_position_group_id)
+    if pg_id not in exposures:
+        # Audited finding: `core_prices[coid] or 0.0` would silently
+        # treat an unknown premium (leg.premium is None -- a real,
+        # disclosed-as-possible MSI state) as ZERO notional, understating
+        # exposure/concentration rather than flagging it as unknown. If
+        # ANY leg's premium is unresolved, this group's exposure is
+        # UNTRUSTED -- deliberately left absent from `exposures` so
+        # assess_portfolio_limits' own existing, already-tested
+        # fail-closed rule (EXPOSURE_DATA_MISSING for an active group
+        # with no exposure entry) fires, rather than inventing a second,
+        # parallel veto path for the same underlying problem.
+        any_premium_missing = any(core_prices[coid] is None for coid in requested_quantities)
+        if not any_premium_missing:
+            exposures[pg_id] = sum(
+                (requested_quantities[coid] * core_prices[coid]) for coid in requested_quantities
+            )
+    portfolio_assessment = assess_portfolio_limits(all_states, exposures, portfolio_limits, clock=clock)
+
+    capital_check = assess_capital(
+        CapitalCheckInput(
+            margin_verified=False,   # no certified whole-book provider exists -- see Gate C scaffold
+            required_margin=None, available_capital=None,
+            configured_risk_capital=configured_risk_capital, margin_source="NONE",
+        ),
+        clock=clock,
+    )
+
+    verdict = assess(state, defined_risk, portfolio_assessment, capital_check, clock=clock)
+
+    order_requests: Tuple[CoreOrderRequest, ...] = ()
+    if verdict.decision == "ALLOW":
+        # Audited finding: defined_risk.py was told (via
+        # _make_trading_brain_shaped_order) that every leg is a LIMIT
+        # order -- that claim must be made TRUE for the real order this
+        # bridge actually constructs, never left to default to a MARKET
+        # order (limit_price=None) by omission. A risk assessment that
+        # priced this as a bounded LIMIT order must never be allowed to
+        # authorize an actually-unbounded MARKET order.
+        order_requests = tuple(
+            CoreOrderRequest(
+                contract=core_contracts[coid],
+                side=_to_core_side(core_sides[coid]),
+                quantity=requested_quantities[coid],
+                client_order_id=coid,
+                limit_price=core_prices[coid],
+                reference_price=core_prices[coid],
+                tag=f"MSI:{trade.strategy_family}:{decision_id}",
+            )
+            for coid in contract_client_order_map.values()
+        )
+
+    return EntryOrderConstructionResult(
+        position_group_id=pg_id, verdict=verdict, order_requests=order_requests,
+        decision_trace=verdict.decision_trace,
+    )
+
+
+def _to_core_side(side: str):
+    from bujji.core.enums import Side
+    return Side.BUY if side == "BUY" else Side.SELL
+
+
+def _make_trading_brain_shaped_order(client_order_id: str, reference_price: Optional[float]):
+    """A minimal stand-in matching only the fields defined_risk.py's
+    market-order check actually reads (order_type, reference_price) --
+    never a real Trading Brain v3 OrderRequest, since this bridge never
+    constructs real v3 orders. Kept intentionally tiny and local rather
+    than importing v3's real, much larger OrderRequest for two fields."""
+    from types import SimpleNamespace
+    return SimpleNamespace(order_type="LIMIT", reference_price=reference_price)
+
+
+async def dispatch_via_paper_broker(
+    order_requests: Tuple[CoreOrderRequest, ...],
+    paper_broker,
+) -> Tuple[CoreOrderResult, ...]:
+    """The ONLY function in this module that ever calls a broker method.
+    Structurally restricted to PaperBroker: an isinstance check, not
+    just a type hint, since a type hint alone is not enforced at
+    runtime and this codebase's own established discipline (P1-1's
+    disable_live_execution(), Gate D0's import-boundary test) is to
+    make safety guarantees structural, not conventions someone could
+    accidentally bypass by passing the wrong object."""
+    from bujji.broker.paper import PaperBroker
+
+    if not isinstance(paper_broker, PaperBroker):
+        raise TypeError(
+            f"dispatch_via_paper_broker() only ever accepts a PaperBroker instance, "
+            f"got {type(paper_broker)!r}"
+        )
+
+    results = []
+    for request in order_requests:
+        result = await paper_broker.place_order(request)
+        results.append(result)
+    return tuple(results)

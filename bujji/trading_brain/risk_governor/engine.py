@@ -24,6 +24,7 @@ from bujji.trading_brain.risk_governor.capital_check import CapitalCheckAssessme
 from bujji.trading_brain.risk_governor.defined_risk import DefinedRiskAssessment
 from bujji.trading_brain.risk_governor.portfolio_limits import PortfolioLimitAssessment
 from bujji.trading_brain.risk_governor.position_group_fold import (
+    LIFECYCLE_CONSTRUCTED,
     LIFECYCLE_OPEN,
     LIFECYCLE_PARTIALLY_OPEN,
     PositionGroupState,
@@ -31,7 +32,7 @@ from bujji.trading_brain.risk_governor.position_group_fold import (
 
 Clock = Callable[[], datetime]
 
-_DISPATCH_ELIGIBLE_LIFECYCLE_STATES = (LIFECYCLE_OPEN, LIFECYCLE_PARTIALLY_OPEN)
+_DISPATCH_ELIGIBLE_LIFECYCLE_STATES = (LIFECYCLE_CONSTRUCTED, LIFECYCLE_OPEN, LIFECYCLE_PARTIALLY_OPEN)
 
 
 @dataclass(frozen=True)
@@ -44,6 +45,15 @@ class RiskVerdict:
     evaluated_at: datetime
 
 
+class MismatchedAssessmentError(ValueError):
+    """Raised when defined_risk's position_group_id disagrees with
+    group_state's -- a caller bug (e.g. accidentally passing group B's
+    defined-risk assessment while assessing group A) that must fail
+    loud, never silently produce a verdict for the wrong group. Audited
+    and confirmed as a real, silent-authorization-of-the-wrong-group
+    risk before this check existed."""
+
+
 def assess(
     group_state: PositionGroupState,
     defined_risk: DefinedRiskAssessment,
@@ -51,14 +61,27 @@ def assess(
     capital_check: CapitalCheckAssessment,
     clock: Clock,
 ) -> RiskVerdict:
+    if defined_risk.position_group_id != group_state.position_group_id:
+        raise MismatchedAssessmentError(
+            f"group_state.position_group_id={group_state.position_group_id!r} but "
+            f"defined_risk.position_group_id={defined_risk.position_group_id!r} -- "
+            f"these must refer to the same group"
+        )
+
     failed: List[str] = []
     passed: List[str] = []
 
     # Check 1: Gate A lifecycle -- the group must actually be in a state
-    # dispatch/risk-taking could ever apply to. UNRESOLVED/MINTED/
-    # CONSTRUCTED/PENDING_FINAL_RECONCILIATION/ABORTED/CLOSED are all
-    # non-eligible for a NEW risk decision (CLOSED/ABORTED are terminal;
-    # the others aren't yet a real, fillable position).
+    # a risk decision could ever apply to. CONSTRUCTED is included
+    # deliberately -- pre-trade entry authorization runs BEFORE anything
+    # has been submitted, so a freshly-constructed, nothing-yet-attempted
+    # group is exactly the state a NEW entry's risk decision is made
+    # from (defined_risk.py falls back to each leg's requested_quantity
+    # in this case, since net_quantity is always 0 pre-fill).
+    # UNRESOLVED/MINTED/PENDING_FINAL_RECONCILIATION/ABORTED/CLOSED remain
+    # non-eligible: MINTED/UNRESOLVED/PENDING_FINAL_RECONCILIATION are
+    # mid-flight or unresolved states with nothing stable to assess yet,
+    # and CLOSED/ABORTED are terminal.
     if group_state.lifecycle_state in _DISPATCH_ELIGIBLE_LIFECYCLE_STATES:
         passed.append("LIFECYCLE_ELIGIBLE")
     else:

@@ -4,12 +4,15 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 
+import pytest
+
 from bujji.trading_brain.risk_governor.capital_check import CapitalCheckAssessment
 from bujji.trading_brain.risk_governor.defined_risk import DefinedRiskAssessment
-from bujji.trading_brain.risk_governor.engine import RiskVerdict, assess
+from bujji.trading_brain.risk_governor.engine import MismatchedAssessmentError, RiskVerdict, assess
 from bujji.trading_brain.risk_governor.portfolio_limits import PortfolioLimitAssessment
 from bujji.trading_brain.risk_governor.position_group_fold import (
     LIFECYCLE_ABORTED,
+    LIFECYCLE_CONSTRUCTED,
     LIFECYCLE_OPEN,
     LIFECYCLE_UNRESOLVED,
     PositionGroupState,
@@ -130,3 +133,29 @@ def test_capital_is_last_in_fixed_priority_order_when_alone():
         _capital("VETO", "MARGIN_NOT_CERTIFIED"), clock=_clock(),
     )
     assert verdict.blocking_reason == "CAPITAL_MARGIN_NOT_CERTIFIED"
+
+
+def test_pre_trade_constructed_group_is_lifecycle_eligible():
+    """Pre-trade entry authorization runs BEFORE anything is submitted --
+    a freshly-CONSTRUCTED group must be eligible for assessment, not
+    rejected as if it were some unresolved/mid-flight state."""
+    verdict = assess(
+        _group_state(LIFECYCLE_CONSTRUCTED), _defined_risk("ALLOW"), _portfolio("ALLOW"), _capital("ALLOW"),
+        clock=_clock(),
+    )
+    assert verdict.decision == "ALLOW"
+    assert "LIFECYCLE_ELIGIBLE" in verdict.passed_checks
+
+
+def test_mismatched_position_group_ids_raise_never_silently_authorize():
+    """Audit finding: assess() previously had no cross-check that
+    defined_risk actually belongs to the group being assessed -- a
+    caller bug (e.g. mixing up two groups' assessments) could silently
+    produce ALLOW for the wrong group. Must now fail loud."""
+    group_a = _group_state(LIFECYCLE_OPEN)  # position_group_id="PG-1" per the fixture helper
+    defined_risk_for_different_group = DefinedRiskAssessment(
+        position_group_id="PG-DIFFERENT", decision="ALLOW", blocking_reason=None,
+        max_loss=1.0, formula_used="X", evaluated_at=_clock()(),
+    )
+    with pytest.raises(MismatchedAssessmentError):
+        assess(group_a, defined_risk_for_different_group, _portfolio("ALLOW"), _capital("ALLOW"), clock=_clock())

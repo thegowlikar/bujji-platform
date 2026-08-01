@@ -19,6 +19,7 @@ from datetime import datetime
 from typing import Callable, Dict, List, Optional
 
 from bujji.trading_brain.risk_governor.position_group_fold import (
+    LIFECYCLE_CONSTRUCTED,
     LIFECYCLE_OPEN,
     LIFECYCLE_PARTIALLY_OPEN,
     PositionGroupState,
@@ -26,7 +27,14 @@ from bujji.trading_brain.risk_governor.position_group_fold import (
 
 Clock = Callable[[], datetime]
 
-_ACTIVE_LIFECYCLE_STATES = (LIFECYCLE_OPEN, LIFECYCLE_PARTIALLY_OPEN)
+# CONSTRUCTED is included deliberately: a freshly-constructed, not-yet-
+# submitted group is exactly the PROPOSED position a pre-trade decision
+# is being made about. Excluding it would mean the very trade under
+# consideration never counts toward its own simultaneous-position or
+# concentration limits -- the check would be toothless at the one
+# moment it matters most. Audited and confirmed as a real gap before
+# this fix (a freshly-constructed group's active_position_count read 0).
+_ACTIVE_LIFECYCLE_STATES = (LIFECYCLE_CONSTRUCTED, LIFECYCLE_OPEN, LIFECYCLE_PARTIALLY_OPEN)
 
 
 @dataclass(frozen=True)

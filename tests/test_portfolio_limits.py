@@ -167,3 +167,26 @@ def test_non_active_lifecycle_groups_excluded_from_count(tmp_path):
     result = assess_portfolio_limits([minted_state], {}, limits, clock=_clock())
     assert result.decision == "ALLOW"
     assert result.active_position_count == 0
+
+
+def test_constructed_group_counts_as_active(tmp_path):
+    """Audit finding: a freshly-CONSTRUCTED (not-yet-submitted) group is
+    the PROPOSED position a pre-trade decision is being made about --
+    it must count toward its own simultaneous-position limit, not be
+    silently excluded as if it didn't exist yet."""
+    journal = _journal(tmp_path)
+    mint = mint_position_group_id(journal, "PLAN-CONSTRUCTED", "STRATEGY", "NIFTY", clock=_clock())
+    pg = mint.position_group_id
+    journal.append_event(
+        pg, "CONSTRUCTED", f"{pg}:CONSTRUCTED:0",
+        {"contract_client_order_map": {"C1": "COID-1"}, "requested_quantities": {"COID-1": 50},
+         "actions": {}, "target_position_group_ids": {}, "target_contract_ids": {}, "flip_link_ids": {}},
+        clock=_clock(),
+    )
+    constructed_state = fold(journal.read_events(pg))
+    assert constructed_state.lifecycle_state == "CONSTRUCTED"
+    limits = PortfolioLimits(max_simultaneous_positions=0, max_concentration_per_underlying=1.0)
+    result = assess_portfolio_limits([constructed_state], {pg: 1000.0}, limits, clock=_clock())
+    assert result.decision == "VETO"
+    assert result.blocking_reason == "MAX_SIMULTANEOUS_POSITIONS_EXCEEDED"
+    assert result.active_position_count == 1

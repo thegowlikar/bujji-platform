@@ -22,7 +22,9 @@ from bujji.trading_brain.risk_governor.position_group_fold import (
     LEG_ACKED,
     LEG_CANCEL_PENDING_UNKNOWN,
     LEG_CANCELLED,
+    LEG_NOT_SUBMITTED,
     LIFECYCLE_CLOSED,
+    LIFECYCLE_CONSTRUCTED,
     LIFECYCLE_OPEN,
     LIFECYCLE_PARTIALLY_OPEN,
     PositionGroupState,
@@ -33,8 +35,18 @@ Clock = Callable[[], datetime]
 
 MARKET_ORDER_TYPE = "MARKET"
 
+# Post-fill assessment (an already-open/partially-open/closed group):
+# legs must be in a state that's actually eligible to carry a real fill.
 _FILL_ELIGIBLE_STATUSES = (LEG_ACKED, LEG_CANCEL_PENDING_UNKNOWN, LEG_CANCELLED)
-_ASSESSABLE_LIFECYCLE_STATES = (LIFECYCLE_OPEN, LIFECYCLE_PARTIALLY_OPEN, LIFECYCLE_CLOSED)
+# Pre-trade assessment (a freshly-CONSTRUCTED, nothing-submitted-yet
+# group): a leg must genuinely be NOT_SUBMITTED -- anything else means
+# this "pre-trade" assessment is being run on a group that has already
+# started submitting, which is a caller bug, not a legitimate pre-trade
+# state.
+_PRE_TRADE_ELIGIBLE_STATUSES = (LEG_NOT_SUBMITTED,)
+_ASSESSABLE_LIFECYCLE_STATES = (
+    LIFECYCLE_CONSTRUCTED, LIFECYCLE_OPEN, LIFECYCLE_PARTIALLY_OPEN, LIFECYCLE_CLOSED,
+)
 
 
 class IllegalDefinedRiskInputError(Exception):
@@ -72,6 +84,8 @@ def _vertical_spread_max_loss(
     profile: StrategyRiskProfile,
     leg_quantities: Dict[str, int],
 ) -> float:
+    if profile.lot_size <= 0:
+        raise IllegalDefinedRiskInputError(f"StrategyRiskProfile.lot_size must be positive, got {profile.lot_size!r}")
     short_contract = contracts_by_role["SHORT_LEG"]
     long_contract = contracts_by_role["LONG_LEG"]
     short_price = orders_by_role["SHORT_LEG"].reference_price
@@ -135,6 +149,9 @@ def assess_defined_risk(
     if formula_fn is None:
         return _early(pg_id, "UNDEFINED_RISK_NO_STRESS_MODEL", clock)
 
+    is_pre_trade = state.lifecycle_state == LIFECYCLE_CONSTRUCTED
+    eligible_statuses = _PRE_TRADE_ELIGIBLE_STATUSES if is_pre_trade else _FILL_ELIGIBLE_STATUSES
+
     contracts_by_role: Dict[str, "NiftyOptionContract"] = {}
     orders_by_role: Dict[str, OrderRequest] = {}
     leg_quantities: Dict[str, int] = {}
@@ -143,7 +160,7 @@ def assess_defined_risk(
         leg = state.legs.get(coid)
         if leg is None:
             raise IllegalDefinedRiskInputError(f"leg_roles references unknown client_order_id {coid!r}")
-        if leg.submit_status not in _FILL_ELIGIBLE_STATUSES:
+        if leg.submit_status not in eligible_statuses:
             return _early(pg_id, "INCOMPLETE_DEFINED_RISK_GROUP", clock)
         contract = contracts_by_client_order_id.get(coid)
         order = orders_by_client_order_id.get(coid)
@@ -151,7 +168,15 @@ def assess_defined_risk(
             return _early(pg_id, "INCOMPLETE_DEFINED_RISK_GROUP", clock)
         contracts_by_role[role] = contract
         orders_by_role[role] = order
-        leg_quantities[role] = net_quantity(leg)
+        # Pre-trade: nothing has filled yet by definition (net_quantity is
+        # always 0 in CONSTRUCTED) -- risk is assessed against what was
+        # REQUESTED, since that is the only quantity that exists yet.
+        # Post-fill: net_quantity is the real, projected, already-adjusted
+        # figure and is used as-is, never overridden by the original request.
+        qty = net_quantity(leg)
+        if is_pre_trade:
+            qty = leg.requested_quantity or 0
+        leg_quantities[role] = qty
 
     missing_roles = [r for r in profile.required_leg_roles if r not in contracts_by_role]
     if missing_roles:
