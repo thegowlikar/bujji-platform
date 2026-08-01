@@ -14,6 +14,16 @@ something recomputed on every run. This config therefore carries the
 result of the *last successful* Series 46 replay qualification,
 supplied by whatever release process produced this configuration --
 never recomputed live inside a runtime process.
+
+A fourth mode, D0_REHEARSAL (Numeric Risk Governor Gate D0), was added
+after the original three. It exercises the real Governor assess() via
+`bujji.production_runtime.d0_rehearsal_runtime.run_d0_rehearsal_mode`
+against a real CompositionRoot, with no dispatch call anywhere in its
+own reachable code -- verified by an AST-based test, not just this
+docstring. Falls under the SAME `broker_name == "fyers"` guard below as
+every mode except PRODUCTION_READY: a live broker is never
+constructible in D0_REHEARSAL, exactly as it already isn't in
+READ_ONLY or SHADOW.
 """
 from __future__ import annotations
 
@@ -23,8 +33,11 @@ from typing import Any, Dict
 RUNTIME_MODE_READ_ONLY = "READ_ONLY"
 RUNTIME_MODE_SHADOW = "SHADOW"
 RUNTIME_MODE_PRODUCTION_READY = "PRODUCTION_READY"
+RUNTIME_MODE_D0_REHEARSAL = "D0_REHEARSAL"
 
-ALL_RUNTIME_MODES = (RUNTIME_MODE_READ_ONLY, RUNTIME_MODE_SHADOW, RUNTIME_MODE_PRODUCTION_READY)
+ALL_RUNTIME_MODES = (
+    RUNTIME_MODE_READ_ONLY, RUNTIME_MODE_SHADOW, RUNTIME_MODE_PRODUCTION_READY, RUNTIME_MODE_D0_REHEARSAL,
+)
 
 ALL_BROKER_NAMES = ("paper", "fyers")
 ALL_MARKET_SOURCES = ("LIVE", "REPLAY")
