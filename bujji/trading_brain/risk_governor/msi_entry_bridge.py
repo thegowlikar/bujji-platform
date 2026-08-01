@@ -27,7 +27,7 @@ Gate B's engine.assess() and MIL Next's snapshot_builder.build_snapshot():
   4. ALLOW -> build real OrderRequest objects (never before this point)
      VETO  -> stop; zero OrderRequest objects are ever constructed
 
-DISCLOSED, HONEST STATUS: exactly FOUR real MSI strategy families have
+DISCLOSED, HONEST STATUS: exactly FIVE real MSI strategy families have
 a reviewed, closed-form defined-risk formula wired:
 
   - LONG_DIRECTIONAL (a single long option leg, `bujji.
@@ -61,6 +61,24 @@ a reviewed, closed-form defined-risk formula wired:
     ROLE_WING_UPPER/ROLE_WING_LOWER are already distinct per leg by
     construction (WING_UPPER is always the long call, WING_LOWER always
     the long put -- confirmed by reading `_build_legs` directly).
+  - IRON_FLY (four legs, the SAME `_build_legs` branch as IRON_CONDOR --
+    `if family in ("IRON_CONDOR", "IRON_FLY")`, confirmed by reading the
+    branch directly -- differing only in HOW the short strikes are
+    chosen: IRON_CONDOR targets a configured delta on each side
+    independently, IRON_FLY anchors the short call ATM and puts the
+    short put at that SAME strike, i.e. a butterfly-shaped condor with
+    both shorts at one strike. The resulting leg SHAPE is identical:
+    ROLE_SHORT x2 (CE+PE), ROLE_WING_UPPER (long call), ROLE_WING_LOWER
+    (long put). The payoff mechanics `_iron_condor_max_loss` already
+    encodes -- at most one side breached, max loss = wider wing width
+    minus TOTAL combined credit, via max() so asymmetric wings (here,
+    guaranteed whenever expected-move-derived wing width differs from
+    the ATM-vs-delta strike offset) are handled correctly -- apply
+    identically, since nothing in that formula assumes the two short
+    strikes are distinct. Reuses IRON_CONDOR_MAX_WING_WIDTH_MINUS_
+    TOTAL_CREDIT and the identical role-translation lambda verbatim --
+    no new formula math, only a new dict entry, same pattern as
+    VOLATILITY_EXPANSION reusing NEUTRAL_PREMIUM_BUYING's formula.
 
 Audited finding NEUTRAL_PREMIUM_BUYING's addition surfaced: `_build_legs`
 assigns the SAME MSI role string ("LONG") to BOTH legs of a
@@ -69,17 +87,10 @@ collided and silently dropped one leg. Role translation is therefore a
 per-leg FUNCTION (disambiguating by `leg.option_type` where needed),
 not a flat dict, for every family from here on.
 
-Every OTHER real MSI strategy family (BUTTERFLY/COVERED/IRON_FLY/
+Every OTHER real MSI strategy family (BUTTERFLY/COVERED/
 NEUTRAL_PREMIUM_SELLING/RATIO/SHORT_DIRECTIONAL/SYNTHETIC/CALENDAR/
 VOLATILITY_COMPRESSION) still has NO formula and still VETOes
-UNDEFINED_RISK_NO_STRESS_MODEL, unconditionally. IRON_FLY in particular
-shares IRON_CONDOR's exact 4-role shape (short CE/PE + wing CE/PE) via
-the SAME `_build_legs` branch, and its payoff is genuinely the SAME
-"max wing width minus total credit" formula (an iron fly is just an
-iron condor with the short strikes collapsed to the same ATM strike,
-i.e. a butterfly-shaped condor) -- NOT wired in this pass, deliberately
-scoped to one new family at a time, same discipline as
-VOLATILITY_EXPANSION's own prior round. VOLATILITY_COMPRESSION is
+UNDEFINED_RISK_NO_STRESS_MODEL, unconditionally. VOLATILITY_COMPRESSION is
 VOLATILITY_EXPANSION's naked-short twin (SELL both legs instead of
 BUY) from the exact same `_build_legs` branch -- sharing the branch
 does NOT mean sharing defined-risk eligibility; it stays vetoed,
@@ -128,8 +139,9 @@ Clock = Callable[[], datetime]
 # leg from the resulting dict. Disambiguating by leg.option_type (CE/PE)
 # instead.
 #
-# LONG_DIRECTIONAL and NEUTRAL_PREMIUM_BUYING are populated -- see
-# module docstring for why every other real MSI family still has none.
+# LONG_DIRECTIONAL, NEUTRAL_PREMIUM_BUYING, VOLATILITY_EXPANSION,
+# IRON_CONDOR, and IRON_FLY are populated -- see module docstring for
+# why every other real MSI family still has none.
 _MSI_FORMULA_SPECS: Dict[str, Tuple[Tuple[str, ...], str, Callable[["StrikeLeg"], str]]] = {
     "LONG_DIRECTIONAL": (("LONG_LEG",), "LONG_OPTION_PREMIUM_PAID", lambda leg: "LONG_LEG"),
     "NEUTRAL_PREMIUM_BUYING": (
@@ -156,6 +168,21 @@ _MSI_FORMULA_SPECS: Dict[str, Tuple[Tuple[str, ...], str, Callable[["StrikeLeg"]
     # confirmed by reading _build_legs directly, never assumed), so no
     # option_type suffix is needed for them.
     "IRON_CONDOR": (
+        ("SHORT_LEG_CE", "SHORT_LEG_PE", "LONG_LEG_CE", "LONG_LEG_PE"),
+        "IRON_CONDOR_MAX_WING_WIDTH_MINUS_TOTAL_CREDIT",
+        lambda leg: (
+            f"SHORT_LEG_{leg.option_type}" if leg.role == "SHORT"
+            else "LONG_LEG_CE" if leg.role == "WING_UPPER"
+            else "LONG_LEG_PE" if leg.role == "WING_LOWER"
+            else leg.role
+        ),
+    ),
+    # Mechanically identical to IRON_CONDOR -- same `_build_legs` branch,
+    # same 4-role shape (ROLE_SHORT x2 + ROLE_WING_UPPER + ROLE_WING_LOWER),
+    # same defined-risk payoff. See module docstring for the ATM-vs-
+    # delta-targeted short-strike distinction that does NOT change the
+    # formula's applicability.
+    "IRON_FLY": (
         ("SHORT_LEG_CE", "SHORT_LEG_PE", "LONG_LEG_CE", "LONG_LEG_PE"),
         "IRON_CONDOR_MAX_WING_WIDTH_MINUS_TOTAL_CREDIT",
         lambda leg: (

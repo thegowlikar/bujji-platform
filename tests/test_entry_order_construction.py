@@ -366,13 +366,13 @@ def test_other_strategy_families_still_have_no_formula(tmp_path):
     """Regression guard: families with NO formula wired at all must
     still VETO UNDEFINED_RISK_NO_STRESS_MODEL, unconditionally --
     confirming coverage hasn't accidentally widened beyond what was
-    actually reviewed and tested. IRON_CONDOR is excluded from this
-    generic loop now that it has a real formula -- see its own
-    dedicated positive tests instead."""
+    actually reviewed and tested. IRON_CONDOR and IRON_FLY are excluded
+    from this generic loop now that both have a real formula -- see
+    their own dedicated positive tests instead."""
     journal = _journal(tmp_path)
     for family in (
         "BUTTERFLY", "COVERED", "RATIO", "SHORT_DIRECTIONAL", "SYNTHETIC",
-        "NEUTRAL_PREMIUM_SELLING", "VOLATILITY_COMPRESSION", "CALENDAR", "IRON_FLY",
+        "NEUTRAL_PREMIUM_SELLING", "VOLATILITY_COMPRESSION", "CALENDAR",
     ):
         trade = dataclasses.replace(_constructed_trade(strategy_family=family))
         result = construct_and_gate_entry(
@@ -720,14 +720,95 @@ def test_iron_condor_missing_wing_price_fails_closed(tmp_path):
     assert "PORTFOLIO_LIMITS_EXPOSURE_DATA_MISSING" in result.verdict.failed_checks
 
 
-def test_iron_fly_same_shape_still_not_wired(tmp_path):
-    """Explicit regression pin: IRON_FLY shares IRON_CONDOR's exact
-    4-role shape via the same _build_legs branch and could reuse the
-    identical formula, but was deliberately not wired in this pass."""
+# --------------------------------------------------------------------- #
+# IRON_FLY — fifth real, reviewed defined-risk formula (mechanically
+# identical to IRON_CONDOR's shape/formula; both shorts collapsed to
+# the same ATM strike, so the two wings are asymmetric by construction)
+# --------------------------------------------------------------------- #
+
+def test_iron_fly_same_shape_now_wired_defined_risk_allows(tmp_path):
+    """A real IRON_FLY leg shape: both shorts at the SAME ATM strike
+    (24800), wings at +/-100pts. call_width=100, put_width=100,
+    total_credit=(70-15)+(65-12)=108. max_loss=(100-108)*75=-600 would
+    be negative (an implausibly rich credit for a 100pt-wide fly) --
+    use realistic premiums instead: sc=45, lc=10, sp=42, lp=9 ->
+    total_credit=35+33=68, max_loss=(100-68)*75=2400."""
     journal = _journal(tmp_path)
-    trade = _iron_condor_trade()
+    trade = _iron_condor_trade(
+        short_call_strike=24800, long_call_strike=24900,   # 100pt call wing
+        short_put_strike=24800, long_put_strike=24700,      # 100pt put wing, SAME short strike
+        sc_premium=45.0, lc_premium=10.0, sp_premium=42.0, lp_premium=9.0,
+    )
     trade = dataclasses.replace(trade, strategy_family="IRON_FLY")
     result = construct_and_gate_entry(
-        "DEC-FLY", trade, "NIFTY", 75, journal, [], {}, _LIMITS, 100000.0, clock=_clock(),
+        "DEC-FLY-1", trade, "NIFTY", 75, journal, [], {}, _LIMITS, 100000.0, clock=_clock(),
     )
-    assert "DEFINED_RISK_UNDEFINED_RISK_NO_STRESS_MODEL" in result.verdict.failed_checks
+    assert result.verdict.decision == "VETO"  # capital remains the sole real blocker
+    assert "DEFINED_RISK_WITHIN_BOUNDS" in result.verdict.passed_checks
+    assert not any(f.startswith("DEFINED_RISK_") for f in result.verdict.failed_checks)
+    assert "CAPITAL_MARGIN_NOT_CERTIFIED" in result.verdict.failed_checks
+
+
+def test_iron_fly_asymmetric_wings_from_unequal_width_still_uses_max(tmp_path):
+    """IRON_FLY's real construction anchors the short strike ATM and
+    derives BOTH wings from the same expected-move width, so symmetric
+    wings are the common case -- but nothing in the formula assumes
+    symmetry, and a data/construction anomaly producing unequal wings
+    must still take the max, not sum or average."""
+    journal = _journal(tmp_path)
+    trade = _iron_condor_trade(
+        short_call_strike=24800, long_call_strike=25050,   # 250pt call wing
+        short_put_strike=24800, long_put_strike=24730,      # 70pt put wing
+        sc_premium=45.0, lc_premium=8.0, sp_premium=40.0, lp_premium=15.0,
+    )
+    trade = dataclasses.replace(trade, strategy_family="IRON_FLY")
+    pg = mint_position_group_id(journal, "DEC-FLY-2", trade.strategy_family, "NIFTY", clock=_clock())
+    pg_id = pg.position_group_id
+    coids = {f"{pg_id}-LEG-{i}": leg for i, leg in enumerate(trade.legs)}
+    journal.append_event(
+        pg_id, "CONSTRUCTED", f"{pg_id}:CONSTRUCTED:0",
+        {"contract_client_order_map": {f"C{i}": coid for i, coid in enumerate(coids)},
+         "requested_quantities": {coid: 75 for coid in coids},
+         "actions": {}, "target_position_group_ids": {}, "target_contract_ids": {}, "flip_link_ids": {}},
+        clock=_clock(),
+    )
+    state = fold(journal.read_events(pg_id))
+    role_map, contracts, orders = {}, {}, {}
+    for coid, leg in coids.items():
+        gate_b_role = (
+            f"SHORT_LEG_{leg.option_type}" if leg.role == "SHORT"
+            else "LONG_LEG_CE" if leg.role == "WING_UPPER"
+            else "LONG_LEG_PE"
+        )
+        role_map[coid] = gate_b_role
+        contracts[coid] = NiftyOptionContract(
+            contract_id=coid, underlying="NIFTY", expiry="2026-08-27", strike=leg.strike,
+            option_type=leg.option_type, side=leg.side, contract_symbol=f"NIFTY{coid}",
+            capital_intent="STANDARD", strategy_id="IRON_FLY", selection_reason="t",
+            construction_trace="t", timestamp="2026-08-05T09:15:00+00:00", version="1.0.0",
+        )
+        orders[coid] = SimpleNamespace(order_type="LIMIT", reference_price=leg.premium)
+    profile = StrategyRiskProfile(
+        strategy_id="IRON_FLY",
+        required_leg_roles=("SHORT_LEG_CE", "SHORT_LEG_PE", "LONG_LEG_CE", "LONG_LEG_PE"),
+        formula="IRON_CONDOR_MAX_WING_WIDTH_MINUS_TOTAL_CREDIT", lot_size=75,
+    )
+    result = assess_defined_risk(state, contracts, orders, role_map, profile, clock=_clock())
+    assert result.decision == "ALLOW"
+    # call_width=250, put_width=70 -> max=250. total_credit=(45-8)+(40-15)=62. qty=75.
+    expected = (250 * 75) - (62.0 * 75)
+    wrong_sum = ((250 + 70) * 75) - (62.0 * 75)
+    assert result.max_loss == pytest.approx(expected)
+    assert result.max_loss != pytest.approx(wrong_sum)
+
+
+def test_iron_fly_missing_wing_price_fails_closed(tmp_path):
+    journal = _journal(tmp_path)
+    trade = _iron_condor_trade(
+        short_call_strike=24800, short_put_strike=24800, lc_premium=None,
+    )
+    trade = dataclasses.replace(trade, strategy_family="IRON_FLY")
+    result = construct_and_gate_entry(
+        "DEC-FLY-3", trade, "NIFTY", 75, journal, [], {}, _LIMITS, 100000.0, clock=_clock(),
+    )
+    assert "PORTFOLIO_LIMITS_EXPOSURE_DATA_MISSING" in result.verdict.failed_checks
