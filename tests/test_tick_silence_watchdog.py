@@ -189,7 +189,7 @@ def test_force_reconnect_preserves_pending_symbols():
     feed._socket = None  # simulate no real socket yet, force_reconnect must not crash
     feed._started = True
     calls = []
-    feed._connect = lambda: calls.append("connect")  # avoid a real SDK connection in this unit test
+    feed._connect_locked = lambda: calls.append("connect")  # avoid a real SDK connection in this unit test
     feed.force_reconnect("test reason")
     assert feed._pending_symbols == {"NSE:NIFTY50-INDEX"}
     assert calls == ["connect"]
