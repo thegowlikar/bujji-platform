@@ -369,10 +369,11 @@ def test_other_strategy_families_still_have_no_formula(tmp_path):
     confirming coverage hasn't accidentally widened beyond what was
     actually reviewed and tested. IRON_CONDOR, IRON_FLY, BUTTERFLY, and
     CALENDAR are excluded from this generic loop now that each has a
-    real formula -- see their own dedicated positive tests instead."""
+    real formula; RATIO and SYNTHETIC are excluded because each has its
+    own dedicated permanent-veto regression-pin test instead."""
     journal = _journal(tmp_path)
     for family in (
-        "COVERED", "RATIO", "SHORT_DIRECTIONAL", "SYNTHETIC",
+        "COVERED", "SHORT_DIRECTIONAL",
         "NEUTRAL_PREMIUM_SELLING", "VOLATILITY_COMPRESSION",
     ):
         trade = dataclasses.replace(_constructed_trade(strategy_family=family))
@@ -1176,3 +1177,32 @@ def test_calendar_legitimate_inverted_term_structure_still_allows(tmp_path):
     assert result.verdict.decision == "VETO"  # capital remains the sole real blocker
     assert "DEFINED_RISK_WITHIN_BOUNDS" in result.verdict.passed_checks
     assert not any(f.startswith("DEFINED_RISK_") for f in result.verdict.failed_checks)
+
+
+# --------------------------------------------------------------------- #
+# SYNTHETIC — explicitly reviewed and confirmed PERMANENT veto, not a
+# pending gap. A long 1x ATM call + short 1x ATM put (same strike)
+# replicates a synthetic long future: unbounded downside loss as the
+# underlying falls, bounded only by the underlying reaching zero.
+# --------------------------------------------------------------------- #
+
+def test_synthetic_naked_downside_stays_permanently_vetoed(tmp_path):
+    """Regression pin: SYNTHETIC must NEVER be given a defined-risk
+    formula. Netting long 1x ATM call against short 1x ATM put at the
+    same strike replicates a synthetic long future/stock position --
+    unlimited upside gain, but the short put leg means unlimited
+    DOWNSIDE loss as the underlying falls, bounded only by the
+    underlying reaching zero, which is not a meaningful defined-risk
+    bound for an index. Same reason class as RATIO's naked short tail."""
+    journal = _journal(tmp_path)
+    trade = dataclasses.replace(
+        _constructed_trade(strategy_family="SYNTHETIC"),
+        legs=(
+            _leg("SYNTHETIC_LONG_CALL", "CE", 24800, "BUY", premium=120.0, ratio=1),
+            _leg("SYNTHETIC_SHORT_PUT", "PE", 24800, "SELL", premium=110.0, ratio=1),
+        ),
+    )
+    result = construct_and_gate_entry(
+        "DEC-SYNTH-1", trade, "NIFTY", 75, journal, [], {}, _LIMITS, 100000.0, clock=_clock(),
+    )
+    assert "DEFINED_RISK_UNDEFINED_RISK_NO_STRESS_MODEL" in result.verdict.failed_checks

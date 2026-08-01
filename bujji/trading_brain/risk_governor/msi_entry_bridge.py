@@ -142,11 +142,21 @@ underlying rises without limit. No finite max_loss formula can
 honestly describe this position; wiring one would silently hide the
 unbounded tail. This decision was explicitly reviewed and confirmed
 (not defaulted) before extending coverage to other families -- see
-the RATIO-specific regression-pin test. Combined with Gate C's own
-still-uncertified margin provider, every real call through this
-bridge STILL VETOes today (on the capital check, if not on defined
-risk) -- by design, matching this whole session's fail-closed
-discipline.
+the RATIO-specific regression-pin test. SYNTHETIC (`_build_legs`'s
+"SYNTHETIC" branch: long 1x ATM call + short 1x ATM put, same strike
+and expiry) is a PERMANENT veto for the identical reason class as
+RATIO: this replicates a synthetic long future/stock position
+(netted payoff = underlying_price - strike, unbounded both ways) --
+unlimited upside gain is fine, but the short put leg means unlimited
+DOWNSIDE loss as the underlying falls, bounded only by the underlying
+reaching zero, which is not a meaningful defined-risk bound for an
+index. No finite max_loss formula can honestly describe this either;
+this decision was explicitly reviewed and confirmed before extending
+coverage further -- see the SYNTHETIC-specific regression-pin test.
+Combined with Gate C's own still-uncertified margin provider, every
+real call through this bridge STILL VETOes today (on the capital
+check, if not on defined risk) -- by design, matching this whole
+session's fail-closed discipline.
 """
 from __future__ import annotations
 
