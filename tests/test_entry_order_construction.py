@@ -366,12 +366,12 @@ def test_other_strategy_families_still_have_no_formula(tmp_path):
     """Regression guard: families with NO formula wired at all must
     still VETO UNDEFINED_RISK_NO_STRESS_MODEL, unconditionally --
     confirming coverage hasn't accidentally widened beyond what was
-    actually reviewed and tested. IRON_CONDOR and IRON_FLY are excluded
-    from this generic loop now that both have a real formula -- see
-    their own dedicated positive tests instead."""
+    actually reviewed and tested. IRON_CONDOR, IRON_FLY, and BUTTERFLY
+    are excluded from this generic loop now that each has a real
+    formula -- see their own dedicated positive tests instead."""
     journal = _journal(tmp_path)
     for family in (
-        "BUTTERFLY", "COVERED", "RATIO", "SHORT_DIRECTIONAL", "SYNTHETIC",
+        "COVERED", "RATIO", "SHORT_DIRECTIONAL", "SYNTHETIC",
         "NEUTRAL_PREMIUM_SELLING", "VOLATILITY_COMPRESSION", "CALENDAR",
     ):
         trade = dataclasses.replace(_constructed_trade(strategy_family=family))
@@ -812,3 +812,94 @@ def test_iron_fly_missing_wing_price_fails_closed(tmp_path):
         "DEC-FLY-3", trade, "NIFTY", 75, journal, [], {}, _LIMITS, 100000.0, clock=_clock(),
     )
     assert "PORTFOLIO_LIMITS_EXPOSURE_DATA_MISSING" in result.verdict.failed_checks
+
+
+# --------------------------------------------------------------------- #
+# BUTTERFLY — sixth real, reviewed defined-risk formula. Genuinely
+# different payoff shape from the iron condor family: single option
+# type, three legs, 1x/2x/1x ratio, net-debit-paid formula.
+# --------------------------------------------------------------------- #
+
+def _butterfly_trade(
+    lower_strike=24700, body_strike=24800, upper_strike=24900,
+    lower_premium=30.0, body_premium=18.0, upper_premium=8.0,
+):
+    return dataclasses.replace(
+        _constructed_trade(strategy_family="BUTTERFLY"),
+        legs=(
+            _leg("WING_LOWER", "CE", lower_strike, "BUY", premium=lower_premium, ratio=1),
+            _leg("BODY", "CE", body_strike, "SELL", premium=body_premium, ratio=2),
+            _leg("WING_UPPER", "CE", upper_strike, "BUY", premium=upper_premium, ratio=1),
+        ),
+    )
+
+
+def test_butterfly_defined_risk_allows(tmp_path):
+    """wing_cost = 30 + 8 = 38, body_credit = 2 * 18 = 36 -> net debit
+    2 per unit -- a modest, economically ordinary long butterfly."""
+    journal = _journal(tmp_path)
+    trade = _butterfly_trade()
+    result = construct_and_gate_entry(
+        "DEC-FLY-BODY-1", trade, "NIFTY", 75, journal, [], {}, _LIMITS, 100000.0, clock=_clock(),
+    )
+    assert result.verdict.decision == "VETO"  # capital remains the sole real blocker
+    assert "DEFINED_RISK_WITHIN_BOUNDS" in result.verdict.passed_checks
+    assert not any(f.startswith("DEFINED_RISK_") for f in result.verdict.failed_checks)
+    assert "CAPITAL_MARGIN_NOT_CERTIFIED" in result.verdict.failed_checks
+
+
+def test_butterfly_max_loss_computed_correctly(tmp_path):
+    journal = _journal(tmp_path)
+    trade = _butterfly_trade(lower_premium=30.0, body_premium=18.0, upper_premium=8.0)
+    pg = mint_position_group_id(journal, "DEC-FLY-BODY-2", trade.strategy_family, "NIFTY", clock=_clock())
+    pg_id = pg.position_group_id
+    coids = {f"{pg_id}-LEG-{i}": leg for i, leg in enumerate(trade.legs)}
+    journal.append_event(
+        pg_id, "CONSTRUCTED", f"{pg_id}:CONSTRUCTED:0",
+        {"contract_client_order_map": {f"C{i}": coid for i, coid in enumerate(coids)},
+         "requested_quantities": {coid: (150 if leg.role == "BODY" else 75) for coid, leg in coids.items()},
+         "actions": {}, "target_position_group_ids": {}, "target_contract_ids": {}, "flip_link_ids": {}},
+        clock=_clock(),
+    )
+    state = fold(journal.read_events(pg_id))
+    role_map, contracts, orders = {}, {}, {}
+    for coid, leg in coids.items():
+        role_map[coid] = leg.role
+        contracts[coid] = NiftyOptionContract(
+            contract_id=coid, underlying="NIFTY", expiry="2026-08-27", strike=leg.strike,
+            option_type=leg.option_type, side=leg.side, contract_symbol=f"NIFTY{coid}",
+            capital_intent="STANDARD", strategy_id="BUTTERFLY", selection_reason="t",
+            construction_trace="t", timestamp="2026-08-05T09:15:00+00:00", version="1.0.0",
+        )
+        orders[coid] = SimpleNamespace(order_type="LIMIT", reference_price=leg.premium)
+    profile = StrategyRiskProfile(
+        strategy_id="BUTTERFLY", required_leg_roles=("WING_LOWER", "BODY", "WING_UPPER"),
+        formula="BUTTERFLY_NET_DEBIT_PAID", lot_size=75,
+    )
+    result = assess_defined_risk(state, contracts, orders, role_map, profile, clock=_clock())
+    assert result.decision == "ALLOW"
+    # wing_cost=(30+8)*75=2850, body_credit=18*150=2700, max_loss=150
+    assert result.max_loss == pytest.approx((30.0 + 8.0) * 75 - 18.0 * 150)
+
+
+def test_butterfly_missing_body_price_fails_closed(tmp_path):
+    journal = _journal(tmp_path)
+    trade = _butterfly_trade(body_premium=None)
+    result = construct_and_gate_entry(
+        "DEC-FLY-BODY-3", trade, "NIFTY", 75, journal, [], {}, _LIMITS, 100000.0, clock=_clock(),
+    )
+    assert "PORTFOLIO_LIMITS_EXPOSURE_DATA_MISSING" in result.verdict.failed_checks
+
+
+def test_butterfly_rich_body_credit_exceeding_wing_cost_fails_closed(tmp_path):
+    """Audit check: an implausibly rich body premium relative to the
+    wings (data anomaly, or a violation of strike convexity) must
+    still fail closed via the shared negative-max_loss guard, exactly
+    like the vertical spread and iron condor formulas."""
+    journal = _journal(tmp_path)
+    trade = _butterfly_trade(lower_premium=5.0, body_premium=100.0, upper_premium=3.0)
+    result = construct_and_gate_entry(
+        "DEC-FLY-BODY-4", trade, "NIFTY", 75, journal, [], {}, _LIMITS, 100000.0, clock=_clock(),
+    )
+    assert result.verdict.decision == "VETO"
+    assert "DEFINED_RISK_INCOMPLETE_DEFINED_RISK_GROUP" in result.verdict.failed_checks

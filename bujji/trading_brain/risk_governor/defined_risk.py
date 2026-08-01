@@ -187,11 +187,47 @@ def _iron_condor_max_loss(
     return max_loss
 
 
+def _butterfly_max_loss(
+    contracts_by_role: Dict[str, "NiftyOptionContract"],
+    orders_by_role: Dict[str, OrderRequest],
+    profile: StrategyRiskProfile,
+    leg_quantities: Dict[str, int],
+) -> float:
+    """A long butterfly (buy 1x lower wing, sell 2x ATM body, buy 1x
+    upper wing, all same option type) is a net-debit structure: at
+    expiry, at or beyond either wing the structure collapses to zero
+    value, so maximum loss is exactly the net premium paid to establish
+    it -- cost of both wings minus premium received for the body,
+    each at its own actual quantity (never assuming the body's 2x
+    ratio holds, in case of malformed/partial-fill data). By strike
+    convexity this is always >= 0 for a genuinely valid butterfly; a
+    negative result signals malformed pricing data and fails closed,
+    same guard as the vertical spread and iron condor formulas."""
+    required = ("WING_LOWER", "BODY", "WING_UPPER")
+    prices = {r: orders_by_role[r].reference_price for r in required}
+    if any(p is None for p in prices.values()):
+        raise IllegalDefinedRiskInputError("butterfly requires a reference_price on all three legs")
+
+    wing_cost = (
+        prices["WING_LOWER"] * abs(leg_quantities["WING_LOWER"])
+        + prices["WING_UPPER"] * abs(leg_quantities["WING_UPPER"])
+    )
+    body_credit = prices["BODY"] * abs(leg_quantities["BODY"])
+    max_loss = wing_cost - body_credit
+    if max_loss < 0:
+        raise IllegalDefinedRiskInputError(
+            f"butterfly computed a negative max_loss ({max_loss!r}) -- "
+            "body credit cannot legitimately exceed combined wing cost for a valid long butterfly"
+        )
+    return max_loss
+
+
 _FORMULAS = {
     "VERTICAL_SPREAD_WIDTH_MINUS_CREDIT": _vertical_spread_max_loss,
     "LONG_OPTION_PREMIUM_PAID": _long_option_max_loss,
     "MULTI_LEG_LONG_PREMIUM_PAID": _multi_leg_long_premium_paid,
     "IRON_CONDOR_MAX_WING_WIDTH_MINUS_TOTAL_CREDIT": _iron_condor_max_loss,
+    "BUTTERFLY_NET_DEBIT_PAID": _butterfly_max_loss,
 }
 
 

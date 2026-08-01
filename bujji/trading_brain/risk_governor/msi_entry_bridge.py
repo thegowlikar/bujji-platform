@@ -27,7 +27,7 @@ Gate B's engine.assess() and MIL Next's snapshot_builder.build_snapshot():
   4. ALLOW -> build real OrderRequest objects (never before this point)
      VETO  -> stop; zero OrderRequest objects are ever constructed
 
-DISCLOSED, HONEST STATUS: exactly FIVE real MSI strategy families have
+DISCLOSED, HONEST STATUS: exactly SIX real MSI strategy families have
 a reviewed, closed-form defined-risk formula wired:
 
   - LONG_DIRECTIONAL (a single long option leg, `bujji.
@@ -79,6 +79,19 @@ a reviewed, closed-form defined-risk formula wired:
     TOTAL_CREDIT and the identical role-translation lambda verbatim --
     no new formula math, only a new dict entry, same pattern as
     VOLATILITY_EXPANSION reusing NEUTRAL_PREMIUM_BUYING's formula.
+  - BUTTERFLY (three legs, `_build_legs`'s dedicated "BUTTERFLY" branch:
+    buy 1x lower CE wing, sell 2x ATM CE body, buy 1x upper CE wing --
+    a genuinely different payoff shape from the iron condor family, a
+    single-option-type long butterfly, not two credit spreads). A
+    genuinely NEW formula, BUTTERFLY_NET_DEBIT_PAID: at expiry, at or
+    beyond either wing the structure's total value collapses to zero,
+    so maximum loss is exactly the net debit paid to establish it --
+    cost of both wings minus the body's premium received, each leg
+    using its own actual quantity (never assuming the body's 2x ratio
+    holds, in case of malformed/partial-fill data). taxonomy.
+    ROLE_WING_LOWER/ROLE_BODY/ROLE_WING_UPPER are already distinct role
+    strings by construction (no collision class here at all, unlike
+    every prior family) -- role translation is the identity function.
 
 Audited finding NEUTRAL_PREMIUM_BUYING's addition surfaced: `_build_legs`
 assigns the SAME MSI role string ("LONG") to BOTH legs of a
@@ -87,10 +100,10 @@ collided and silently dropped one leg. Role translation is therefore a
 per-leg FUNCTION (disambiguating by `leg.option_type` where needed),
 not a flat dict, for every family from here on.
 
-Every OTHER real MSI strategy family (BUTTERFLY/COVERED/
-NEUTRAL_PREMIUM_SELLING/RATIO/SHORT_DIRECTIONAL/SYNTHETIC/CALENDAR/
-VOLATILITY_COMPRESSION) still has NO formula and still VETOes
-UNDEFINED_RISK_NO_STRESS_MODEL, unconditionally. VOLATILITY_COMPRESSION is
+Every OTHER real MSI strategy family (COVERED/NEUTRAL_PREMIUM_SELLING/
+RATIO/SHORT_DIRECTIONAL/SYNTHETIC/CALENDAR/VOLATILITY_COMPRESSION)
+still has NO formula and still VETOes UNDEFINED_RISK_NO_STRESS_MODEL,
+unconditionally. VOLATILITY_COMPRESSION is
 VOLATILITY_EXPANSION's naked-short twin (SELL both legs instead of
 BUY) from the exact same `_build_legs` branch -- sharing the branch
 does NOT mean sharing defined-risk eligibility; it stays vetoed,
@@ -140,8 +153,8 @@ Clock = Callable[[], datetime]
 # instead.
 #
 # LONG_DIRECTIONAL, NEUTRAL_PREMIUM_BUYING, VOLATILITY_EXPANSION,
-# IRON_CONDOR, and IRON_FLY are populated -- see module docstring for
-# why every other real MSI family still has none.
+# IRON_CONDOR, IRON_FLY, and BUTTERFLY are populated -- see module
+# docstring for why every other real MSI family still has none.
 _MSI_FORMULA_SPECS: Dict[str, Tuple[Tuple[str, ...], str, Callable[["StrikeLeg"], str]]] = {
     "LONG_DIRECTIONAL": (("LONG_LEG",), "LONG_OPTION_PREMIUM_PAID", lambda leg: "LONG_LEG"),
     "NEUTRAL_PREMIUM_BUYING": (
@@ -191,6 +204,14 @@ _MSI_FORMULA_SPECS: Dict[str, Tuple[Tuple[str, ...], str, Callable[["StrikeLeg"]
             else "LONG_LEG_PE" if leg.role == "WING_LOWER"
             else leg.role
         ),
+    ),
+    # Three legs, all distinct roles by construction (WING_LOWER, BODY,
+    # WING_UPPER) -- no collision class here, so translation is simply
+    # the identity function. See module docstring for the formula.
+    "BUTTERFLY": (
+        ("WING_LOWER", "BODY", "WING_UPPER"),
+        "BUTTERFLY_NET_DEBIT_PAID",
+        lambda leg: leg.role,
     ),
 }
 
