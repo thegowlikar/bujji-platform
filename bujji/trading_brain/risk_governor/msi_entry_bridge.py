@@ -113,10 +113,20 @@ defined-risk through this path: its short call leg is only bounded if
 genuinely covered by a real underlying equity position, which this
 options-leg-only bridge has no way to confirm -- vetoing it is
 correct, not a gap to "fix" without equity-position tracking existing
-first. Combined with Gate C's own still-uncertified margin provider,
-every real call through this bridge STILL VETOes today (on the capital
-check, if not on defined risk) -- by design, matching this whole
-session's fail-closed discipline.
+first. RATIO (`_build_legs`'s "RATIO" branch: 1x long ATM CE + 2x
+short OTM CE, same expiry) is likewise a PERMANENT veto, not a pending
+gap: netting the legs gives 1 long call against 2 short calls, i.e. a
+net naked short call above the short strike -- loss is bounded below
+the long strike but genuinely UNBOUNDED above the short strike as the
+underlying rises without limit. No finite max_loss formula can
+honestly describe this position; wiring one would silently hide the
+unbounded tail. This decision was explicitly reviewed and confirmed
+(not defaulted) before extending coverage to other families -- see
+the RATIO-specific regression-pin test. Combined with Gate C's own
+still-uncertified margin provider, every real call through this
+bridge STILL VETOes today (on the capital check, if not on defined
+risk) -- by design, matching this whole session's fail-closed
+discipline.
 """
 from __future__ import annotations
 

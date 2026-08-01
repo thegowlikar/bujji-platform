@@ -903,3 +903,31 @@ def test_butterfly_rich_body_credit_exceeding_wing_cost_fails_closed(tmp_path):
     )
     assert result.verdict.decision == "VETO"
     assert "DEFINED_RISK_INCOMPLETE_DEFINED_RISK_GROUP" in result.verdict.failed_checks
+
+
+# --------------------------------------------------------------------- #
+# RATIO — explicitly reviewed and confirmed PERMANENT veto, not a
+# pending gap. A 1x long ATM CE + 2x short OTM CE nets to a naked short
+# call above the short strike: genuinely unbounded upside loss, no
+# finite max_loss formula can honestly describe it.
+# --------------------------------------------------------------------- #
+
+def test_ratio_naked_short_tail_stays_permanently_vetoed(tmp_path):
+    """Regression pin: RATIO must NEVER be given a defined-risk formula.
+    Netting 1x long ATM CE against 2x short OTM CE leaves a net naked
+    short call above the short strike -- unbounded loss as the
+    underlying rises without limit. Unlike IRON_CONDOR/IRON_FLY/
+    BUTTERFLY (all genuinely bounded), no formula can honestly assign
+    this position a finite max_loss."""
+    journal = _journal(tmp_path)
+    trade = dataclasses.replace(
+        _constructed_trade(strategy_family="RATIO"),
+        legs=(
+            _leg("LONG", "CE", 24800, "BUY", premium=100.0, ratio=1),
+            _leg("SHORT", "CE", 25000, "SELL", premium=40.0, ratio=2),
+        ),
+    )
+    result = construct_and_gate_entry(
+        "DEC-RATIO-1", trade, "NIFTY", 75, journal, [], {}, _LIMITS, 100000.0, clock=_clock(),
+    )
+    assert "DEFINED_RISK_UNDEFINED_RISK_NO_STRESS_MODEL" in result.verdict.failed_checks
