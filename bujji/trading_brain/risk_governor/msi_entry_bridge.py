@@ -27,8 +27,8 @@ Gate B's engine.assess() and MIL Next's snapshot_builder.build_snapshot():
   4. ALLOW -> build real OrderRequest objects (never before this point)
      VETO  -> stop; zero OrderRequest objects are ever constructed
 
-DISCLOSED, HONEST STATUS: exactly TWO real MSI strategy families have a
-reviewed, closed-form defined-risk formula wired:
+DISCLOSED, HONEST STATUS: exactly THREE real MSI strategy families have
+a reviewed, closed-form defined-risk formula wired:
 
   - LONG_DIRECTIONAL (a single long option leg, `bujji.
     msi_trade_construction.engine._build_legs`'s "LONG_DIRECTIONAL"
@@ -36,31 +36,34 @@ reviewed, closed-form defined-risk formula wired:
     loss is the premium paid, in full -- reuses Gate B's existing
     LONG_OPTION_PREMIUM_PAID formula verbatim.
   - NEUTRAL_PREMIUM_BUYING (a long strangle: buy CE + buy PE, both
-    taxonomy.ROLE_LONG -- the same `_build_legs` branch that also
-    produces VOLATILITY_EXPANSION's long straddle, which is NOT yet
-    wired despite being the same shape; see below). Maximum loss is
-    the SUM of premium paid across both legs -- textbook-correct for
-    any all-long combination regardless of strike/expiry, using the
-    new MULTI_LEG_LONG_PREMIUM_PAID formula (a genuine generalization
-    of LONG_OPTION_PREMIUM_PAID to N required long legs, reviewed and
-    added alongside this family, not borrowed from an unrelated shape).
+    taxonomy.ROLE_LONG). Maximum loss is the SUM of premium paid across
+    both legs -- textbook-correct for any all-long combination
+    regardless of strike/expiry, using MULTI_LEG_LONG_PREMIUM_PAID (a
+    genuine generalization of LONG_OPTION_PREMIUM_PAID to N required
+    long legs, reviewed and added alongside this family).
+  - VOLATILITY_EXPANSION (a long ATM straddle: buy CE + buy PE, both
+    taxonomy.ROLE_LONG -- the SAME `_build_legs` branch as
+    NEUTRAL_PREMIUM_BUYING, just ATM-anchored strikes instead of
+    delta-targeted ones). Mechanically identical payoff shape, so this
+    reuses MULTI_LEG_LONG_PREMIUM_PAID and the same role-translation
+    logic verbatim -- no new formula math was needed for this one.
 
-Audited finding this surfaced: `_build_legs` assigns the SAME MSI role
-string ("LONG") to BOTH legs of a straddle/strangle -- a flat
-role-string translation would have collided and silently dropped one
-leg. Role translation is therefore a per-leg FUNCTION (disambiguating
-by `leg.option_type`), not a flat dict, for every family from here on.
-
-NOT yet wired despite being the mechanically identical BUY-both-legs
-shape: VOLATILITY_EXPANSION (a long ATM straddle -- same formula would
-apply, not reviewed/added in this pass to keep this change scoped to
-one new family at a time).
+Audited finding NEUTRAL_PREMIUM_BUYING's addition surfaced: `_build_legs`
+assigns the SAME MSI role string ("LONG") to BOTH legs of a
+straddle/strangle -- a flat role-string translation would have
+collided and silently dropped one leg. Role translation is therefore a
+per-leg FUNCTION (disambiguating by `leg.option_type`), not a flat
+dict, for every family from here on.
 
 Every OTHER real MSI strategy family (BUTTERFLY/COVERED/IRON_CONDOR/
 IRON_FLY/NEUTRAL_PREMIUM_SELLING/RATIO/SHORT_DIRECTIONAL/SYNTHETIC/
-CALENDAR/VOLATILITY_COMPRESSION/VOLATILITY_EXPANSION) still has NO
-formula and still VETOes UNDEFINED_RISK_NO_STRESS_MODEL,
-unconditionally. COVERED in particular can never be safely treated as
+CALENDAR/VOLATILITY_COMPRESSION) still has NO formula and still VETOes
+UNDEFINED_RISK_NO_STRESS_MODEL, unconditionally.
+VOLATILITY_COMPRESSION in particular is VOLATILITY_EXPANSION's naked-
+short twin (SELL both legs instead of BUY) from the exact same
+`_build_legs` branch -- sharing the branch does NOT mean sharing
+defined-risk eligibility; it stays vetoed, genuinely unbounded, tested
+explicitly. COVERED can never be safely treated as
 defined-risk through this path: its short call leg is only bounded if
 genuinely covered by a real underlying equity position, which this
 options-leg-only bridge has no way to confirm -- vetoing it is
@@ -109,6 +112,16 @@ Clock = Callable[[], datetime]
 _MSI_FORMULA_SPECS: Dict[str, Tuple[Tuple[str, ...], str, Callable[["StrikeLeg"], str]]] = {
     "LONG_DIRECTIONAL": (("LONG_LEG",), "LONG_OPTION_PREMIUM_PAID", lambda leg: "LONG_LEG"),
     "NEUTRAL_PREMIUM_BUYING": (
+        ("LONG_LEG_CE", "LONG_LEG_PE"), "MULTI_LEG_LONG_PREMIUM_PAID",
+        lambda leg: f"LONG_LEG_{leg.option_type}",
+    ),
+    # Mechanically identical to NEUTRAL_PREMIUM_BUYING -- same
+    # bujji.msi_trade_construction.engine._build_legs branch ("BUY"
+    # side -> ROLE_LONG for both legs), same all-long, already-bounded
+    # payoff (an ATM long straddle instead of a delta-targeted long
+    # strangle). Reuses the identical formula and role-translation
+    # logic verbatim -- no new formula math, only a new dict entry.
+    "VOLATILITY_EXPANSION": (
         ("LONG_LEG_CE", "LONG_LEG_PE"), "MULTI_LEG_LONG_PREMIUM_PAID",
         lambda leg: f"LONG_LEG_{leg.option_type}",
     ),

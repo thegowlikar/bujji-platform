@@ -379,24 +379,91 @@ def test_other_strategy_families_still_have_no_formula(tmp_path):
         assert "DEFINED_RISK_UNDEFINED_RISK_NO_STRESS_MODEL" in result.verdict.failed_checks, family
 
 
-def test_volatility_expansion_mechanically_identical_shape_still_not_wired(tmp_path):
-    """Explicit regression pin for the audit finding disclosed in the
-    module docstring: VOLATILITY_EXPANSION (a long ATM straddle) is the
-    same BUY-both-legs shape as NEUTRAL_PREMIUM_BUYING and COULD reuse
-    the identical formula, but was deliberately not wired in this pass
-    to keep the change scoped to one new family at a time. Must still
-    VETO today -- if this ever silently starts passing, someone wired
-    it without updating this test/the docstring."""
-    journal = _journal(tmp_path)
-    trade = dataclasses.replace(
+# --------------------------------------------------------------------- #
+# VOLATILITY_EXPANSION — third real, reviewed defined-risk formula
+# (mechanically identical to NEUTRAL_PREMIUM_BUYING's shape/formula)
+# --------------------------------------------------------------------- #
+
+def _volatility_expansion_trade(ce_premium=120.0, pe_premium=110.0, ratio=1):
+    return dataclasses.replace(
         _constructed_trade(strategy_family="VOLATILITY_EXPANSION"),
         legs=(
-            _leg("LONG", "CE", 24800, "BUY", premium=120.0),
-            _leg("LONG", "PE", 24800, "BUY", premium=110.0),
+            _leg("LONG", "CE", 24800, "BUY", premium=ce_premium, ratio=ratio),
+            _leg("LONG", "PE", 24800, "BUY", premium=pe_premium, ratio=ratio),
+        ),
+    )
+
+
+def test_volatility_expansion_now_wired_defined_risk_allows(tmp_path):
+    """VOLATILITY_EXPANSION now correctly reuses the same
+    MULTI_LEG_LONG_PREMIUM_PAID formula as NEUTRAL_PREMIUM_BUYING --
+    same shape, same reviewed math, no new formula needed."""
+    journal = _journal(tmp_path)
+    result = construct_and_gate_entry(
+        "DEC-VOLEXP-1", _volatility_expansion_trade(ce_premium=120.0, pe_premium=110.0, ratio=2),
+        "NIFTY", 75, journal, [], {}, _LIMITS, 100000.0, clock=_clock(),
+    )
+    assert result.verdict.decision == "VETO"  # capital remains the sole real blocker
+    assert "DEFINED_RISK_WITHIN_BOUNDS" in result.verdict.passed_checks
+    assert not any(f.startswith("DEFINED_RISK_") for f in result.verdict.failed_checks)
+    assert "CAPITAL_MARGIN_NOT_CERTIFIED" in result.verdict.failed_checks
+
+
+def test_volatility_expansion_max_loss_sums_both_legs_correctly(tmp_path):
+    journal = _journal(tmp_path)
+    trade = _volatility_expansion_trade(ce_premium=120.0, pe_premium=110.0, ratio=3)
+    pg = mint_position_group_id(journal, "DEC-VOLEXP-2", trade.strategy_family, "NIFTY", clock=_clock())
+    coid_ce = f"{pg.position_group_id}-LEG-0"
+    coid_pe = f"{pg.position_group_id}-LEG-1"
+    journal.append_event(
+        pg.position_group_id, "CONSTRUCTED", f"{pg.position_group_id}:CONSTRUCTED:0",
+        {"contract_client_order_map": {"C0": coid_ce, "C1": coid_pe},
+         "requested_quantities": {coid_ce: 225, coid_pe: 225},
+         "actions": {}, "target_position_group_ids": {}, "target_contract_ids": {}, "flip_link_ids": {}},
+        clock=_clock(),
+    )
+    state = fold(journal.read_events(pg.position_group_id))
+    contract_ce = NiftyOptionContract(
+        contract_id="C0", underlying="NIFTY", expiry="2026-08-27", strike=24800, option_type="CE", side="BUY",
+        contract_symbol="NIFTY26AUG24800CE", capital_intent="STANDARD", strategy_id="VOLATILITY_EXPANSION",
+        selection_reason="t", construction_trace="t", timestamp="2026-08-05T09:15:00+00:00", version="1.0.0",
+    )
+    contract_pe = NiftyOptionContract(
+        contract_id="C1", underlying="NIFTY", expiry="2026-08-27", strike=24800, option_type="PE", side="BUY",
+        contract_symbol="NIFTY26AUG24800PE", capital_intent="STANDARD", strategy_id="VOLATILITY_EXPANSION",
+        selection_reason="t", construction_trace="t", timestamp="2026-08-05T09:15:00+00:00", version="1.0.0",
+    )
+    profile = StrategyRiskProfile(
+        strategy_id="VOLATILITY_EXPANSION", required_leg_roles=("LONG_LEG_CE", "LONG_LEG_PE"),
+        formula="MULTI_LEG_LONG_PREMIUM_PAID", lot_size=75,
+    )
+    orders = {
+        coid_ce: SimpleNamespace(order_type="LIMIT", reference_price=120.0),
+        coid_pe: SimpleNamespace(order_type="LIMIT", reference_price=110.0),
+    }
+    result = assess_defined_risk(
+        state, {coid_ce: contract_ce, coid_pe: contract_pe}, orders,
+        {coid_ce: "LONG_LEG_CE", coid_pe: "LONG_LEG_PE"}, profile, clock=_clock(),
+    )
+    assert result.decision == "ALLOW"
+    assert result.max_loss == pytest.approx((120.0 * 225) + (110.0 * 225))
+
+
+def test_volatility_compression_the_naked_twin_still_vetoes(tmp_path):
+    """VOLATILITY_COMPRESSION (SELL both legs -- the naked-short twin
+    from the SAME _build_legs branch) must never be treated as
+    defined-risk. Sharing a construction branch does not mean sharing
+    defined-risk eligibility."""
+    journal = _journal(tmp_path)
+    trade = dataclasses.replace(
+        _constructed_trade(strategy_family="VOLATILITY_COMPRESSION"),
+        legs=(
+            _leg("SHORT", "CE", 24800, "SELL", premium=120.0),
+            _leg("SHORT", "PE", 24800, "SELL", premium=110.0),
         ),
     )
     result = construct_and_gate_entry(
-        "DEC-VOLEXP", trade, "NIFTY", 75, journal, [], {}, _LIMITS, 100000.0, clock=_clock(),
+        "DEC-VOLCOMP", trade, "NIFTY", 75, journal, [], {}, _LIMITS, 100000.0, clock=_clock(),
     )
     assert "DEFINED_RISK_UNDEFINED_RISK_NO_STRESS_MODEL" in result.verdict.failed_checks
 
