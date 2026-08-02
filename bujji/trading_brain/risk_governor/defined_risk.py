@@ -95,7 +95,21 @@ def _vertical_spread_max_loss(
     net_credit = (short_price - long_price) if (short_price is not None and long_price is not None) else None
     if net_credit is None:
         raise IllegalDefinedRiskInputError("vertical spread requires a reference_price on both legs")
-    quantity = min(abs(leg_quantities["SHORT_LEG"]), abs(leg_quantities["LONG_LEG"]))
+    short_qty = abs(leg_quantities["SHORT_LEG"])
+    long_qty = abs(leg_quantities["LONG_LEG"])
+    if short_qty > long_qty:
+        # Audited finding: taking quantity=min(short_qty, long_qty) here
+        # silently discarded the excess short quantity from both the price
+        # AND the veto decision -- a short leg that has out-run its own
+        # hedge (real, since Gate A folds each leg's fill state
+        # independently) is naked, unbounded risk, not a smaller version of
+        # the same bounded spread. Never priced as if it were.
+        raise IllegalDefinedRiskInputError(
+            f"short leg quantity ({short_qty}) exceeds long leg quantity ({long_qty}) -- "
+            f"{short_qty - long_qty} unit(s) of naked, unhedged short exposure with unbounded "
+            f"risk; a defined-risk vertical spread formula can never price this safely"
+        )
+    quantity = min(short_qty, long_qty)
     lots_equiv = quantity / profile.lot_size
     max_loss = (strike_width * profile.lot_size * lots_equiv) - (net_credit * quantity)
     if max_loss < 0:
@@ -175,6 +189,29 @@ def _iron_condor_max_loss(
     call_spread_credit = prices["SHORT_LEG_CE"] - prices["LONG_LEG_CE"]
     put_spread_credit = prices["SHORT_LEG_PE"] - prices["LONG_LEG_PE"]
     total_credit = call_spread_credit + put_spread_credit
+
+    # Audited finding: a global min() across all four legs let one wing's
+    # short leg silently out-run its OWN hedge (e.g. call side fully
+    # hedged, put side short > put side long) without ever being detected
+    # -- the global min from an unrelated leg would mask it. Each wing is
+    # its own independent vertical spread and must be checked on its own
+    # terms, same rule as _vertical_spread_max_loss.
+    call_short_qty = abs(leg_quantities["SHORT_LEG_CE"])
+    call_long_qty = abs(leg_quantities["LONG_LEG_CE"])
+    put_short_qty = abs(leg_quantities["SHORT_LEG_PE"])
+    put_long_qty = abs(leg_quantities["LONG_LEG_PE"])
+    if call_short_qty > call_long_qty:
+        raise IllegalDefinedRiskInputError(
+            f"call spread short leg quantity ({call_short_qty}) exceeds its long leg quantity "
+            f"({call_long_qty}) -- {call_short_qty - call_long_qty} unit(s) of naked, unhedged "
+            f"short call exposure with unbounded risk"
+        )
+    if put_short_qty > put_long_qty:
+        raise IllegalDefinedRiskInputError(
+            f"put spread short leg quantity ({put_short_qty}) exceeds its long leg quantity "
+            f"({put_long_qty}) -- {put_short_qty - put_long_qty} unit(s) of naked, unhedged "
+            f"short put exposure with unbounded risk"
+        )
 
     quantity = min(abs(leg_quantities[r]) for r in required)
     lots_equiv = quantity / profile.lot_size

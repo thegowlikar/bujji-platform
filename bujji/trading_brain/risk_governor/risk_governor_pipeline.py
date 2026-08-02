@@ -244,7 +244,25 @@ def run_risk_governor_pipeline(context: GovernorPipelineContext) -> GovernorPipe
     budget_trade_decision = assess_trade_risk_budget(
         portfolio_snapshot, context.requested_risk, budget_snapshot, context.risk_policy, context.clock,
     )
-    sizing = calculate_safe_position_size(context.desired_quantity, context.requested_risk, budget_snapshot)
+    if context.requested_risk < 0:
+        # Hedge/de-risking trade -- assess_trade_risk_budget() above already
+        # approves this unconditionally (D.3's own established precedent:
+        # a risk-reducing trade can only ever improve the budget, mirroring
+        # D.1's identical "risk-reducing trades are never blocked" rule).
+        # calculate_safe_position_size() explicitly rejects negative
+        # requested_risk by design (its own docstring: hedges belong to
+        # assess_trade_risk_budget, not sizing) -- calling it here would
+        # raise IllegalRiskBudgetInputError and crash the whole pipeline on
+        # every hedge trade. A hedge is never reduced, so the full
+        # desired_quantity is the correct sizing outcome by construction.
+        sizing = PositionSizeRecommendation(
+            recommended_quantity=context.desired_quantity, maximum_quantity=context.desired_quantity,
+            reduction_required=False,
+            reason="Hedge/de-risking trade (requested_risk < 0) -- sizing reduction not applicable; "
+                   "full desired_quantity approved.",
+        )
+    else:
+        sizing = calculate_safe_position_size(context.desired_quantity, context.requested_risk, budget_snapshot)
     budget_decision = BudgetGovernorOutcome(snapshot=budget_snapshot, decision=budget_trade_decision, sizing=sizing)
     steps.append(TraceStep(
         STAGE_BUDGET, budget_trade_decision.status,

@@ -316,3 +316,28 @@ def test_no_force_override_bypass_parameter():
         assert "force" not in name.lower()
         assert "override" not in name.lower()
         assert "bypass" not in name.lower()
+
+
+# --------------------------------------------------------------------- #
+# Bug fix regression: hedge trades (negative requested_risk) must never
+# crash the pipeline. assess_trade_risk_budget() approves them
+# unconditionally; calculate_safe_position_size() explicitly rejects
+# negative input by design -- D.6 must branch, never call both blindly.
+# --------------------------------------------------------------------- #
+
+def test_hedge_trade_negative_requested_risk_does_not_crash_and_is_approved():
+    context = make_context(requested_risk=-500.0, desired_quantity=1)
+    result = rgp.run_risk_governor_pipeline(context)  # must not raise
+    assert result.final_status == rgp.PIPELINE_APPROVED
+    assert result.blocking_stage is None
+    assert result.budget_decision.decision.status == "APPROVED"
+    assert result.budget_decision.sizing.recommended_quantity == 1
+    assert result.budget_decision.sizing.reduction_required is False
+    assert "Hedge" in result.budget_decision.sizing.reason
+
+
+def test_hedge_trade_still_blocked_upstream_by_capital():
+    context = make_context(requested_risk=-500.0, desired_quantity=1,
+                            capital_snapshot=capital_snapshot(daily_pnl=-60000.0))
+    result = rgp.run_risk_governor_pipeline(context)  # must not raise
+    assert result.blocking_stage == rgp.STAGE_CAPITAL
