@@ -1,4 +1,8 @@
-# Bujji ORB-VWAP ATM Seller — configuration.
+# [DEPRECATED / LEGACY] Bujji ORB-VWAP ATM Seller — configuration.
+# Superseded by Bujji Options OS — see /opt/bujji/app/docs/SYSTEM_OWNERSHIP.md.
+# This config belongs ONLY to the legacy bujji.app entrypoint (systemd unit
+# bujji-orb-vwap-legacy.service, disabled by default). Bujji Options OS does
+# not read this file.
 # Secrets (FYERS app id / access token) come from environment variables:
 #   FYERS_APP_ID, FYERS_ACCESS_TOKEN — never put them in this file.
 

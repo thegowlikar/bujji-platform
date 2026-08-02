@@ -1,5 +1,17 @@
 [Unit]
-Description=Bujji VWAP Premium Straddle Seller
+# =========================================================================
+# DEPRECATED / LEGACY SYSTEM — DO NOT CONFUSE WITH BUJJI OPTIONS OS
+#
+# This is the legacy ORB-VWAP ATM Seller strategy bot, superseded by Bujji
+# Options OS (production_runtime/, trading_brain/, msi_trade_construction/,
+# shadow_observatory/ — see /opt/bujji/app/docs/SYSTEM_OWNERSHIP.md).
+#
+# Deliberately NOT installed as "bujji.service" — install it as
+# "bujji-orb-vwap-legacy.service" (see deploy/README.md) so the bare name
+# "bujji" stays free for a future Bujji Options OS deployment service and
+# can never be confused with, or accidentally start, this legacy bot.
+# =========================================================================
+Description=[DEPRECATED/LEGACY] Bujji VWAP Premium Straddle Seller — superseded by Bujji Options OS, see docs/SYSTEM_OWNERSHIP.md
 # Wait for real network/DNS before starting — the broker connection at
 # startup will otherwise fail fast (by design) on every boot.
 After=network-online.target
@@ -8,7 +20,7 @@ Wants=network-online.target
 # Restart-loop rate limiting. NOTE: StartLimit* directives belong in [Unit],
 # not [Service] — systemd silently ignores them if placed in [Service]. If a
 # crash loop trips this (10 starts in 600s), systemd stops trying and the unit
-# enters "failed"; clear it with `systemctl reset-failed bujji`.
+# enters "failed"; clear it with `systemctl reset-failed bujji-orb-vwap-legacy`.
 StartLimitIntervalSec=600
 StartLimitBurst=10
 
@@ -42,10 +54,10 @@ RestartSec=5
 TimeoutStopSec=30
 KillSignal=SIGTERM
 
-# Hygiene: keep failures visible in `journalctl -u bujji`, not lost.
+# Hygiene: keep failures visible in `journalctl -u bujji-orb-vwap-legacy`, not lost.
 StandardOutput=journal
 StandardError=journal
-SyslogIdentifier=bujji
+SyslogIdentifier=bujji-orb-vwap-legacy
 
 # --- Security hardening ------------------------------------------------
 # The service holds a live broker credential, so lock down what it can touch.
