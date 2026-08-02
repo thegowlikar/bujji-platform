@@ -50,6 +50,16 @@ STATUS_PARTIAL = "PARTIAL"
 STATUS_REJECTED = "REJECTED"
 STATUS_FAILED_VALIDATION = "FAILED_VALIDATION"
 
+# NOT part of D.4's own closed action vocabulary (HOLD/MONITOR/REDUCE_SIZE/
+# ADD_HEDGE/EXIT_CONSIDERATION/BLOCK_NEW_RISK) -- D.4 never produces this
+# label. It is emitted only by the Trading Session Governor's own Exit
+# Policy (Gate V1.1) when a hard profit/loss/time limit fires, and is
+# semantically distinct from REDUCE_SIZE: a reduce lowers exposure, this
+# closes it to zero. Executed via the identical reduce-order codepath
+# (a full close is a reduce to zero), but the resulting record is labeled
+# honestly for anyone reading the forensic history later.
+ACTION_MANDATORY_EXIT = "MANDATORY_EXIT"
+
 _RECORD_ONLY_ACTIONS = (ACTION_HOLD, ACTION_MONITOR, ACTION_EXIT_CONSIDERATION, ACTION_BLOCK_NEW_RISK)
 
 
@@ -93,18 +103,19 @@ class TradeLifecycleExecutor:
                 reason=f"{action} is advisory/record-only -- no order submitted.",
             )
 
-        if action == ACTION_REDUCE_SIZE:
+        if action in (ACTION_REDUCE_SIZE, ACTION_MANDATORY_EXIT):
             return await self._execute_reduce(pg_id, action, reduce_quantity, clock)
 
         if action == ACTION_ADD_HEDGE:
             return await self._execute_hedge(pg_id, action, hedge_instruction, clock)
 
-        # Structurally unreachable given D.4's own closed action vocabulary,
+        # Structurally unreachable given D.4's own closed action vocabulary
+        # plus the one Session-Governor-owned MANDATORY_EXIT label above,
         # but fails closed rather than silently doing nothing undocumented.
         self._publish("LIFECYCLE_ACTION_FAILED", pg_id, action, clock)
         return LifecycleExecutionResult(
             position_group_id=pg_id, action=action, orders_submitted=(), status=STATUS_FAILED_VALIDATION,
-            reason=f"unrecognized D.4 action {action!r}",
+            reason=f"unrecognized action {action!r}",
         )
 
     async def _execute_reduce(
@@ -114,7 +125,7 @@ class TradeLifecycleExecutor:
             self._publish("LIFECYCLE_ACTION_FAILED", pg_id, action, clock)
             return LifecycleExecutionResult(
                 position_group_id=pg_id, action=action, orders_submitted=(), status=STATUS_FAILED_VALIDATION,
-                reason="REDUCE_SIZE recommended but no positive reduce_quantity was supplied -- fail closed, "
+                reason=f"{action} recommended but no positive reduce_quantity was supplied -- fail closed, "
                        "never invented here.",
             )
 
