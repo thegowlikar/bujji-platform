@@ -47,8 +47,19 @@ _TRANSITIONS = {
     # strategy at all.
     TradingSessionState.ANALYSING_MARKET: {TradingSessionState.STRATEGY_LOCKED, TradingSessionState.SESSION_COMPLETE},
     TradingSessionState.STRATEGY_LOCKED: {TradingSessionState.POSITION_ACTIVE, TradingSessionState.SESSION_COMPLETE},
-    TradingSessionState.POSITION_ACTIVE: {TradingSessionState.MANAGING, TradingSessionState.EXITED},
-    TradingSessionState.MANAGING: {TradingSessionState.EXITED},
+    # POSITION_ACTIVE/MANAGING -> SESSION_COMPLETE directly is ALSO a real,
+    # legitimate path: F.5's own EOD reconciliation contract is "report
+    # unresolved positions, never force-close" -- if no hard exit condition
+    # ever fired (found missing during the pre-Monday dry rehearsal: a day
+    # that never triggers the mandatory-exit-time/profit/loss limits, and
+    # D.4 never independently recommends closing to zero, has nowhere
+    # legal to go), the session must still be able to end and be reported,
+    # never raise. Ending the day with an unresolved position is a fact to
+    # record, not a state-machine violation.
+    TradingSessionState.POSITION_ACTIVE: {
+        TradingSessionState.MANAGING, TradingSessionState.EXITED, TradingSessionState.SESSION_COMPLETE,
+    },
+    TradingSessionState.MANAGING: {TradingSessionState.EXITED, TradingSessionState.SESSION_COMPLETE},
     TradingSessionState.EXITED: {TradingSessionState.SESSION_COMPLETE},
     TradingSessionState.SESSION_COMPLETE: set(),
 }

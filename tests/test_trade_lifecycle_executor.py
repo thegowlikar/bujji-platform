@@ -25,8 +25,8 @@ from bujji.production_runtime.lifecycle_order_builder import (
     IllegalLifecycleOrderError, build_hedge_order, build_reduce_order,
 )
 from bujji.production_runtime.trade_lifecycle_executor import (
-    STATUS_EXECUTED, STATUS_FAILED_VALIDATION, STATUS_NO_ACTION, STATUS_PARTIAL, STATUS_REJECTED,
-    TradeLifecycleExecutor,
+    ACTION_MANDATORY_EXIT, STATUS_EXECUTED, STATUS_FAILED_VALIDATION, STATUS_NO_ACTION, STATUS_PARTIAL,
+    STATUS_REJECTED, TradeLifecycleExecutor,
 )
 from bujji.production_runtime import trade_lifecycle_executor as executor_module
 from bujji.production_runtime import lifecycle_order_builder as builder_module
@@ -183,6 +183,42 @@ async def test_reduce_with_no_quantity_supplied_fails_closed():
 def test_build_reduce_order_invalid_symbol_rejected():
     with pytest.raises(IllegalLifecycleOrderError):
         build_reduce_order(None, CONTRACT_CE, 25, "CID-1")
+
+
+def test_build_reduce_order_defaults_to_entry_avg_price_when_no_reference_supplied():
+    # Regression guard for existing callers: omitting reference_price must
+    # keep the EXACT prior behavior (pinned to entry avg_price) byte for byte.
+    position = {"symbol": "NIFTY25000CE", "side": "SELL", "qty": 75, "avg_price": 50.0}
+    order = build_reduce_order(position, CONTRACT_CE, 75, "CID-DEFAULT")
+    assert order.reference_price == 50.0
+
+
+def test_build_reduce_order_uses_supplied_current_market_price():
+    # Found via the pre-Monday dry rehearsal: a real close must reflect
+    # real market movement, not stay pinned to the entry price forever.
+    position = {"symbol": "NIFTY25000CE", "side": "SELL", "qty": 75, "avg_price": 50.0}
+    order = build_reduce_order(position, CONTRACT_CE, 75, "CID-CURRENT", reference_price=12.0)
+    assert order.reference_price == 12.0
+
+
+@pytest.mark.asyncio
+async def test_mandatory_exit_realizes_real_pnl_from_current_market_price():
+    """The bug found by the dry rehearsal: MANDATORY_EXIT (and REDUCE_SIZE)
+    must realize P&L based on the CURRENT market price, not silently
+    re-fill at the entry price and realize ~zero regardless of movement."""
+    broker, registry, lc = await _setup()
+    executor = make_executor(broker, registry, lc)
+    evaluation = LifecycleEvaluationResult(
+        "PG-1", make_recommendation(ACTION_MANDATORY_EXIT), PositionLifecycleState.MANAGING,
+    )
+    # Entry was SELL 75 @ 50.0 (see _setup). Market has since dropped to 12.0
+    # -- a real, sizeable profit for a short position bought back cheap.
+    result = await executor.execute(
+        evaluation, clock, reduce_quantity=75, reference_prices={"NIFTY25000CE": 12.0},
+    )
+    assert result.status == STATUS_EXECUTED
+    realized = broker.get_realized_pnl("NIFTY25000CE")
+    assert realized == pytest.approx((50.0 - 12.0) * 75)
 
 
 def test_build_hedge_order_zero_quantity_rejected():

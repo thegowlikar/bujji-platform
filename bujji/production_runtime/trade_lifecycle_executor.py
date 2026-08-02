@@ -91,7 +91,16 @@ class TradeLifecycleExecutor:
     async def execute(
         self, evaluation: LifecycleEvaluationResult, clock: Clock,
         reduce_quantity: Optional[int] = None, hedge_instruction: Optional[dict] = None,
+        reference_prices: Optional[Dict[str, float]] = None,
     ) -> LifecycleExecutionResult:
+        """`reference_prices`: optional {symbol: current_market_price},
+        e.g. straight from F.3's own Portfolio Reality valuation.
+        Passed through to each leg's closing order as the real fill
+        basis. Defaults to None -- preserving every existing caller's
+        exact prior behavior (closing fill pinned to entry avg_price)
+        byte-for-byte -- but any caller managing a real position should
+        supply this, or the resulting close will never reflect actual
+        market movement no matter how far price has genuinely moved."""
         action = evaluation.recommendation.action
         pg_id = evaluation.position_group_id
         self._publish("LIFECYCLE_ACTION_STARTED", pg_id, action, clock)
@@ -104,7 +113,7 @@ class TradeLifecycleExecutor:
             )
 
         if action in (ACTION_REDUCE_SIZE, ACTION_MANDATORY_EXIT):
-            return await self._execute_reduce(pg_id, action, reduce_quantity, clock)
+            return await self._execute_reduce(pg_id, action, reduce_quantity, clock, reference_prices)
 
         if action == ACTION_ADD_HEDGE:
             return await self._execute_hedge(pg_id, action, hedge_instruction, clock)
@@ -120,6 +129,7 @@ class TradeLifecycleExecutor:
 
     async def _execute_reduce(
         self, pg_id: str, action: str, reduce_quantity: Optional[int], clock: Clock,
+        reference_prices: Optional[Dict[str, float]] = None,
     ) -> LifecycleExecutionResult:
         if reduce_quantity is None or reduce_quantity <= 0:
             self._publish("LIFECYCLE_ACTION_FAILED", pg_id, action, clock)
@@ -142,8 +152,11 @@ class TradeLifecycleExecutor:
             symbol = position["symbol"]
             contract = self._registry.contract_for_symbol(pg_id, symbol)
             client_order_id = f"{pg_id}-REDUCE-{clock().isoformat()}-{index}"
+            leg_reference_price = reference_prices.get(symbol) if reference_prices else None
             try:
-                order_request = build_reduce_order(position, contract, reduce_quantity, client_order_id)
+                order_request = build_reduce_order(
+                    position, contract, reduce_quantity, client_order_id, reference_price=leg_reference_price,
+                )
             except IllegalLifecycleOrderError as exc:
                 self._publish("LIFECYCLE_ACTION_FAILED", pg_id, action, clock)
                 return LifecycleExecutionResult(

@@ -169,8 +169,19 @@ class TradingSessionGovernor:
                 position_group_id=self._position_group_id, recommendation=forced_recommendation,
                 lifecycle_state=evaluation.lifecycle_state,
             )
+            # Real current market price per leg, straight from F.3's own
+            # valuation -- never the entry price. Without this, F.4's own
+            # reduce-order builder falls back to the position's entry
+            # avg_price and the close realizes ~zero P&L regardless of how
+            # far the market actually moved (found during the pre-Monday
+            # dry rehearsal).
+            reference_prices = {
+                leg.symbol: leg.current_price for leg in valuation.legs if leg.current_price is not None
+            }
             if full_quantity > 0:
-                forced_execution = await self._executor.execute(forced_evaluation, self._clock, reduce_quantity=full_quantity)
+                forced_execution = await self._executor.execute(
+                    forced_evaluation, self._clock, reduce_quantity=full_quantity, reference_prices=reference_prices,
+                )
                 self._state_tracker.transition(TradingSessionState.EXITED, reason=f"exit_policy:{policy_decision.decision}")
 
         return ExitEnforcementResult(lifecycle_evaluation=evaluation, policy_decision=policy_decision, forced_execution=forced_execution)
@@ -179,10 +190,18 @@ class TradingSessionGovernor:
         """Component 6 (session-level portion): terminal bookkeeping
         only -- the caller is responsible for having already run F.5's
         own EOD reconciliation, F.4 execution, etc. This method only
-        closes out the trading-discipline state itself."""
+        closes out the trading-discipline state itself. Ending with a
+        position still POSITION_ACTIVE/MANAGING is allowed and is
+        recorded honestly, never force-closed or silently coerced --
+        matching F.5's own "report unresolved positions, never
+        force-close" EOD contract."""
         if self._state_tracker.state == TradingSessionState.SESSION_COMPLETE:
             return
-        self._state_tracker.transition(TradingSessionState.SESSION_COMPLETE, reason="session_end")
+        unresolved = self._state_tracker.state in (
+            TradingSessionState.POSITION_ACTIVE, TradingSessionState.MANAGING,
+        )
+        reason = "session_end_with_unresolved_position" if unresolved else "session_end"
+        self._state_tracker.transition(TradingSessionState.SESSION_COMPLETE, reason=reason)
 
     def _publish(self, stage: str, extra: dict) -> None:
         if self._event_bus is None:

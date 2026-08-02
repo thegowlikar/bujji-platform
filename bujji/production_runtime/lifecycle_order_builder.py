@@ -11,6 +11,8 @@ established across every prior gate this session).
 """
 from __future__ import annotations
 
+from typing import Optional
+
 from bujji.core.enums import Side
 from bujji.core.models import OptionContract, OrderRequest
 
@@ -22,13 +24,26 @@ class IllegalLifecycleOrderError(Exception):
 
 def build_reduce_order(
     current_position: dict, contract: OptionContract, reduce_quantity: int, client_order_id: str,
+    reference_price: Optional[float] = None,
 ) -> OrderRequest:
     """`current_position`: PaperBroker's own position dict for this
     symbol (symbol/side/qty/avg_price/entry_timestamp), read fresh by
     the caller -- never cached here. Fails closed on: no position
     (nothing to reduce), zero/negative reduce_quantity, or a
     reduce_quantity exceeding the current holding (a reduction can
-    only ever shrink exposure, never flip or increase it)."""
+    only ever shrink exposure, never flip or increase it).
+
+    `reference_price`: the current observed market price for this
+    symbol, caller-supplied (e.g. from F.3's own Portfolio Reality
+    valuation), used as PaperBroker's simulated fill basis for the
+    closing leg. Optional and defaults to the position's own entry
+    `avg_price` ONLY to preserve every existing caller's exact prior
+    behavior byte-for-byte (this module never silently changes
+    behavior for a caller that hasn't opted in) -- but pinning a
+    reduce/exit fill to the entry price on every real call means the
+    position never realizes real market movement no matter how far
+    price has actually moved, so every real caller managing a live
+    position should supply the current market price explicitly."""
     if current_position is None:
         raise IllegalLifecycleOrderError("no current position exists for this symbol -- nothing to reduce")
     if contract is None:
@@ -55,9 +70,10 @@ def build_reduce_order(
     # what "reduce" means, not a trading judgment.
     reducing_side = Side.BUY if current_side == Side.SELL.value else Side.SELL
 
+    resolved_reference_price = reference_price if reference_price is not None else current_position["avg_price"]
     return OrderRequest(
         contract=contract, side=reducing_side, quantity=reduce_quantity, client_order_id=client_order_id,
-        limit_price=None, reference_price=current_position["avg_price"], tag="LIFECYCLE:REDUCE_SIZE",
+        limit_price=None, reference_price=resolved_reference_price, tag="LIFECYCLE:REDUCE_SIZE",
     )
 
 

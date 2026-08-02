@@ -47,6 +47,28 @@ def test_session_state_locked_strategy_progression():
     assert tracker.is_terminal()
 
 
+def test_session_state_can_end_directly_from_position_active_with_unresolved_position():
+    # Found via the pre-Monday dry rehearsal: EOD can arrive with a
+    # position still open (no hard exit condition ever fired) -- the day
+    # must still be able to end and be reported, never raise.
+    tracker = SessionTradingStateTracker()
+    tracker.transition(TradingSessionState.ANALYSING_MARKET, reason="start")
+    tracker.transition(TradingSessionState.STRATEGY_LOCKED, reason="locked")
+    tracker.transition(TradingSessionState.POSITION_ACTIVE, reason="filled")
+    tracker.transition(TradingSessionState.SESSION_COMPLETE, reason="eod_unresolved")
+    assert tracker.is_terminal()
+
+
+def test_session_state_can_end_directly_from_managing_with_unresolved_position():
+    tracker = SessionTradingStateTracker()
+    tracker.transition(TradingSessionState.ANALYSING_MARKET, reason="start")
+    tracker.transition(TradingSessionState.STRATEGY_LOCKED, reason="locked")
+    tracker.transition(TradingSessionState.POSITION_ACTIVE, reason="filled")
+    tracker.transition(TradingSessionState.MANAGING, reason="tick")
+    tracker.transition(TradingSessionState.SESSION_COMPLETE, reason="eod_unresolved")
+    assert tracker.is_terminal()
+
+
 def test_session_state_illegal_transition_fails_closed():
     tracker = SessionTradingStateTracker()
     with pytest.raises(IllegalTradingSessionTransition):
@@ -220,7 +242,7 @@ def test_governor_hard_exit_routes_through_f4_execute():
     executor.execute.return_value = MagicMock(status="EXECUTED")
 
     valuation = MagicMock(total_pnl=-150.0, legs=[])
-    result = asyncio.get_event_loop().run_until_complete(
+    result = asyncio.run(
         governor.evaluate_and_enforce_exit(valuation, "IRON_CONDOR", None, None, None, 100.0)
     )
     assert result.policy_decision.decision == DECISION_MAX_LOSS_EXCEEDED
@@ -234,6 +256,33 @@ def test_governor_hard_exit_routes_through_f4_execute():
     assert any("EXIT_POLICY" in reason for reason in forced_evaluation_arg.recommendation.reasons)
     assert "Session Governor" in forced_evaluation_arg.recommendation.explanation
     assert governor.state == TradingSessionState.EXITED
+    assert kwargs["reference_prices"] == {}
+
+
+def test_governor_hard_exit_passes_real_current_leg_prices_not_entry_price():
+    # Regression guard for the P&L-realization bug found by the dry
+    # rehearsal: the forced MANDATORY_EXIT must carry each leg's CURRENT
+    # market price through to F.4, never leave F.4 to fall back to the
+    # entry price.
+    governor, tbr, registry, lifecycle_runtime, executor = _build_governor()
+    governor.begin_market_analysis()
+    governor.select_and_lock_strategy(TREND_SIDEWAYS, VOL_LOW)
+    governor._position_group_id = "pg-1"
+    governor._state_tracker.transition(TradingSessionState.POSITION_ACTIVE, reason="test-seed")
+
+    fake_recommendation = MagicMock(health_status="OK", action="ACTION_HOLD")
+    fake_evaluation = MagicMock(recommendation=fake_recommendation, lifecycle_state=MagicMock())
+    lifecycle_runtime.evaluate_group = AsyncMock(return_value=fake_evaluation)
+    executor.execute.return_value = MagicMock(status="EXECUTED")
+
+    leg_ce = MagicMock(symbol="NIFTY25000CE", current_price=12.0)
+    leg_pe = MagicMock(symbol="NIFTY24000PE", current_price=9.5)
+    valuation = MagicMock(total_pnl=-150.0, legs=[leg_ce, leg_pe])
+    asyncio.run(
+        governor.evaluate_and_enforce_exit(valuation, "IRON_CONDOR", None, None, None, 100.0)
+    )
+    _, kwargs = executor.execute.call_args
+    assert kwargs["reference_prices"] == {"NIFTY25000CE": 12.0, "NIFTY24000PE": 9.5}
 
 
 def test_governor_no_hard_limit_defers_to_d4_no_forced_execution():
@@ -248,7 +297,7 @@ def test_governor_no_hard_limit_defers_to_d4_no_forced_execution():
     lifecycle_runtime.evaluate_group = AsyncMock(return_value=fake_evaluation)
 
     valuation = MagicMock(total_pnl=5.0, legs=[])
-    result = asyncio.get_event_loop().run_until_complete(
+    result = asyncio.run(
         governor.evaluate_and_enforce_exit(valuation, "IRON_CONDOR", None, None, None, 100.0)
     )
     assert result.policy_decision.decision == DECISION_NONE
@@ -260,7 +309,7 @@ def test_governor_no_hard_limit_defers_to_d4_no_forced_execution():
 def test_governor_evaluate_exit_before_entry_raises():
     governor, tbr, registry, lifecycle_runtime, executor = _build_governor()
     with pytest.raises(RuntimeError):
-        asyncio.get_event_loop().run_until_complete(
+        asyncio.run(
             governor.evaluate_and_enforce_exit(MagicMock(total_pnl=0.0, legs=[]), "IRON_CONDOR", None, None, None, 100.0)
         )
 
@@ -359,6 +408,13 @@ def test_full_trading_day_scenario_regime_to_mandatory_exit():
         # PaperBroker's own ledger confirms the position is genuinely closed.
         open_positions = await broker.get_open_positions()
         assert not any(p["symbol"] == "NIFTY25000CE" and p["qty"] > 0 for p in open_positions)
+
+        # Regression guard for the P&L-realization bug found by the dry
+        # rehearsal: closing a short CE that entered at 120.0 and was bought
+        # back at 60.0 must realize a REAL profit, not silently re-fill at
+        # the entry price and realize ~zero.
+        realized = broker.get_realized_pnl("NIFTY25000CE")
+        assert realized == pytest.approx((120.0 - 60.0) * 75)
 
         # 15:30 -- session report.
         governor.end_session()
