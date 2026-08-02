@@ -17,6 +17,12 @@ from ..core.enums import Direction, OptionType, OrderStatus, Side
 from ..core.models import Candle, OptionContract, OrderRequest, OrderResult
 from .base import Broker
 from .errors import AuthenticationError
+from .simulation.charges import ChargesCalculator, ChargesConfig
+from .simulation.execution_report import ExecutionReport
+from .simulation.fill_simulator import FillSimulator, LatencyConfig, PartialFillConfig, RejectionConfig
+from .simulation.market_snapshot import MarketSnapshot
+from .simulation.order_lifecycle import ExecutionStage, OrderLifecycleTracker
+from .simulation.slippage import SlippageConfig
 
 
 class PaperBroker(Broker):
@@ -39,12 +45,36 @@ class PaperBroker(Broker):
         margin_per_lot: Optional[float] = 1_00_000.0,
         funds_unavailable: bool = False,
         margin_unavailable: bool = False,
+        # Gate F.2 -- Realistic Market Simulation. ALL default to benign/
+        # off, so every existing caller (tests, plain paper mode) sees
+        # BYTE-IDENTICAL behavior to before this gate: SlippageConfig()'s
+        # own default mode is ZERO (no price change), RejectionConfig()'s
+        # own defaults never reject, PartialFillConfig()'s own default
+        # fill_ratio=None always fills in full, LatencyConfig()'s own
+        # default mode is ZERO (0.0 recorded latency). The legacy
+        # `partial_fill_qty` fault-injection knob above still takes
+        # priority over `partial_fill_config` when set, preserving its
+        # exact existing test-proven behavior unchanged.
+        slippage_config: Optional[SlippageConfig] = None,
+        charges_config: Optional[ChargesConfig] = None,
+        latency_config: Optional[LatencyConfig] = None,
+        rejection_config: Optional[RejectionConfig] = None,
+        partial_fill_config: Optional[PartialFillConfig] = None,
+        event_bus: Optional[object] = None,
     ) -> None:
         self._rng = random.Random(seed)
         self._spot = base_spot
         self._orders: dict[str, OrderResult] = {}
         self._positions: dict[str, dict] = {}
         self._premium: dict[str, float] = {}
+        self._volatility: dict[str, float] = {}
+        self._slippage_config = slippage_config or SlippageConfig()
+        self._charges_config = charges_config or ChargesConfig()
+        self._latency_config = latency_config or LatencyConfig()
+        self._rejection_config = rejection_config or RejectionConfig()
+        self._partial_fill_config = partial_fill_config or PartialFillConfig()
+        self._event_bus = event_bus
+        self._execution_reports: dict[str, ExecutionReport] = {}
         # Live Shadow Real-Time Paper Execution sprint (Part 2): a plain
         # position LEDGER only -- entry timestamp, entry price, qty,
         # direction, and REALIZED P&L (once a position closes or is
@@ -68,6 +98,21 @@ class PaperBroker(Broker):
         self._funds_unavailable = funds_unavailable
         self._option_volume = 5_000_000.0  # Overridable via set_option_volume().
         self._margin_unavailable = margin_unavailable
+
+    def set_volatility(self, symbol: str, volatility: float) -> None:
+        """Set a caller-supplied volatility figure for a symbol, used
+        only by SlippageMode.VOLATILITY_ADJUSTED -- never derived or
+        fabricated internally (see FillSimulator/SlippageCalculator)."""
+        self._volatility[symbol] = volatility
+
+    def get_execution_report(self, client_order_id: str) -> Optional[ExecutionReport]:
+        """Gate F.2's richer, per-order execution record -- charges/
+        slippage/latency/lifecycle -- kept SEPARATE from OrderResult
+        (the unchanged, existing execution interface) and separate
+        from get_realized_pnl() (which remains gross, exactly as
+        before this gate, so no existing caller's PnL assertions
+        change)."""
+        return self._execution_reports.get(client_order_id)
 
     def set_capital(self, *, account_equity: Optional[float] = None,
                     available_margin: Optional[float] = None,
@@ -147,6 +192,22 @@ class PaperBroker(Broker):
                 "simulated: access token expired / session invalidated"
             )
 
+    def _publish_lifecycle_event(self, client_order_id: str, previous_stage, new_stage, reason: str) -> None:
+        """Optional -- only fires if an EventBus was supplied at
+        construction (default None, so no caller who never passed one
+        sees any behavior change). Reuses the EXISTING EventBus/
+        EventType, exactly like Gate F.1's own runtime -- no new
+        EventType introduced, the stage label lives in the payload."""
+        if self._event_bus is None:
+            return
+        from ..core.event_bus import Event, EventType
+        self._event_bus.publish_nowait(Event(
+            type=EventType.DECISION_MADE,
+            payload={"stage": f"ORDER_LIFECYCLE_{new_stage.value}", "client_order_id": client_order_id,
+                     "from_stage": previous_stage.value, "to_stage": new_stage.value, "reason": reason},
+            timestamp=now_ist(),
+        ))
+
     # -- Broker contract ------------------------------------------------ #
     async def connect(self) -> None:
         self._check_auth()
@@ -207,36 +268,79 @@ class PaperBroker(Broker):
         if request.client_order_id in self._orders:
             return self._orders[request.client_order_id]
 
-        filled = request.quantity
-        status = OrderStatus.FILLED
-        if self._partial_fill_qty is not None:
-            filled = min(request.quantity, self._partial_fill_qty)
-            status = (OrderStatus.FILLED if filled >= request.quantity
-                      else OrderStatus.PARTIAL)
-
         # Semantic Cleanup Sprint: reference_price (the observed market
         # price at decision time -- simulation-only, never an execution
         # instruction) takes priority for a paper fill. limit_price is
         # preserved as a fallback for real limit-order simulation
         # (unchanged existing behavior for any caller constructing an
         # OrderRequest with only limit_price set, e.g. legacy tests).
-        price = request.reference_price
-        if price is None:
-            price = request.limit_price or self._premium.get(
+        reference_price = request.reference_price
+        if reference_price is None:
+            reference_price = request.limit_price or self._premium.get(
                 request.contract.symbol, 120.0
             )
+        side_str = "BUY" if request.side is Side.BUY else "SELL"
+
+        tracker = OrderLifecycleTracker(request.client_order_id, publish_fn=self._publish_lifecycle_event)
+        tracker.transition(ExecutionStage.SUBMITTED, reason="place_order")
+        tracker.transition(ExecutionStage.ACCEPTED, reason="paper_broker_accept")
+
+        if self._partial_fill_qty is not None:
+            # Legacy fault-injection path -- UNCHANGED behavior, still
+            # takes priority over Gate F.2's own partial_fill_config.
+            filled = min(request.quantity, self._partial_fill_qty)
+            status = (OrderStatus.FILLED if filled >= request.quantity
+                      else OrderStatus.PARTIAL)
+            price = reference_price
+            latency_ms, slippage_delta, rejection_reason = 0.0, 0.0, None
+            stage = ExecutionStage.FILLED if status is OrderStatus.FILLED else ExecutionStage.PARTIALLY_FILLED
+        else:
+            snapshot = MarketSnapshot(
+                symbol=request.contract.symbol, last_price=reference_price,
+                volatility=self._volatility.get(request.contract.symbol),
+            )
+            simulated = FillSimulator.simulate(
+                request.quantity, side_str, snapshot, self._slippage_config, self._latency_config,
+                self._rejection_config, self._partial_fill_config, self._rng,
+            )
+            filled = simulated.fill_quantity
+            price = simulated.fill_price if simulated.fill_price is not None else reference_price
+            status = OrderStatus(simulated.status)
+            latency_ms, slippage_delta, rejection_reason, stage = (
+                simulated.latency_ms, simulated.slippage, simulated.rejection_reason, simulated.stage
+            )
+
+        tracker.transition(stage, reason=f"fill_simulation:{status.value}")
+
+        charges = None
+        if status in (OrderStatus.FILLED, OrderStatus.PARTIAL):
+            turnover = price * filled
+            charges = ChargesCalculator.calculate(turnover, side_str, self._charges_config)
+
         result = OrderResult(
             client_order_id=request.client_order_id,
             status=status,
             broker_order_id=f"PAPER-{len(self._orders) + 1}",
             filled_quantity=filled,
-            average_price=price,
-            message="paper_fill" if status is OrderStatus.FILLED else "paper_partial",
+            average_price=price if status != OrderStatus.REJECTED else None,
+            message=(
+                "paper_fill" if status is OrderStatus.FILLED
+                else "paper_partial" if status is OrderStatus.PARTIAL
+                else rejection_reason or "paper_rejected"
+            ),
         )
         # Record the order BEFORE any simulated fault, so a subsequent lookup
         # (get_order) can find it — this is exactly what proves idempotency.
         self._orders[request.client_order_id] = result
-        self._apply_fill(request, filled, price)
+        self._execution_reports[request.client_order_id] = ExecutionReport(
+            order_id=result.broker_order_id, client_order_id=request.client_order_id, timestamp=now_ist(),
+            requested_qty=request.quantity, filled_qty=filled,
+            average_fill_price=price if status != OrderStatus.REJECTED else None,
+            slippage=slippage_delta, charges=charges, latency_ms=latency_ms, status=status.value,
+            stage=stage, rejection_reason=rejection_reason,
+        )
+        if status in (OrderStatus.FILLED, OrderStatus.PARTIAL):
+            self._apply_fill(request, filled, price)
         self._place_calls += 1
 
         if self._raise_on_place_after_record:
