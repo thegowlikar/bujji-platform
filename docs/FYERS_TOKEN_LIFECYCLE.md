@@ -43,13 +43,80 @@ what was **verified live**, what is **cited from external documentation**
    exactly (`FyersTokenManager._app_id_hash`), and a unit test asserts the
    two constructions match byte-for-byte.
 
+## Access token expiry, measured (2026-08-18)
+
+**The access token expires at 06:00 IST, on a fixed daily cutover.** Not
+~24 hours from issue. Read directly from the token's own JWT `exp` claim
+(base64-decode the middle segment; no API call and no secret exposure
+required):
+
+```
+token issued  : 2026-08-17 ~09:00 IST
+token expires : 2026-08-18T06:00:00+05:30      <- exp claim
+```
+
+A token issued at 09:00 therefore lived ~21 hours, and one issued at 20:38
+the same evening carried **the identical 06:00 expiry** — which is what
+rules out a rolling window.
+
+### What this means operationally
+
+**Refreshing the night before buys nothing.** The window is always:
+
+> after 06:00 IST, and before the first timer fires (09:10).
+
+The timers, for reference:
+
+| Unit | Fires |
+|---|---|
+| bujji-shadow-decision-campaign | 09:10 |
+| bujji-daily-intelligence | 09:16 |
+| bujji-options-os-trading | 09:22:30 |
+
+A stale token is not silently tolerated: every unit fails closed with a
+clear `AuthenticationError` rather than trading or capturing blind. The
+cost of a missed refresh is a lost session, never bad data.
+
+### THE REFRESH MUST LAND IN `/opt/bujji/.env`
+
+All three installed units read that one file, and nothing else:
+
+```
+bujji-daily-intelligence        EnvironmentFile=/opt/bujji/.env
+bujji-options-os-trading        EnvironmentFile=/opt/bujji/.env
+bujji-shadow-decision-campaign  ExecStart ... --fyers-env-file /opt/bujji/.env
+```
+
+**`/tmp/local_fyers.env` DOES NOT WORK, and cannot be made to.** It is the
+default value of `run_phase20_13_live_entrypoint.py --fyers-env-file`, so
+it is easy to refresh into by habit — the installed unit overrides it. Two
+independent reasons it can never reach a unit:
+
+1. All three units set `PrivateTmp=true`, so each gets its own empty
+   `/tmp`. A token written to the host's `/tmp` is invisible to them by
+   construction, not by accident.
+2. `/tmp` does not survive a reboot.
+
+This has already happened once: on 2026-08-17 a refresh landed in
+`/tmp/local_fyers.env` (modified 20:38) while `/opt/bujji/.env` still held
+the morning's token (modified 09:00:48). The two files held **different**
+tokens. Nothing consumed the newer one.
+
+### Verifying a refresh actually took
+
+```bash
+ssh root@139.59.76.137 'stat -c "modified %y" /opt/bujji/.env'
+```
+
+If that timestamp is not from this morning, the units are still on the
+dead token. To confirm the new token outlives the first fire, decode its
+`exp` and check it is later than 09:10 IST today.
+
 ## What is cited, not independently verified
 
-- **Access token validity: ~24 hours (until end of trading day / next
-  morning)**. Consistent with direct observation earlier in this project (a
-  live token issued at one point had expired hours later, same day), but the
-  exact boundary (fixed 24h vs. a specific daily cutover time) was not
-  precisely pinned down.
+- ~~**Access token validity: ~24 hours**, exact boundary not pinned down.~~
+  **RESOLVED 2026-08-18 — it is a FIXED 06:00 IST DAILY CUTOVER, not a
+  rolling 24 hours.** See "Access token expiry, measured" below.
 - **Refresh token validity: ~15 days.** Sourced from FYERS community
   documentation and third-party developer writeups (see Sources below) —
   this project did not (and could not, in one session) wait 15 days to
@@ -170,3 +237,38 @@ before this subsystem, just now only once every ~15 days instead of daily.
   `https://myapi.fyers.in/dashboard/`) — not fetchable directly in this
   session (returned 404 for the specific sub-path tried); the SDK source and
   the live endpoint test are the primary evidence this document relies on.
+
+## Pre-open pre-flight (added 2026-08-18)
+
+`scripts/preflight_fyers_token.py`, fired by `bujji-token-preflight.timer` at
+**08:45 IST Mon..Fri** — 25 minutes before the earliest consumer.
+
+It answers one question: does the token in `/opt/bujji/.env` outlive every
+`bujji-*.timer` fire still ahead today? It decodes the JWT `exp` locally
+(reusing `promote_fyers_token.access_token_expiry`) and makes no broker call,
+so it runs correctly even when the token is already dead.
+
+Fire times are **read from systemd**, not hardcoded. `promote_fyers_token.py`
+carries its own `FIRST_FIRE`/`LAST_FIRE` constants; those drift the moment a
+timer moves. This check asks each timer for its actual `NextElapseUSecRealtime`,
+so retiming a unit or installing a new one is picked up with no edit here. Its
+own timer is excluded — it is not a token consumer.
+
+    exit 0   every upcoming fire is covered (or none are due)
+    exit 1   at least one fire runs with a dead token, or the token is
+             undecodable -- the unit stays `failed`, which IS the alarm
+
+Verdict is also written to `data/token_preflight_verdict.json`:
+
+    cat /opt/bujji/app/data/token_preflight_verdict.json | head -5
+
+**Why this exists.** The token dies at the fixed 06:00 IST cutover; consumers
+fire 09:10–09:22:30. That leaves a mandatory human refresh in a ~3h10m window
+every trading morning, and nothing verified it had happened. On 2026-08-18 the
+09:16 capture session failed at 09:16:00 and was not noticed until 18:00 IST —
+a full session later. Intraday option chain data cannot be backfilled, so a
+missed morning is a permanent loss of that day.
+
+**What it cannot do.** Refresh the token. The FYERS refresh API is SEBI-disabled
+(`code=-16`, live-verified 2026-07-19). A human must re-authenticate, then run
+`scripts/promote_fyers_token.py`.
