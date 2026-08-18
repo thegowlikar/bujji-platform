@@ -1,0 +1,18 @@
+{
+  "timestamp": "2026-08-13T09:19:05.317669+05:30",
+  "broker": "fyers",
+  "access_method": "direct_sdk_fyers_broker_py",
+  "instrument": "INDIA_VIX",
+  "symbol_requested": "NSE:INDIAVIX-INDEX",
+  "symbol_returned": "NSE:INDIAVIX-INDEX",
+  "quote_status": "OK",
+  "historical_status": "OK",
+  "volume_available": null,
+  "oi_available": null,
+  "timestamp_valid": true,
+  "validation_result": "CERTIFIED_AVAILABLE",
+  "limitations": [
+    "volume/OI are NOT_APPLICABLE for an index (17F.0.4 Instrument Capability Registry) -- not evaluated, not counted as missing.",
+    "quote OK, historical OK, symbol match confirmed (where observable), integrity checks passed."
+  ]
+}

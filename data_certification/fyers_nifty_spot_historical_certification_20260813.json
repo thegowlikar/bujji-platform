@@ -1,0 +1,23 @@
+{
+  "timestamp": "2026-08-13T16:52:31.912744+05:30",
+  "broker": "fyers",
+  "access_method": "direct_sdk_fyers_historical_rest",
+  "instrument": "NIFTY_SPOT",
+  "symbol_requested": "NSE:NIFTY50-INDEX",
+  "symbol_returned": "NSE:NIFTY50-INDEX",
+  "resolution_tested": "D",
+  "range_tested": [
+    "2026-07-14",
+    "2026-08-13"
+  ],
+  "historical_status": "OK",
+  "earliest_date_confirmed": "1998-05-04",
+  "cont_flag_tested": true,
+  "volume_available": true,
+  "oi_available": false,
+  "integrity_checks_passed": true,
+  "validation_result": "CERTIFIED_AVAILABLE",
+  "limitations": [
+    "none observed"
+  ]
+}

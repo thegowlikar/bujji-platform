@@ -1,0 +1,18 @@
+{
+  "timestamp": "2026-08-12T09:27:14.807499+00:00",
+  "broker": "fyers",
+  "access_method": "direct_sdk_fyers_broker_py",
+  "instrument": "NIFTY_FUTURES",
+  "symbol_requested": "NSE:NIFTY26AUGFUT",
+  "symbol_returned": "NSE:NIFTY26AUGFUT",
+  "quote_status": "OK",
+  "historical_status": "OK",
+  "volume_available": true,
+  "oi_available": true,
+  "timestamp_valid": true,
+  "validation_result": "CERTIFIED_AVAILABLE",
+  "limitations": [
+    "oi=12645685 obtained via depth() (source=depth_endpoint); not available via the quotes/ltp or optionchain actions.",
+    "quote OK, historical OK, symbol match confirmed, integrity checks passed, required fields present."
+  ]
+}

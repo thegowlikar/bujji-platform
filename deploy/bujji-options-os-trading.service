@@ -1,0 +1,79 @@
+[Unit]
+# =========================================================================
+# BUJJI OPTIONS OS — PAPER TRADING SESSION
+#
+# The first unit in this project that can place an order. Everything that
+# runs on a timer today (bujji-daily-intelligence, bujji-shadow-decision-
+# campaign) is observation-only and forbidden from trading; this one owns
+# the canonical trading spine:
+#
+#   market data -> intelligence -> market_thesis -> regime -> governor
+#   -> risk pipeline -> construction -> PaperBroker -> position management
+#   -> exit -> outcome attribution -> OutcomeMemoryRecord
+#
+# PAPER ONLY. Orders go to bujji.broker.paper.PaperBroker. The live FYERS
+# connection used for market data is wrapped in
+# bujji.broker.guard.disable_live_execution() BEFORE it is handed to
+# anything, so place/modify/cancel are structurally unreachable on it. No
+# real capital can be committed by this unit. Promoting it to live capital
+# is a deliberate, separately reviewed change -- never a config edit here.
+#
+# Deliberately a SEPARATE unit from bujji-daily-intelligence.service and
+# bujji-shadow-decision-campaign.service, with its OWN lock path
+# (data/options_os_trading.lock), per docs/SYSTEM_OWNERSHIP.md's
+# disclosed-collision naming discipline. Two concurrent trading sessions
+# would each believe they hold the one-strategy-per-day lock and could
+# double the book.
+#
+# Type=oneshot: the runner performs one bounded session (entry window ->
+# management loop -> EOD close -> archive) and exits. NOT a restarting
+# daemon -- the same discipline Phase 19.14.1's commissioning audit
+# established after finding a persistent-service misconfiguration.
+# Never enable this unit directly; enable the .timer.
+# =========================================================================
+Description=Bujji Options OS — paper trading session (PaperBroker only, no real capital)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+
+# --- EDIT THESE FOR YOUR DEPLOYMENT -----------------------------------
+User=bujji
+Group=bujji
+WorkingDirectory=/opt/bujji/app
+ExecStart=/opt/bujji/.venv/bin/python bujji_options_os_runner.py --date-today --config /opt/bujji/app/config/options_os_paper_trading.yaml --lock-path /opt/bujji/app/data/options_os_trading.lock
+# Real broker credentials -- market DATA only, see docs/FYERS_TOKEN_LIFECYCLE.md.
+# FYERS access-token renewal is NOT automatable (SEBI-driven restriction):
+# a human must refresh FYERS_ACCESS_TOKEN in /opt/bujji/.env before each
+# trading day's fire. With a stale token the runner refuses to start
+# rather than trading on a regime it cannot actually see.
+EnvironmentFile=/opt/bujji/.env
+# ------------------------------------------------------------------------
+
+# No Restart=. A oneshot runs once and stops. A mid-session crash is NOT
+# auto-retried the same day: the ProcessLock releases on crash, and
+# re-entering a session whose position state is already open risks a
+# duplicate entry. The next day's timer is the retry.
+
+# Give the session time to release its lock and finalise the outcome
+# record on SIGTERM before systemd escalates.
+TimeoutStopSec=60
+KillSignal=SIGTERM
+
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=bujji-options-os-trading
+
+# --- Security hardening ------------------------------------------------
+# Holds a live broker READ credential only (quotes/chain/candles) --
+# structurally never an order-placing path, per the broker.guard boundary.
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+ReadWritePaths=/opt/bujji/app/logs /opt/bujji/app/data /opt/bujji/app/shadow_sessions /opt/bujji/.env
+# ------------------------------------------------------------------------
+
+# Deliberately NO [Install] section -- a timer-triggered oneshot is
+# enabled via the TIMER's [Install], not the service's.

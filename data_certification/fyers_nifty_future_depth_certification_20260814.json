@@ -1,0 +1,18 @@
+{
+  "timestamp": "2026-08-14T09:15:06.014825+05:30",
+  "broker": "fyers",
+  "access_method": "direct_sdk_fyers_broker_py_depth",
+  "instrument": "NIFTY_FUTURES",
+  "symbol_requested": "NSE:NIFTY26AUGFUT",
+  "symbol_returned": "NSE:NIFTY26AUGFUT",
+  "expiry": "2026-08-25",
+  "poll_status": "OK",
+  "structural_integrity_passed": true,
+  "depth_levels_confirmed": 5,
+  "oi_available": true,
+  "bid_ask_available": true,
+  "validation_result": "CERTIFIED_AVAILABLE",
+  "limitations": [
+    "none observed"
+  ]
+}

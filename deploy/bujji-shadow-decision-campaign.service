@@ -1,0 +1,109 @@
+[Unit]
+# =========================================================================
+# BUJJI SHADOW DECISION CAMPAIGN — Phase 20.11/20.12/20.13/20.14
+#
+# Owns ONE thing: Cycle 1's own real, evidence-grounded shadow DECISION
+# campaign (bujji.live_shadow_runner, fronted by
+# scripts/run_phase20_13_live_entrypoint.py, itself wired as
+# bujji.shadow_runtime.daily_session.DailySessionRuntime's injected
+# intelligence_fn -- the SAME reused lifecycle/heartbeat engine
+# bujji-daily-intelligence.service already uses, never duplicated). This
+# is NOT a trading system -- it never places an order, never modifies a
+# position, never executes a strategy; every broker call it makes is
+# read-only and passes through bujji.broker.guard.disable_live_execution().
+# See docs/SYSTEM_OWNERSHIP.md's fourth ownership entry (Cycle-1 Shadow
+# Decision Intelligence) and docs/PHASE_20_14_SHADOW_DECISION_CAMPAIGN_OPERATIONALIZATION_REPORT.md
+# for the full boundary.
+#
+# Deliberately a SEPARATE unit from bujji-daily-intelligence.service
+# (Phase 19.x capture + intelligence composition ONLY -- never a
+# decision) and from the reserved bujji-options-os.service (real
+# Trading Brain / Risk Governor / execution, not yet created) -- this
+# unit owns Cycle 1's own decision campaign only, per
+# docs/SYSTEM_OWNERSHIP.md's own explicit disclosed-collision naming
+# discipline.
+#
+# Type=oneshot, run ONCE PER DAY by bujji-shadow-decision-campaign.timer
+# -- the SAME "bounded daily session, not a persistent daemon" discipline
+# Phase 19.14.1's own commissioning audit established for
+# bujji-daily-intelligence.service, applied here from the start rather
+# than discovered after the fact.
+# Never start/enable this unit directly for recurring operation; enable
+# the .timer instead.
+# =========================================================================
+Description=Bujji Shadow Decision Campaign — evidence-grounded decision observation (no trading)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+
+# --- EDIT THESE FOR YOUR DEPLOYMENT -----------------------------------
+User=bujji
+Group=bujji
+WorkingDirectory=/opt/bujji/app
+ExecStart=/opt/bujji/.venv/bin/python scripts/run_phase20_13_live_entrypoint.py --date-today --heartbeat-path /opt/bujji/app/data/shadow_decision_campaign_heartbeat.json --lock-path /opt/bujji/app/data/shadow_decision_campaign.lock --fyers-env-file /opt/bujji/.env
+# Real broker credentials -- see docs/FYERS_TOKEN_LIFECYCLE.md. FYERS
+# access-token renewal is NOT automatable (SEBI-driven restriction,
+# live-verified 2026-07-19) -- a human must refresh FYERS_ACCESS_TOKEN
+# in /opt/bujji/.env before each trading day's timer fire.
+#
+# DELIBERATELY /opt/bujji/.env, NOT /tmp/local_fyers.env (the script's
+# own default, used for manual/interactive smoke-testing as root
+# throughout this phase's own development): this file is already
+# bujji:bujji-owned, mode 600, and already the credential source
+# bujji-daily-intelligence.service itself uses -- reusing it here
+# avoids inventing a second credential file with a DIFFERENT ownership
+# requirement (User=bujji cannot read a root:root file) that would need
+# re-fixing after every future token refresh. The operator's refresh
+# step for THIS service is: keep /opt/bujji/.env current, the same
+# file/habit already required for the daily-intelligence timer.
+#
+# This unit never places, modifies, or cancels an order
+# (bujji.broker.guard.disable_live_execution wraps the broker before
+# this script ever touches it) and never runs a strategy -- decision
+# observation only.
+# ------------------------------------------------------------------------
+
+# No Restart= directive: a oneshot's job is to run once and stop. A
+# genuine mid-run crash is NOT auto-retried today (same trading day) --
+# the ProcessLock releases on crash and the NEXT day's timer fire is the
+# retry, not this unit restarting itself within the same session --
+# same deliberate, disclosed choice bujji-daily-intelligence.service
+# already made, for the same reason (avoid colliding with a human's
+# FYERS re-authentication in progress).
+
+# Give the process time to run its graceful shutdown (release the
+# ProcessLock, finalize the current session's heartbeat) on SIGTERM
+# before systemd escalates to SIGKILL.
+TimeoutStopSec=30
+KillSignal=SIGTERM
+
+# Hygiene: keep failures visible in `journalctl -u bujji-shadow-decision-campaign`, not lost.
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=bujji-shadow-decision-campaign
+
+# --- Security hardening ------------------------------------------------
+# This service holds a live broker READ credential (quotes/historical data
+# only -- structurally never an order-placing credential path, per the
+# broker.guard boundary). Lock down what it can touch: only its own lock
+# file, heartbeat file, campaign artifacts, and the real
+# HistoricalObservationStore/logs under WorkingDirectory.
+#
+# Matches bujji-daily-intelligence.service's own hardening exactly --
+# PrivateTmp=true is safe here (unlike an earlier draft of this file)
+# now that ExecStart reads credentials from /opt/bujji/.env, never
+# /tmp, so an isolated /tmp namespace never hides anything this service
+# actually needs.
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+ReadWritePaths=/opt/bujji/app/logs /opt/bujji/app/data /opt/bujji/.env
+# ------------------------------------------------------------------------
+
+# Deliberately NO [Install] section here -- a oneshot triggered by a
+# timer is enabled via the TIMER's own [Install] section, not this
+# service's. Do not `systemctl enable bujji-shadow-decision-campaign.service`
+# directly; enable bujji-shadow-decision-campaign.timer instead.

@@ -1,0 +1,66 @@
+# Bujji Options OS -- Full Intelligence Shadow Validation Campaign
+# (Phase 12). Read by scripts/run_shadow_full_intelligence.py.
+#
+# HONEST DISCLOSURE about what these flags actually control, since
+# fabricating independent per-domain toggles that don't exist in the
+# runtime would violate this project's own no-hidden-behavior discipline:
+#
+# Every layer from market_perception through trade_intent (everything
+# EXCEPT the three Phase 12 additions at the bottom) is already computed
+# together, unconditionally, behind the SAME single existing flag pair
+# on ShadowSessionRunner: market_perception_enabled + intelligence_cycle_
+# enabled. There is no code path in this project that can run PSI
+# without MSSI, or consensus without opportunity, etc. -- IntelligenceCycleRecorder
+# .record_cycle() always computes the full chain in one pass. Listing
+# them individually here is a MANIFEST of what "full_intelligence" means
+# for this campaign, not a set of independent switches. Setting any of
+# them to false in this file has NO effect on the runtime; the launcher
+# only checks the two REAL flags below.
+
+full_intelligence: true   # the one real switch: true = both real flags on.
+
+# --- Manifest: what "full_intelligence: true" actually turns on ---
+layers:
+  market_perception: true
+  market_memory: true              # ObservationMemory / episode+event accumulation (Phase 10 fix)
+  price_structure: true            # PSI
+  market_structure: true           # MSSI
+  participant_positioning: true    # MPPI
+  volatility_structure: true       # VSB
+  liquidity_brain: true            # Phase 9 Liquidity Intelligence Bridge
+  market_direction: true           # MDI
+  market_state: true
+  consensus: true
+  opportunity: true
+  trade_thesis: true
+  strategy_suitability: true
+  strategy_selection: true
+  trade_intent: true
+  regime_memory: true               # Phase 11 -- persisted every cycle as of today
+  market_narrative: true            # Phase 11 -- persisted every cycle as of today
+
+# --- Phase 12 additions: these ARE real, independent toggles, applied
+# as an offline/batch pass over the session's own intelligence_cycle.jsonl
+# after (or during, via a periodic tick) the live run -- never inside the
+# live quote loop itself, per this project's standing discipline of
+# keeping ShadowSessionRunner's hot path minimal and already-tested. ---
+post_processing:
+  intelligence_completeness: true   # bujji.intelligence_completeness.engine.evaluate_cycle_extended
+  intelligence_report: true         # bujji.intelligence_report.engine
+  shadow_validation_recorder: true  # bujji.shadow_validation -- Task 2/3/4/5/6
+  consistency_checker: true         # bujji.intelligence_consistency_checker -- Task 7
+
+session:
+  underlying: NIFTY
+  poll_interval_seconds: 30.0
+  market_close: "15:20:00"
+  option_chain_strike_range: 500
+  option_chain_strike_step: 100
+
+# --- Explicitly, permanently OFF. No flag in this file, or anywhere in
+# this codebase, can turn these on. ---
+never_enabled:
+  execution_engine: false
+  order_placement: false
+  risk_governor: false
+  capital_allocation: false

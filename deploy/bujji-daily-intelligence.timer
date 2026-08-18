@@ -1,0 +1,70 @@
+[Unit]
+# =========================================================================
+# BUJJI DAILY INTELLIGENCE SESSION — TIMER, Phase 19.14.1
+#
+# Fires bujji-daily-intelligence.service (Type=oneshot) once per intended
+# NSE trading day. This is the fix for Phase 19.14.0's own audit finding:
+# the service itself is a bounded daily job that exits -- it must never be
+# a Restart=always daemon. This timer is the ONLY scheduling mechanism
+# for that service; nothing else (no cron, no in-process loop, no second
+# scheduler) triggers it. See
+# docs/PHASE_19_14_1_AUTONOMOUS_RUNTIME_COMMISSIONING_HARDENING.md.
+# =========================================================================
+Description=Daily trigger for Bujji Daily Intelligence Session (weekdays only)
+
+[Timer]
+# Weekends are excluded structurally by the calendar expression itself
+# (Mon..Fri) -- never a code-level weekday check duplicating what
+# scripts/capture_market_reality_session.py's own within_market_hours()
+# already does as a second, independent safety net.
+#
+# NSE HOLIDAYS ARE NOT EXCLUDED HERE -- a disclosed, known limitation.
+# No NSE holiday calendar data source exists anywhere in this codebase
+# (confirmed absent in Phase 19.14.0's own audit), and building one is
+# out of this phase's narrow scope (no new data source, no new engine).
+# On an NSE holiday the timer still fires; capture's own
+# within_market_hours() check will very likely observe a market that
+# never opens as expected and the session will report an honest,
+# visible failure (or a completeness gate refusal) rather than silently
+# fabricating a normal trading day -- fails safe, not fails silent, even
+# though the trigger itself does not know it is a holiday.
+# FIRE TIME (corrected 2026-08-17). Was 09:00, which is BEFORE the 09:15
+# NSE open, so both capture subprocesses aborted on their own
+# within_market_hours() gate every single trading day and the session
+# recorded zero rows. Observed live on 2026-08-17:
+#
+#   capture_market_reality_session.py exited 1: Outside market hours
+#     (2026-08-17T09:00:07 IST) -- aborting without opening a connection
+#     or writing anything.
+#   ...completeness_status: EMPTY, missing: ['spot', 'options', 'vix']
+#
+# Both gates are `MARKET_OPEN <= now.time() <= MARKET_CLOSE` with
+# MARKET_OPEN = 09:15 (scripts/capture_market_reality_session.py and
+# scripts/capture_options_reality_session.py). 09:16 clears that boundary
+# with a minute of margin rather than racing it: AccuracySec below lets
+# systemd fire up to a minute LATE (never early), and the VPS clock is
+# not guaranteed to agree with the exchange's to the second.
+#
+# Not moved later than that on purpose -- the opening minutes are the
+# most volatile of the session and are unrecoverable if never captured.
+OnCalendar=Mon..Fri 09:16 Asia/Kolkata
+
+# A missed fire (VPS down at 09:00 IST) still runs once the VPS is back
+# up -- this is exactly "survive VPS reboot appropriately": no trading
+# day is silently skipped just because the machine was rebooting at
+# the scheduled time.
+Persistent=true
+
+# Systemd's own single-instance-per-unit-name semantics mean a second
+# OnCalendar fire while bujji-daily-intelligence.service is still
+# running from the previous fire is deferred, not run in parallel --
+# this is the FIRST of two independent overlap-prevention layers. The
+# SECOND, belt-and-braces layer is application-level:
+# bujji.core.process_lock.ProcessLock at data/daily_intelligence.lock
+# (Phase 19.12, unchanged), which also protects against a manually
+# invoked run_daily_intelligence_session.py overlapping a timer-fired
+# one, a case systemd's own semantics do not cover.
+AccuracySec=1min
+
+[Install]
+WantedBy=timers.target

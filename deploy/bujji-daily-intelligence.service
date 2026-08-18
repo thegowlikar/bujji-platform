@@ -1,0 +1,92 @@
+[Unit]
+# =========================================================================
+# BUJJI DAILY INTELLIGENCE SESSION — Phase 19.11/19.12/19.13/19.14.1
+#
+# Owns ONE thing: the daily observation-capture + intelligence-composition
+# cycle (bujji.shadow_runtime.daily_session.DailySessionRuntime, fronted by
+# run_daily_intelligence_session.py). It is NOT a trading system -- it
+# never places an order, never modifies a position, never executes a
+# strategy. See docs/SYSTEM_OWNERSHIP.md and
+# docs/PHASE_19_14_1_AUTONOMOUS_RUNTIME_COMMISSIONING_HARDENING.md for the
+# full boundary.
+#
+# Deliberately a SEPARATE unit from bujji-orb-vwap-legacy.service (deprecated)
+# and from any future bujji-options-os.service (reserved, per
+# docs/SYSTEM_OWNERSHIP.md, for the trading-decision system) -- this unit
+# owns capture + intelligence only, never trading decisions.
+#
+# PHASE 19.14.1 CHANGE: this is now Type=oneshot, run ONCE PER DAY by
+# bujji-daily-intelligence.timer -- NOT a long-running always-restarting
+# daemon. `DailySessionRuntime.run()` completes one bounded daily session
+# and exits; Phase 19.14.0's own commissioning audit found that this
+# unit's earlier service-type + restart-policy combination (a persistent
+# service kind, auto-relaunched every few seconds on any exit) would have
+# relaunched this process continuously, all day and night, instead of
+# running once -- this file fixes that finding.
+# Never start/enable this unit directly for recurring operation; enable
+# the .timer instead (see docs/PHASE_19_14_1_...md for the exact commands).
+# =========================================================================
+Description=Bujji Daily Intelligence Session — market observation + intelligence composition (no trading)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+
+# --- EDIT THESE FOR YOUR DEPLOYMENT -----------------------------------
+User=bujji
+Group=bujji
+WorkingDirectory=/opt/bujji/app
+ExecStart=/opt/bujji/.venv/bin/python run_daily_intelligence_session.py --date-today --heartbeat-path /opt/bujji/app/data/daily_session_heartbeat.json --lock-path /opt/bujji/app/data/daily_intelligence.lock --cycle-artifact-store-path /opt/bujji/app/data/shadow_intelligence_cycle_artifacts.jsonl --daily-artifact-store-path /opt/bujji/app/data/daily_intelligence_artifacts.jsonl
+# Real broker credentials -- see docs/FYERS_TOKEN_LIFECYCLE.md. FYERS
+# access-token renewal is NOT automatable (SEBI-driven restriction,
+# live-verified 2026-07-19) -- a human must refresh FYERS_ACCESS_TOKEN
+# in this EnvironmentFile before each trading day's timer fire. See
+# docs/PHASE_19_14_1_AUTONOMOUS_RUNTIME_COMMISSIONING_HARDENING.md's own
+# "Operational Contract" section. This unit never places, modifies, or
+# cancels an order (bujji.broker.guard's disable_live_execution wraps the
+# broker before this script ever touches it) and never runs a strategy --
+# observation and intelligence composition only.
+EnvironmentFile=/opt/bujji/.env
+# ------------------------------------------------------------------------
+
+# No Restart= directive: a oneshot's job is to run once and stop. A
+# genuine mid-run crash is NOT auto-retried today (same trading day) --
+# `run_daily_intelligence_session.py`'s own capture/intelligence error
+# handling already reports the failure honestly via the heartbeat; the
+# NEXT day's timer fire is the retry, not this unit restarting itself
+# within the same session. This is a deliberate, disclosed choice: an
+# unconditional same-day auto-retry risks colliding with a human's FYERS
+# re-authentication in progress. See the phase doc for the full rationale.
+
+# Give the process time to run its graceful shutdown (release the lock,
+# finalize the current session's heartbeat) on SIGTERM before systemd
+# escalates to SIGKILL. See run_daily_intelligence_session.py's own
+# SIGTERM/SIGINT handling (Phase 19.12).
+TimeoutStopSec=30
+KillSignal=SIGTERM
+
+# Hygiene: keep failures visible in `journalctl -u bujji-daily-intelligence`, not lost.
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=bujji-daily-intelligence
+
+# --- Security hardening ------------------------------------------------
+# This service holds a live broker READ credential (quotes/historical data
+# only -- structurally never an order-placing credential path, per the
+# broker.guard boundary every Phase 19.x component already inherits). Lock
+# down what it can touch: only its own lock file, heartbeat file, and the
+# real HistoricalObservationStore/logs under WorkingDirectory.
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+ReadWritePaths=/opt/bujji/app/logs /opt/bujji/app/data /opt/bujji/.env
+# ------------------------------------------------------------------------
+
+# Deliberately NO [Install] section at all here (Phase 19.14.1 change,
+# removing the always-on registration this unit previously carried) --
+# a oneshot triggered by a timer is enabled via the TIMER's own
+# [Install] section, not this service's. Do not `systemctl
+# enable bujji-daily-intelligence.service` directly; enable
+# bujji-daily-intelligence.timer instead.

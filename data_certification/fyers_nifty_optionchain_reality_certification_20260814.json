@@ -1,0 +1,32 @@
+{
+  "timestamp": "2026-08-14T09:15:11.978719+05:30",
+  "broker": "fyers",
+  "access_method": "direct_sdk_fyers_optionchain_reality",
+  "instrument": "NIFTY_OPTION_CE",
+  "symbol_requested": "NSE:NIFTY50-INDEX",
+  "strike_count_tested": 50,
+  "default_expiry_status": "OK",
+  "default_expiry_integrity": {
+    "ok": true,
+    "issues": [],
+    "ce_count": 101,
+    "pe_count": 101,
+    "total": 202
+  },
+  "second_expiry_date_tested": "25-08-2026",
+  "second_expiry_status": "OK",
+  "second_expiry_integrity": {
+    "ok": true,
+    "issues": [],
+    "ce_count": 21,
+    "pe_count": 21,
+    "total": 42
+  },
+  "expiries_available": 18,
+  "greeks_requested": false,
+  "duplicate_conflict_behavior": "Not separately live-probed here beyond re-fetch consistency (see below) -- duplicate/conflict semantics are inherited UNCHANGED from HistoricalObservationStore's own already-proven three-outcome discipline (identical fact -> idempotent no-op; genuinely different value under the same natural key -> ConflictingHistoricalObservationError, never silently overwritten) -- the same mechanism already validated live for spot/futures/VIX across 17H.9's real backfill (226 real conflicts correctly caught).",
+  "validation_result": "CERTIFIED_AVAILABLE",
+  "limitations": [
+    "none observed"
+  ]
+}

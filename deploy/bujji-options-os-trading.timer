@@ -1,0 +1,72 @@
+[Unit]
+# =========================================================================
+# BUJJI OPTIONS OS — PAPER TRADING TIMER
+#
+# Fires the trading session once per intended NSE trading day, AFTER the
+# observation systems have run. This is the ONLY scheduling mechanism for
+# its service; nothing else triggers it.
+# =========================================================================
+Description=Daily trigger for Bujji Options OS paper trading session (weekdays only)
+
+[Timer]
+# 09:20 IST -- deliberately after market open (09:15) so the entry window
+# reads a formed book rather than the opening auction, and after the two
+# observation timers (09:00 daily-intelligence, 09:10 shadow-decision) so
+# the three systems' startup logs stay untangled and the observation
+# capture has begun writing the day's rows.
+#
+# Weekends are excluded structurally by Mon..Fri -- a first, coarse net.
+# The SECOND, authoritative check is the runner's own
+# MarketCalendar.is_trading_day() gate, which also knows listed NSE
+# holidays. On a holiday the timer still fires and the runner exits 0
+# immediately: a clean, expected skip, never a fabricated session.
+# FIRE TIME: half a cycle off the observation units, on purpose.
+#
+# 09:20 was already substantially correct -- after the 09:15 open, with a
+# few minutes of post-open structure before the entry window. The 2.5
+# minute nudge is PHASE, not timing: this runner and the shadow campaign
+# both poll on a 5-minute cadence, and the campaign's cycles land on
+# :15/:20/:25... so a 09:20 start put this session's bursts on the
+# campaign's beat, on every cycle, for the whole session.
+#
+# Two 5-minute loops drift under a second per cycle, so an alignment at
+# start persists for hours rather than averaging out. Each collision puts
+# two independently paced processes on one FYERS account: the pacer in
+# bujji/broker/fyers.py is MODULE level, i.e. per interpreter, with no IPC
+# and no broker-side coordination, so two processes each pace to ~8.3
+# calls/s and the account sees ~16.7 against a documented 10/s ceiling.
+# Schedule separation is the only cross-process rate control that exists.
+#
+# Half a cycle (150s) costs 2.5 minutes of pre-entry observation, changes
+# nothing about the entry logic, and guarantees the two loops never share
+# a burst window.
+OnCalendar=Mon..Fri 09:22:30 Asia/Kolkata
+
+# A missed fire (VPS rebooting at 09:20) still runs once the machine is
+# back -- but see the runner's own entry-window logic: arriving late in
+# the session simply yields fewer management cycles, never a backdated
+# entry.
+# NO CATCH-UP. This is the one unit that places orders, and it has NO
+# market-hours gate of any kind -- it connects the broker and pulls a live
+# chain in PRE_MARKET_CHECK the instant it starts, so this timer is its
+# only protection against acting on a closed-market book. With
+# Persistent=true a reboot at any hour would start a full entry and
+# management session immediately, and --date-today would stamp it with the
+# BOOT day rather than the day that was missed. A missed trading day is
+# strictly better than one entered at 21:00 on stale prices.
+Persistent=false
+
+# Overlap prevention, three independent layers:
+#   1. systemd defers a second fire while the service still runs.
+#   2. bujji.core.process_lock.ProcessLock at data/options_os_trading.lock
+#      -- its OWN path, never daily_intelligence.lock or
+#      shadow_decision_campaign.lock -- also catches a manual invocation
+#      racing a timer-fired one.
+#   3. TradingSessionGovernor's own one-strategy-per-day lock inside the
+#      session itself.
+# 1s, not 1min: a minute-wide accuracy window would let the fire slide
+# back into alignment with the campaign and undo the offset above.
+AccuracySec=1s
+
+[Install]
+WantedBy=timers.target

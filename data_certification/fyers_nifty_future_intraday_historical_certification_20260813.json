@@ -1,0 +1,25 @@
+{
+  "timestamp": "2026-08-13T21:52:23.400115+05:30",
+  "broker": "fyers",
+  "access_method": "direct_sdk_fyers_historical_intraday_rest",
+  "instrument": "NIFTY_FUTURES",
+  "symbol_requested": "NSE:NIFTY26AUGFUT",
+  "symbol_returned": "NSE:NIFTY26AUGFUT",
+  "continuity_method": "fyers_cont_flag_1",
+  "resolution_tested": "5",
+  "range_tested": [
+    "2026-07-13",
+    "2026-08-12"
+  ],
+  "historical_status": "OK",
+  "earliest_date_confirmed": "2018-02-01",
+  "cont_flag_tested": true,
+  "volume_available": true,
+  "oi_available": false,
+  "integrity_checks_passed": true,
+  "validation_result": "CERTIFIED_AVAILABLE",
+  "limitations": [
+    "Continuous futures intraday depth (~2018-01-02) is bounded by the continuous series' own existence, not an independent intraday-specific cutoff -- unlike spot/VIX, where intraday is dramatically shallower than daily.",
+    "OI is never available from FYERS historical candles, at any resolution."
+  ]
+}

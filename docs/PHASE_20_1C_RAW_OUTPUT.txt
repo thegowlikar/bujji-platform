@@ -1,0 +1,419 @@
+Fetching real NIFTY_FUT_CONTINUOUS FIVE_MINUTE rows 2018-02-01T00:00:00+05:30 .. 2026-08-13T23:59:59+05:30 ...
+  -> 157889 real rows
+Classifying rolling windows across 2113 real trading days ...
+  ... 250/2113 days, 59675 readings so far
+  ... 500/2113 days, 119296 readings so far
+  ... 750/2113 days, 179076 readings so far
+  ... 1000/2113 days, 238768 readings so far
+  ... 1250/2113 days, 298538 readings so far
+  ... 1500/2113 days, 358348 readings so far
+  ... 1750/2113 days, 418063 readings so far
+  ... 2000/2113 days, 477831 readings so far
+DONE: 2113 real days, 505031 total window classifications
+
+Phase 20.1C -- Extended Intraday MIC Validation Report
+======================================================================
+Real trading days: 2113   Span: 2018-02-01 to 2026-08-13 (~102.3 months)
+Total window classifications: 505031
+
+### Window: 30 minutes  (total windows: 145151) ###
+
+TREND_UP
+  samples: 7977  (5.5% of 30-min windows)
+  opportunity frequency: ~78.0 windows/month
+  median ER: 0.7907
+  median ADX: 90.8182
+  median persistence: 1.6667
+  median reversal_frequency: 0.5
+  median realized_vol: 0.0005
+
+TREND_DOWN
+  samples: 6814  (4.69% of 30-min windows)
+  opportunity frequency: ~66.6 windows/month
+  median ER: 0.7818
+  median ADX: 92.7673
+  median persistence: 1.6667
+  median reversal_frequency: 0.5
+  median realized_vol: 0.0005
+
+RANGE
+  samples: 19510  (13.44% of 30-min windows)
+  opportunity frequency: ~190.7 windows/month
+  median ER: 0.1457
+  median ADX: 52.2719
+  median persistence: 1.25
+  median reversal_frequency: 0.75
+  median realized_vol: 0.0006
+
+BREAKOUT_ATTEMPT
+  samples: 0  (0.0% of 30-min windows)
+  opportunity frequency: ~0.0 windows/month
+  median ER: None
+  median ADX: None
+  median persistence: None
+  median reversal_frequency: None
+  median realized_vol: None
+
+VOLATILITY_EXPANSION
+  samples: 1559  (1.07% of 30-min windows)
+  opportunity frequency: ~15.2 windows/month
+  median ER: 0.3789
+  median ADX: 65.4837
+  median persistence: 1.6667
+  median reversal_frequency: 0.5
+  median realized_vol: 0.0033
+
+VOLATILITY_COMPRESSION
+  samples: 35784  (24.65% of 30-min windows)
+  opportunity frequency: ~349.7 windows/month
+  median ER: 0.3872
+  median ADX: 60.1739
+  median persistence: 1.6667
+  median reversal_frequency: 0.5
+  median realized_vol: 0.0006
+
+TRANSITION
+  samples: 73507  (50.64% of 30-min windows)
+  opportunity frequency: ~718.3 windows/month
+  median ER: 0.4301
+  median ADX: 66.816
+  median persistence: 1.6667
+  median reversal_frequency: 0.5
+  median realized_vol: 0.0006
+
+NO_TRADE
+  samples: 0  (0.0% of 30-min windows)
+  opportunity frequency: ~0.0 windows/month
+  median ER: None
+  median ADX: None
+  median persistence: None
+  median reversal_frequency: None
+  median realized_vol: None
+
+UNKNOWN
+  samples: 0  (0.0% of 30-min windows)
+  opportunity frequency: ~0.0 windows/month
+  median ER: None
+  median ADX: None
+  median persistence: None
+  median reversal_frequency: None
+  median realized_vol: None
+
+
+### Window: 60 minutes  (total windows: 132558) ###
+
+TREND_UP
+  samples: 4178  (3.15% of 60-min windows)
+  opportunity frequency: ~40.8 windows/month
+  median ER: 0.6952
+  median ADX: 77.0272
+  median persistence: 2.2
+  median reversal_frequency: 0.4
+  median realized_vol: 0.0005
+
+TREND_DOWN
+  samples: 3272  (2.47% of 60-min windows)
+  opportunity frequency: ~32.0 windows/month
+  median ER: 0.6845
+  median ADX: 77.4421
+  median persistence: 2.2
+  median reversal_frequency: 0.4
+  median realized_vol: 0.0006
+
+RANGE
+  samples: 47116  (35.54% of 60-min windows)
+  opportunity frequency: ~460.4 windows/month
+  median ER: 0.1403
+  median ADX: 30.9103
+  median persistence: 1.6667
+  median reversal_frequency: 0.5556
+  median realized_vol: 0.0006
+
+BREAKOUT_ATTEMPT
+  samples: 0  (0.0% of 60-min windows)
+  opportunity frequency: ~0.0 windows/month
+  median ER: None
+  median ADX: None
+  median persistence: None
+  median reversal_frequency: None
+  median realized_vol: None
+
+VOLATILITY_EXPANSION
+  samples: 1233  (0.93% of 60-min windows)
+  opportunity frequency: ~12.0 windows/month
+  median ER: 0.2793
+  median ADX: 44.7506
+  median persistence: 1.8333
+  median reversal_frequency: 0.5
+  median realized_vol: 0.0037
+
+VOLATILITY_COMPRESSION
+  samples: 22659  (17.09% of 60-min windows)
+  opportunity frequency: ~221.4 windows/month
+  median ER: 0.2357
+  median ADX: 34.3823
+  median persistence: 1.8333
+  median reversal_frequency: 0.5
+  median realized_vol: 0.0006
+
+TRANSITION
+  samples: 54100  (40.81% of 60-min windows)
+  opportunity frequency: ~528.7 windows/month
+  median ER: 0.3891
+  median ADX: 49.9595
+  median persistence: 1.8333
+  median reversal_frequency: 0.5
+  median realized_vol: 0.0006
+
+NO_TRADE
+  samples: 0  (0.0% of 60-min windows)
+  opportunity frequency: ~0.0 windows/month
+  median ER: None
+  median ADX: None
+  median persistence: None
+  median reversal_frequency: None
+  median realized_vol: None
+
+UNKNOWN
+  samples: 0  (0.0% of 60-min windows)
+  opportunity frequency: ~0.0 windows/month
+  median ER: None
+  median ADX: None
+  median persistence: None
+  median reversal_frequency: None
+  median realized_vol: None
+
+
+### Window: 90 minutes  (total windows: 119963) ###
+
+TREND_UP
+  samples: 1736  (1.45% of 90-min windows)
+  opportunity frequency: ~17.0 windows/month
+  median ER: 0.6587
+  median ADX: 72.6113
+  median persistence: 2.125
+  median reversal_frequency: 0.4375
+  median realized_vol: 0.0006
+
+TREND_DOWN
+  samples: 1168  (0.97% of 90-min windows)
+  opportunity frequency: ~11.4 windows/month
+  median ER: 0.6553
+  median ADX: 74.3931
+  median persistence: 2.125
+  median reversal_frequency: 0.4375
+  median realized_vol: 0.0007
+
+RANGE
+  samples: 58222  (48.53% of 90-min windows)
+  opportunity frequency: ~568.9 windows/month
+  median ER: 0.1336
+  median ADX: 25.6851
+  median persistence: 1.7
+  median reversal_frequency: 0.5625
+  median realized_vol: 0.0006
+
+BREAKOUT_ATTEMPT
+  samples: 0  (0.0% of 90-min windows)
+  opportunity frequency: ~0.0 windows/month
+  median ER: None
+  median ADX: None
+  median persistence: None
+  median reversal_frequency: None
+  median realized_vol: None
+
+VOLATILITY_EXPANSION
+  samples: 1091  (0.91% of 90-min windows)
+  opportunity frequency: ~10.7 windows/month
+  median ER: 0.2564
+  median ADX: 39.958
+  median persistence: 1.8889
+  median reversal_frequency: 0.5
+  median realized_vol: 0.0037
+
+VOLATILITY_COMPRESSION
+  samples: 15248  (12.71% of 90-min windows)
+  opportunity frequency: ~149.0 windows/month
+  median ER: 0.1874
+  median ADX: 27.6438
+  median persistence: 1.8889
+  median reversal_frequency: 0.5
+  median realized_vol: 0.0006
+
+TRANSITION
+  samples: 42498  (35.43% of 90-min windows)
+  opportunity frequency: ~415.3 windows/month
+  median ER: 0.3695
+  median ADX: 46.51
+  median persistence: 1.8889
+  median reversal_frequency: 0.5
+  median realized_vol: 0.0006
+
+NO_TRADE
+  samples: 0  (0.0% of 90-min windows)
+  opportunity frequency: ~0.0 windows/month
+  median ER: None
+  median ADX: None
+  median persistence: None
+  median reversal_frequency: None
+  median realized_vol: None
+
+UNKNOWN
+  samples: 0  (0.0% of 90-min windows)
+  opportunity frequency: ~0.0 windows/month
+  median ER: None
+  median ADX: None
+  median persistence: None
+  median reversal_frequency: None
+  median realized_vol: None
+
+
+### Window: 120 minutes  (total windows: 107359) ###
+
+TREND_UP
+  samples: 670  (0.62% of 120-min windows)
+  opportunity frequency: ~6.5 windows/month
+  median ER: 0.6468
+  median ADX: 70.6036
+  median persistence: 2.0909
+  median reversal_frequency: 0.4545
+  median realized_vol: 0.0006
+
+TREND_DOWN
+  samples: 389  (0.36% of 120-min windows)
+  opportunity frequency: ~3.8 windows/month
+  median ER: 0.649
+  median ADX: 72.9249
+  median persistence: 2.0909
+  median reversal_frequency: 0.4545
+  median realized_vol: 0.0007
+
+RANGE
+  samples: 61382  (57.17% of 120-min windows)
+  opportunity frequency: ~599.8 windows/month
+  median ER: 0.1301
+  median ADX: 23.2733
+  median persistence: 1.7692
+  median reversal_frequency: 0.5455
+  median realized_vol: 0.0006
+
+BREAKOUT_ATTEMPT
+  samples: 0  (0.0% of 120-min windows)
+  opportunity frequency: ~0.0 windows/month
+  median ER: None
+  median ADX: None
+  median persistence: None
+  median reversal_frequency: None
+  median realized_vol: None
+
+VOLATILITY_EXPANSION
+  samples: 959  (0.89% of 120-min windows)
+  opportunity frequency: ~9.4 windows/month
+  median ER: 0.2288
+  median ADX: 35.6252
+  median persistence: 1.9167
+  median reversal_frequency: 0.5
+  median realized_vol: 0.0036
+
+VOLATILITY_COMPRESSION
+  samples: 10729  (9.99% of 120-min windows)
+  opportunity frequency: ~104.8 windows/month
+  median ER: 0.1641
+  median ADX: 24.5355
+  median persistence: 1.8333
+  median reversal_frequency: 0.5238
+  median realized_vol: 0.0006
+
+TRANSITION
+  samples: 33230  (30.95% of 120-min windows)
+  opportunity frequency: ~324.7 windows/month
+  median ER: 0.3552
+  median ADX: 44.3639
+  median persistence: 1.9167
+  median reversal_frequency: 0.5
+  median realized_vol: 0.0006
+
+NO_TRADE
+  samples: 0  (0.0% of 120-min windows)
+  opportunity frequency: ~0.0 windows/month
+  median ER: None
+  median ADX: None
+  median persistence: None
+  median reversal_frequency: None
+  median realized_vol: None
+
+UNKNOWN
+  samples: 0  (0.0% of 120-min windows)
+  opportunity frequency: ~0.0 windows/month
+  median ER: None
+  median ADX: None
+  median persistence: None
+  median reversal_frequency: None
+  median realized_vol: None
+
+
+MIC Intraday Validation Report (Phase 20.1C)
+============================================================
+
+Total real trading days analyzed: 2113
+
+--- 30-minute rolling windows (145151 total) ---
+  RANGE: n=19510 avg_ER=0.1463 avg_ADX=53.1274 avg_reversal=0.6323 avg_persistence=1.5255
+  TRANSITION: n=73507 avg_ER=0.4526 avg_ADX=66.6087 avg_reversal=0.5099 avg_persistence=1.8612
+  TREND_DOWN: n=6814 avg_ER=0.8003 avg_ADX=83.3965 avg_reversal=0.4217 avg_persistence=2.2507
+  TREND_UP: n=7977 avg_ER=0.8035 avg_ADX=81.8621 avg_reversal=0.4185 avg_persistence=2.2597
+  VOLATILITY_COMPRESSION: n=35784 avg_ER=0.4296 avg_ADX=61.2986 avg_reversal=0.528 avg_persistence=1.8464
+  VOLATILITY_EXPANSION: n=1559 avg_ER=0.4087 avg_ADX=65.5107 avg_reversal=0.5232 avg_persistence=1.8105
+  Sufficient sample size: True
+  Conclusion: Meaningful separation across all 4 dimensions at 30min.
+    - efficiency_ratio: TREND(n=14791)=0.802 vs RANGE(n=19510)=0.1463 (separated)
+    - ADX: TREND(n=14791)=82.569 vs RANGE(n=19510)=53.1274 (separated)
+    - persistence: TREND(n=14791)=2.2556 vs RANGE(n=19510)=1.5255 (separated)
+    - reversal_frequency: TREND(n=14791)=0.42 vs RANGE(n=19510)=0.6323 (separated)
+
+--- 60-minute rolling windows (132558 total) ---
+  RANGE: n=47116 avg_ER=0.1434 avg_ADX=33.0956 avg_reversal=0.553 avg_persistence=1.7846
+  TRANSITION: n=54100 avg_ER=0.3834 avg_ADX=51.4948 avg_reversal=0.5113 avg_persistence=1.9332
+  TREND_DOWN: n=3272 avg_ER=0.707 avg_ADX=75.7232 avg_reversal=0.4347 avg_persistence=2.265
+  TREND_UP: n=4178 avg_ER=0.7151 avg_ADX=74.595 avg_reversal=0.4361 avg_persistence=2.2431
+  VOLATILITY_COMPRESSION: n=22659 avg_ER=0.2754 avg_ADX=39.2459 avg_reversal=0.5198 avg_persistence=1.9118
+  VOLATILITY_EXPANSION: n=1233 avg_ER=0.3173 avg_ADX=48.1309 avg_reversal=0.5087 avg_persistence=1.9278
+  Sufficient sample size: True
+  Conclusion: Meaningful separation across all 4 dimensions at 60min.
+    - efficiency_ratio: TREND(n=7450)=0.7115 vs RANGE(n=47116)=0.1434 (separated)
+    - ADX: TREND(n=7450)=75.0905 vs RANGE(n=47116)=33.0956 (separated)
+    - persistence: TREND(n=7450)=2.2527 vs RANGE(n=47116)=1.7846 (separated)
+    - reversal_frequency: TREND(n=7450)=0.4355 vs RANGE(n=47116)=0.553 (separated)
+
+--- 90-minute rolling windows (119963 total) ---
+  RANGE: n=58222 avg_ER=0.1387 avg_ADX=28.0017 avg_reversal=0.5391 avg_persistence=1.8413
+  TRANSITION: n=42498 avg_ER=0.3599 avg_ADX=47.3526 avg_reversal=0.5097 avg_persistence=1.9474
+  TREND_DOWN: n=1168 avg_ER=0.6698 avg_ADX=73.2047 avg_reversal=0.4408 avg_persistence=2.2611
+  TREND_UP: n=1736 avg_ER=0.6764 avg_ADX=71.6373 avg_reversal=0.4445 avg_persistence=2.226
+  VOLATILITY_COMPRESSION: n=15248 avg_ER=0.2216 avg_ADX=32.3093 avg_reversal=0.5229 avg_persistence=1.9007
+  VOLATILITY_EXPANSION: n=1091 avg_ER=0.2806 avg_ADX=42.6672 avg_reversal=0.5037 avg_persistence=1.966
+  Sufficient sample size: True
+  Conclusion: Meaningful separation across all 4 dimensions at 90min.
+    - efficiency_ratio: TREND(n=2904)=0.6737 vs RANGE(n=58222)=0.1387 (separated)
+    - ADX: TREND(n=2904)=72.2677 vs RANGE(n=58222)=28.0017 (separated)
+    - persistence: TREND(n=2904)=2.2401 vs RANGE(n=58222)=1.8413 (separated)
+    - reversal_frequency: TREND(n=2904)=0.443 vs RANGE(n=58222)=0.5391 (separated)
+
+--- 120-minute rolling windows (107359 total) ---
+  RANGE: n=61382 avg_ER=0.136 avg_ADX=25.4738 avg_reversal=0.5344 avg_persistence=1.8617
+  TRANSITION: n=33230 avg_ER=0.3401 avg_ADX=44.6401 avg_reversal=0.5098 avg_persistence=1.9512
+  TREND_DOWN: n=389 avg_ER=0.6605 avg_ADX=71.5166 avg_reversal=0.433 avg_persistence=2.3239
+  TREND_UP: n=670 avg_ER=0.6622 avg_ADX=70.2036 avg_reversal=0.4461 avg_persistence=2.2219
+  VOLATILITY_COMPRESSION: n=10729 avg_ER=0.196 avg_ADX=28.7824 avg_reversal=0.5239 avg_persistence=1.8994
+  VOLATILITY_EXPANSION: n=959 avg_ER=0.2497 avg_ADX=38.4272 avg_reversal=0.5047 avg_persistence=1.9612
+  Sufficient sample size: True
+  Conclusion: Meaningful separation across all 4 dimensions at 120min.
+    - efficiency_ratio: TREND(n=1059)=0.6616 vs RANGE(n=61382)=0.136 (separated)
+    - ADX: TREND(n=1059)=70.6859 vs RANGE(n=61382)=25.4738 (separated)
+    - persistence: TREND(n=1059)=2.2594 vs RANGE(n=61382)=1.8617 (separated)
+    - reversal_frequency: TREND(n=1059)=0.4413 vs RANGE(n=61382)=0.5344 (separated)
+
+OVERALL: PASS
+MIC intraday classification shows meaningful separation at: 30min, 60min, 90min, 120min.
+
+Written to /tmp/mic_v0_intraday_full_report.txt

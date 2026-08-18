@@ -1,0 +1,65 @@
+[Unit]
+# =========================================================================
+# BUJJI SHADOW DECISION CAMPAIGN — TIMER, Phase 20.14
+#
+# Fires bujji-shadow-decision-campaign.service (Type=oneshot) once per
+# intended NSE trading day. Mirrors bujji-daily-intelligence.timer's own
+# proven pattern exactly -- the fix for the SAME class of finding that
+# phase's own commissioning audit already made (a bounded daily job must
+# never be a Restart=always daemon), applied here from the start. This
+# timer is the ONLY scheduling mechanism for its service; nothing else
+# (no cron, no in-process loop, no second scheduler) triggers it.
+# =========================================================================
+Description=Daily trigger for Bujji Shadow Decision Campaign (weekdays only)
+
+[Timer]
+# Weekends are excluded structurally by the calendar expression itself
+# (Mon..Fri) -- a first, coarse safety net. The SECOND, authoritative
+# check is inside the service's own entrypoint script
+# (bujji.market_calendar.MarketCalendar.is_trading_day(), Phase 20.14),
+# which also knows about listed NSE holidays -- this calendar
+# expression alone does not. On an NSE holiday the timer still fires;
+# the entrypoint's own calendar check exits 0 immediately (a clean,
+# expected skip, never a fabricated session, never a reported failure).
+OnCalendar=Mon..Fri 09:10 Asia/Kolkata
+
+# 09:10 IST -- ten minutes after bujji-daily-intelligence.timer's own
+# 09:00 fire, so the two independent systems' startup logs are never
+# interleaved in a way that makes triage harder; there is no functional
+# dependency between them (each owns its own lock, per
+# docs/SYSTEM_OWNERSHIP.md's fourth ownership entry).
+
+# A missed fire (VPS down at 09:10 IST) still runs once the VPS is back
+# up -- no trading day is silently skipped just because the machine was
+# rebooting at the scheduled time.
+# NO CATCH-UP.
+#
+# The ORIGINAL reason for this no longer applies, and is recorded so
+# nobody reinstates Persistent=true on the old grounds: before the
+# 2026-08-17 clock fix a catch-up run walked a VIRTUAL clock from 09:15 to
+# 15:30 and stamped post-close quotes as a full trading day. That
+# fabrication is gone -- the entrypoint now stamps real wall-clock time
+# and waits for the open rather than observing before it.
+#
+# It stays false for a smaller but still-real reason: a catch-up fired at,
+# say, 13:00 produces an honestly-labelled but PARTIAL session, which a
+# downstream reader cannot tell from a full one without checking cycle
+# counts. A day the machine was down is a fact worth seeing, not one
+# worth half-filling.
+Persistent=false
+
+# Systemd's own single-instance-per-unit-name semantics defer a second
+# OnCalendar fire while the service is still running from the previous
+# fire -- the FIRST of two independent overlap-prevention layers. The
+# SECOND, belt-and-braces layer is application-level:
+# bujji.core.process_lock.ProcessLock at
+# data/shadow_decision_campaign.lock (Phase 20.14, a DEDICATED lock
+# path -- never bujji-daily-intelligence.service's own
+# data/daily_intelligence.lock, since these are two separate, unrelated
+# systems per docs/SYSTEM_OWNERSHIP.md), which also protects against a
+# manually invoked run_phase20_13_live_entrypoint.py overlapping a
+# timer-fired one.
+AccuracySec=1min
+
+[Install]
+WantedBy=timers.target

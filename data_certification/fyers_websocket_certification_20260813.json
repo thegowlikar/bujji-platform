@@ -1,0 +1,105 @@
+{
+  "timestamp": "2026-08-13T09:19:34.563307+05:30",
+  "broker": "fyers",
+  "access_method": "fyers_websocket",
+  "instrument": "NIFTY_SPOT",
+  "symbol_requested": "NSE:NIFTY50-INDEX",
+  "symbol_returned": "NSE:NIFTY50-INDEX",
+  "connection_status": "OK",
+  "observation_window_seconds": 120,
+  "observation_started_ist": "2026-08-13T09:19:34.563307+05:30",
+  "observation_ended_ist": "2026-08-13T09:21:44.709450+05:30",
+  "tick_count": 291,
+  "ticks_per_second": 2.425,
+  "litemode": false,
+  "symbol_integrity_confirmed": true,
+  "event_timestamp_available": true,
+  "timestamp_valid": true,
+  "field_census": {
+    "ch": {
+      "present_in_ticks": 291,
+      "null_in_ticks": 0,
+      "presence_ratio": 1.0
+    },
+    "chp": {
+      "present_in_ticks": 291,
+      "null_in_ticks": 0,
+      "presence_ratio": 1.0
+    },
+    "exch_feed_time": {
+      "present_in_ticks": 291,
+      "null_in_ticks": 0,
+      "presence_ratio": 1.0
+    },
+    "high_price": {
+      "present_in_ticks": 291,
+      "null_in_ticks": 0,
+      "presence_ratio": 1.0
+    },
+    "low_price": {
+      "present_in_ticks": 291,
+      "null_in_ticks": 0,
+      "presence_ratio": 1.0
+    },
+    "ltp": {
+      "present_in_ticks": 291,
+      "null_in_ticks": 0,
+      "presence_ratio": 1.0
+    },
+    "open_price": {
+      "present_in_ticks": 291,
+      "null_in_ticks": 0,
+      "presence_ratio": 1.0
+    },
+    "prev_close_price": {
+      "present_in_ticks": 291,
+      "null_in_ticks": 0,
+      "presence_ratio": 1.0
+    },
+    "symbol": {
+      "present_in_ticks": 291,
+      "null_in_ticks": 0,
+      "presence_ratio": 1.0
+    },
+    "type": {
+      "present_in_ticks": 291,
+      "null_in_ticks": 0,
+      "presence_ratio": 1.0
+    }
+  },
+  "fields_absent_from_every_tick": [
+    "ask_price",
+    "ask_size",
+    "bid_price",
+    "bid_size",
+    "last_traded_qty",
+    "last_traded_time",
+    "oi",
+    "vol_traded_today"
+  ],
+  "price_scaling": {
+    "status": "CONSISTENT",
+    "reference_access_method": "direct_sdk_fyers_broker_py",
+    "sample_1_window_start": {
+      "status": "CONSISTENT",
+      "ws_ltp": 24345.2,
+      "rest_ltp": 24347.75,
+      "ratio": 0.999895,
+      "note": "full-mode ltp agrees with the certified REST reference."
+    },
+    "sample_2_window_end": {
+      "status": "CONSISTENT",
+      "ws_ltp": 24353.25,
+      "rest_ltp": 24353.15,
+      "ratio": 1.000004,
+      "note": "full-mode ltp agrees with the certified REST reference."
+    },
+    "migration_permitted": true
+  },
+  "validation_result": "PARTIAL_CERTIFICATION",
+  "limitations": [
+    "event timestamp available via 'exch_feed_time'.",
+    "fields absent from every observed tick: ['ask_price', 'ask_size', 'bid_price', 'bid_size', 'last_traded_qty', 'last_traded_time', 'oi', 'vol_traded_today']",
+    "Production `FyersTickFeed` constructs its socket with litemode=True; this certification ran litemode=False. Fields certified here are only reachable in production if the wrapper is switched to full mode."
+  ]
+}
