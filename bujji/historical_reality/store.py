@@ -48,6 +48,20 @@ CREATE INDEX IF NOT EXISTS idx_hist_obs_natural_key
     ON historical_observations (natural_key);
 CREATE INDEX IF NOT EXISTS idx_hist_obs_range
     ON historical_observations (instrument_identity, resolution, timestamp);
+-- PHASE_18_10: `instrument_identity` is the LEADING column of
+-- idx_hist_obs_range above, which makes it useless for a `LIKE
+-- 'prefix%'` scan (PHASE_18_9's own EXPLAIN QUERY PLAN finding: SQLite
+-- fell back to a full table SCAN even with a literal, non-bound
+-- prefix). This second index leads with (resolution, timestamp)
+-- instead -- exactly what `range_by_prefix()` now filters on via SQL,
+-- with the identity-prefix match applied in Python afterward on the
+-- much smaller resulting row set (see `range_by_prefix()` below).
+-- Purely additive: an index changes retrieval speed only, never
+-- content, ordering guarantees, or write behavior -- CREATE INDEX IF
+-- NOT EXISTS is itself idempotent and safe against the live,
+-- already-populated table.
+CREATE INDEX IF NOT EXISTS idx_hist_obs_resolution_timestamp
+    ON historical_observations (resolution, timestamp);
 
 CREATE TABLE IF NOT EXISTS ingestion_runs (
     ingestion_run_id  TEXT    NOT NULL PRIMARY KEY,
@@ -196,6 +210,44 @@ class HistoricalObservationStore:
             (instrument_identity, resolution, from_timestamp, to_timestamp),
         )
         return [HistoricalObservation.from_dict(json.loads(r["record"])) for r in cur.fetchall()]
+
+    def range_by_prefix(self, instrument_prefix: str, resolution: str,
+                         from_timestamp: str, to_timestamp: str) -> List[HistoricalObservation]:
+        """Same contract as `range()`, but matches every
+        `instrument_identity` starting with `instrument_prefix` --
+        Phase 18.1's addition, needed because a composite options
+        identity (`"NIFTY|2026-08-18|21850|CE"`, PHASE_17I10) has no
+        single, exact identity string to query by when the caller wants
+        "every contract for this underlying" rather than one specific
+        contract. Read-only; the write path, schema, and every existing
+        `range()` caller are unchanged by this addition."""
+        # PHASE_18_10: narrow by (resolution, timestamp) FIRST -- the
+        # newly-added `idx_hist_obs_resolution_timestamp` index makes
+        # this an indexed SEARCH, confirmed via EXPLAIN QUERY PLAN
+        # (see PHASE_18_10 report) -- then apply the identity-prefix
+        # match in PYTHON on the resulting (small, date-window-bounded)
+        # candidate rows, never in SQL. PHASE_18_9's own finding was
+        # that `instrument_identity LIKE ?` could not use any existing
+        # index (a full table SCAN, confirmed even with a literal,
+        # non-bound pattern) because `instrument_identity` was the
+        # LEADING column of the only prior index -- this rewrite
+        # sidesteps that entirely rather than fighting SQLite's LIKE
+        # optimizer. Row CONTENT, ordering, and the set of matching
+        # rows returned are byte-for-byte identical to the prior SQL-
+        # only implementation -- this is a retrieval-path change only,
+        # never a semantic one (PHASE_18_10's own regression tests
+        # prove the two implementations agree on real data).
+        cur = self._conn.execute(
+            "SELECT record, instrument_identity FROM historical_observations "
+            "WHERE resolution = ? AND timestamp >= ? AND timestamp <= ? "
+            "ORDER BY timestamp ASC",
+            (resolution, from_timestamp, to_timestamp),
+        )
+        return [
+            HistoricalObservation.from_dict(json.loads(r["record"]))
+            for r in cur.fetchall()
+            if r["instrument_identity"].startswith(instrument_prefix)
+        ]
 
     def ingestion_runs_for(self, instrument: str) -> List[IngestionRun]:
         cur = self._conn.execute(

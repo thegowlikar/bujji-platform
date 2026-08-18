@@ -547,3 +547,109 @@ def test_force_reconnect_survives_synchronous_on_close_without_deadlock(fake_dat
     assert feed.is_connected is True
     assert feed.connect_count == 1  # start() itself never fires on_connect in this fixture (matching every
                                      # other test in this file) -- this is the new generation's own real connect
+
+
+# --------------------------------------------------------------------- #
+# Proof M (new, Phase 17F.6.2) -- empirically traces whether
+# force_reconnect()'s close_connection() call fires the OLD generation's
+# on_close closure, and whether that firing reaches the public
+# on_disconnect() hooks a future capture-lifecycle adapter would
+# register.
+#
+# Source-level trace (installed fyers_apiv3 SDK, confirmed by reading
+# data_ws.py + the underlying `websocket` package's _app.py) established
+# that a manual close_connection() call DOES synchronously invoke the
+# registered on_close callback before returning (restart_flag is set to
+# False before .close() is called, so __on_close takes the "real close"
+# branch rather than the SDK's own silent internal-retry branch; the
+# underlying websocket-client library's own teardown() calls the on_close
+# callback before run_forever() returns, and close_connection() blocks on
+# ws_thread.join() until that has happened). This test proves the
+# CONSEQUENCE of that fact for FyersTickFeed specifically: whether the
+# outer on_disconnect() hook seam actually sees anything.
+# --------------------------------------------------------------------- #
+def test_force_reconnect_close_fires_synchronously_but_is_suppressed_as_stale(fake_data_ws_module):
+    """The empirical answer to the Phase 17F.6.2 open question: a
+    watchdog-forced reconnect's close_connection() call DOES trigger the
+    old generation's on_close closure synchronously (proven by actually
+    firing it, via the fixture's close_synchronously_calls_on_close
+    flag) -- but FyersTickFeed's own currency check has ALREADY nulled
+    _current_handle before close_connection() is called, so the closure
+    is a complete no-op: zero state mutation, zero log line, and
+    critically, the public on_disconnect() hook is NEVER invoked.
+
+    CONSEQUENCE FOR PHASE 17F.6.2's DESIGN: an adapter that only
+    registers via feed.on_disconnect(hook) would observe NOTHING for a
+    watchdog-forced reconnect -- only the subsequent on_connect (Proof N
+    below) fires. Any future CaptureLifecycleTracker integration must
+    treat force_reconnect() as its own, separate emission point (e.g. the
+    adapter calling tracker.record_condition() itself, driven by
+    TickSilenceWatchdog's own state transitions) rather than relying on
+    the disconnect hook to fire for this path.
+    """
+    FakeSocket, calls = fake_data_ws_module
+
+    log = _null_logger()
+    feed = FyersTickFeed(app_id="X", access_token="Y", logger=log, log_path="/tmp")
+
+    disconnect_hook_calls = []
+    feed.on_disconnect(lambda: disconnect_hook_calls.append("fired"))
+
+    feed.start()
+    gen0_socket = feed._socket
+    # Arm the fake so close_connection() synchronously invokes the real
+    # on_close closure -- mirroring the traced real SDK behaviour, not
+    # skipping straight to "assume it doesn't fire."
+    gen0_socket.close_synchronously_calls_on_close = True
+
+    feed.force_reconnect("test-driven reconnect")
+
+    # The old generation's socket really was closed, and its on_close
+    # closure really did execute (not skipped) -- this is the "fires
+    # synchronously" half of the empirical claim.
+    assert gen0_socket.closed is True
+    assert ("close_connection", gen0_socket.gen) in calls
+
+    # And yet the public hook never saw it -- this is the "suppressed as
+    # stale" half. A future adapter relying solely on on_disconnect()
+    # would be silently blind to every watchdog-forced reconnect.
+    assert disconnect_hook_calls == []
+
+    # feed.is_connected was set to False directly by force_reconnect()
+    # itself (not by the stale closure, which never touched it) and then
+    # set back to True once the NEW generation actually connects -- so at
+    # this point, before the new generation's on_connect has fired, it
+    # correctly still reads False.
+    assert feed.is_connected is False
+
+
+def test_force_reconnect_new_generation_on_connect_still_fires_normally(fake_data_ws_module):
+    """The other half of the empirical trace: the NEW generation built by
+    force_reconnect() is unaffected by the old generation's suppressed
+    close -- its own on_connect closure fires normally and IS observable
+    via the public on_connect() hook, exactly like a first-time connect.
+    This is the only hook a force_reconnect()-driven adapter would
+    currently see."""
+    FakeSocket, calls = fake_data_ws_module
+
+    log = _null_logger()
+    feed = FyersTickFeed(app_id="X", access_token="Y", logger=log, log_path="/tmp")
+
+    connect_hook_calls = []
+    feed.on_connect(lambda: connect_hook_calls.append("fired"))
+
+    feed.start()
+    gen0_socket = feed._socket
+    gen0_socket._on_connect()  # bring gen-0 up first, so the reconnect is a real transition
+    assert feed.connect_count == 1
+    assert connect_hook_calls == ["fired"]
+
+    feed.force_reconnect("test-driven reconnect")
+    gen1_socket = feed._socket
+    assert gen1_socket is not gen0_socket
+
+    gen1_socket._on_connect()  # the NEW generation's real connect callback
+
+    assert feed.is_connected is True
+    assert feed.connect_count == 2
+    assert connect_hook_calls == ["fired", "fired"]

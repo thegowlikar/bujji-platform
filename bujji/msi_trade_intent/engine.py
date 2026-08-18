@@ -1,6 +1,19 @@
 """Trade Intent Intelligence (TII) engine — BUJJI Engineering
 Series 83.
 
+PHASE 14B-P0.1 ADDITION: `determine_trade_intent()` below is UNCHANGED --
+same signature, same body, same behavior, byte-for-byte, for every
+existing caller. A NEW, separate function,
+`determine_trade_intent_from_selection()`, is added at the bottom of
+this file for the modern pipeline (real `StrategySelectionAssessment`,
+Series 87) -- it does not replace or call
+`_placeholder_select_one_eligible_family` at all. See that function's
+own docstring for the full design rationale (Phase 14A found the
+placeholder was a stand-in for a selector that now exists but was
+never connected; Phase 14B repairs that without touching this
+placeholder path, since removing it before its own compatibility
+requirements are understood was explicitly out of scope).
+
 ---------------------------------------------------------------------
 Architecture boundary -- why this package DIRECTLY IMPORTS real
 sibling-brain model types, mirroring Series 82's own resolved
@@ -68,6 +81,7 @@ from typing import Optional, Tuple
 from bujji.msi_decision_synthesis.models import MarketOpportunityAssessment
 from bujji.msi_strategy_eligibility.models import StrategyEligibilityAssessment
 from bujji.msi_strategy_eligibility import taxonomy as _sei_taxonomy
+from bujji.strategy_taxonomy_bridge.mapping import eligibility_families_for_selection_family
 
 from . import config as _config
 from . import taxonomy
@@ -292,6 +306,159 @@ def determine_trade_intent(
         assessment_id, eligibility, opportunity, selected_family, market_bias,
         volatility_bias, directional_exposure, premium_exposure, risk_profile,
         invalidation_conditions,
+    )
+
+    return TradeIntentAssessment(
+        assessment_id=assessment_id,
+        timestamp=timestamp,
+        selected_strategy_family=selected_family,
+        intent_state=taxonomy.INTENT_STATE_FORMED,
+        market_bias=market_bias,
+        volatility_bias=volatility_bias,
+        directional_exposure=directional_exposure,
+        premium_exposure=premium_exposure,
+        risk_profile=risk_profile,
+        invalidation_conditions=invalidation_conditions,
+        supporting_assessment_ids=supporting_assessment_ids,
+        explanation=explanation,
+        provenance=provenance,
+        schema_version=schema_version,
+    )
+
+
+# ---------------------------------------------------------------------------
+# Phase 14B-P0.1 -- modern-pipeline entrypoint. Additive only: does not
+# call or modify `_placeholder_select_one_eligible_family` or
+# `determine_trade_intent` above.
+#
+# Root cause this repairs (Phase 14A): the real Strategy Selector
+# (msi_strategy_selector, Series 87) was built downstream of Eligibility
+# but TradeIntent (Series 83) was never updated to consume it -- it kept
+# independently re-selecting from Eligibility's own family list via a
+# documented placeholder. This function is the missing connection.
+#
+# Design (per Phase 14B-P0.3's own safety principle -- "Eligibility
+# remains a gate, not a selector; Selection remains responsible for
+# selecting"): the REAL Selection pick is taken as given, NEVER
+# re-decided here. This function only asks Eligibility one question --
+# "is the family Selection picked actually permitted?" -- via the
+# explicit taxonomy bridge (Phase 14B-P0.2), never a blind pass-through,
+# never a guess, never a literal-string match against a taxonomy
+# Selection doesn't share:
+#   - If eligibility is None, or eligibility_confidence is NONE (the
+#     coherence gate itself found insufficient evidence), the answer is
+#     honestly UNRESOLVED -- returns None, same as the legacy path's own
+#     "no real intent can be formed" convention. Never coerced to a firm
+#     rejection.
+#   - If Selection's family maps (via the bridge) to at least one
+#     Eligibility family that IS in eligible_strategy_families, intent is
+#     formed using that mapped family's own declared intent profile
+#     (FAMILY_INTENT_PROFILE) -- disclosed in the explanation as a
+#     bridged, not exact, profile.
+#   - Otherwise (mapped family exists but Eligibility rejected all of
+#     them) -- returns None. Selection's pick is never forced through.
+# ---------------------------------------------------------------------------
+def determine_trade_intent_from_selection(
+    selected_family: Optional[str],
+    selection_confidence: Optional[str],
+    eligibility: Optional[StrategyEligibilityAssessment],
+    opportunity: Optional[MarketOpportunityAssessment],
+    *,
+    timestamp: str,
+    schema_version: str = _config.SCHEMA_VERSION,
+    provenance: str = "msi_trade_intent.engine.determine_trade_intent_from_selection",
+) -> Optional[TradeIntentAssessment]:
+    """`selected_family`/`selection_confidence`: exactly
+    `StrategySelectionAssessment.selected_strategy_family`/`.confidence`
+    (Series 87) -- pass them as plain values, not the whole object, so
+    this function never needs to import `msi_strategy_selector`'s model
+    type (this package stays strictly downstream of 77/82 only, same
+    isolation discipline as the rest of this module). Returns None
+    (never fabricated) whenever ANY of: no family was selected, no
+    eligibility/opportunity exists this cycle, eligibility's own
+    confidence is NONE, or the selected family maps to no eligible
+    Eligibility family."""
+    if selected_family is None or eligibility is None or opportunity is None:
+        return None
+    if eligibility.eligibility_confidence == _sei_taxonomy.ELIGIBILITY_CONFIDENCE_NONE:
+        return None
+
+    candidate_sei_families = eligibility_families_for_selection_family(selected_family)
+    permitted_sei_families = tuple(
+        f for f in candidate_sei_families if f in eligibility.eligible_strategy_families
+    )
+    if not permitted_sei_families:
+        return None
+
+    # Deterministic choice among multiple permitted mapped families:
+    # the bridge's own declared tuple order (documented, not arbitrary).
+    profile_family = permitted_sei_families[0]
+
+    market_bias = derive_market_bias(selected_family, opportunity)
+    volatility_bias, premium_exposure, directional_exposure, risk_profile = _config.FAMILY_INTENT_PROFILE[profile_family]
+
+    invalidation_conditions = (
+        InvalidationCondition(
+            protected_assumption=(
+                f"Strategy Eligibility's read remains at least "
+                f"{_config.MIN_ELIGIBILITY_CONFIDENCE_FOR_STABLE_INTENT} confidence."
+            ),
+            checkable_field="eligibility_confidence",
+            trigger_description=(
+                f"eligibility_confidence drops below "
+                f"{_config.MIN_ELIGIBILITY_CONFIDENCE_FOR_STABLE_INTENT} "
+                f"(currently {eligibility.eligibility_confidence})."
+            ),
+            source_assessment_id=eligibility.assessment_id,
+        ),
+        InvalidationCondition(
+            protected_assumption=(
+                f"{profile_family} (the Eligibility-taxonomy family bridged from Selection's "
+                f"{selected_family}) remains a member of eligible_strategy_families."
+            ),
+            checkable_field="eligible_strategy_families",
+            trigger_description=(
+                f"eligible_strategy_families no longer contains {profile_family}."
+            ),
+            source_assessment_id=eligibility.assessment_id,
+        ),
+        InvalidationCondition(
+            protected_assumption=(
+                f"Strategy Selection continues to select {selected_family} "
+                f"(currently at confidence={selection_confidence})."
+            ),
+            checkable_field="selected_strategy_family",
+            trigger_description=f"Strategy Selection's pick changes away from {selected_family}.",
+            source_assessment_id=eligibility.assessment_id,
+        ),
+    )
+
+    supporting_assessment_ids = tuple(sorted({eligibility.assessment_id, opportunity.assessment_id}))
+    assessment_id = _compute_assessment_id(
+        supporting_assessment_ids, selected_family, market_bias, volatility_bias,
+        directional_exposure, premium_exposure, risk_profile, schema_version,
+    )
+
+    explanation = Explanation(
+        assessment_id=assessment_id,
+        why_this_market_expression=(
+            f"{selected_family} selected by the real Strategy Selector (Series 87, "
+            f"confidence={selection_confidence}), permitted by Strategy Eligibility via its "
+            f"{profile_family} family (Phase 14B taxonomy bridge: {selected_family} -> "
+            f"{profile_family}, one of {candidate_sei_families})."
+        ),
+        exposures_sought=(
+            f"market_bias={market_bias}", f"volatility_bias={volatility_bias}",
+            f"premium_exposure={premium_exposure}", f"directional_exposure={directional_exposure}",
+            f"risk_profile={risk_profile}",
+        ),
+        why_other_profiles_rejected=tuple(
+            f"{f} (bridged from {selected_family}) not eligible: not present in "
+            f"eligible_strategy_families={eligibility.eligible_strategy_families}."
+            for f in candidate_sei_families if f not in permitted_sei_families
+        ),
+        what_would_invalidate_before_execution=tuple(c.trigger_description for c in invalidation_conditions),
+        schema_version=schema_version,
     )
 
     return TradeIntentAssessment(

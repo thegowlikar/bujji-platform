@@ -296,10 +296,53 @@ async def test_rejected_order_handled():
 
 @pytest.mark.asyncio
 async def test_cancellation_handled_via_broker_cancel_order():
+    """A cancel against an order that ALREADY FILLED must report the real
+    state, not a fake success.
+
+    This test previously asserted the opposite -- that cancelling a filled
+    order returns CANCELLED -- which was asserting a genuine bug: the old
+    `cancel_order` returned CANCELLED unconditionally without inspecting
+    anything, so a caller could believe it had cancelled a position that
+    was in fact open and filled, while `get_order()` still reported
+    FILLED. Nothing in production depended on the old behaviour: the only
+    real caller (`bujji/execution/engine.py::_safe_cancel`) discards the
+    return value and only guards against exceptions.
+    """
     broker, registry, lc = await _setup()
-    result = await broker.place_order(OrderRequest(CONTRACT_CE, Side.SELL, 75, "CID-EXTRA", limit_price=50.0))
+    placed = await broker.place_order(OrderRequest(CONTRACT_CE, Side.SELL, 75, "CID-EXTRA", limit_price=50.0))
+    assert placed.status == OrderStatus.FILLED  # synchronous paper fill.
+
     cancel_result = await broker.cancel_order("CID-EXTRA")
+    assert cancel_result.status == OrderStatus.FILLED
+    assert cancel_result.message == "not_cancellable:filled"
+    # The order book is NOT rewritten by a refused cancel.
+    assert (await broker.get_order("CID-EXTRA")).status == OrderStatus.FILLED
+
+
+@pytest.mark.asyncio
+async def test_cancel_of_a_still_open_remainder_really_cancels():
+    """The other side of the same contract: an order that is NOT terminal
+    (a partial fill leaves a real outstanding remainder) genuinely
+    cancels, and the cancellation is written back to the order book."""
+    broker = PaperBroker(partial_fill_qty=25)
+    await broker.connect()
+    placed = await broker.place_order(OrderRequest(CONTRACT_CE, Side.SELL, 75, "CID-PARTIAL", limit_price=50.0))
+    assert placed.status == OrderStatus.PARTIAL
+
+    cancel_result = await broker.cancel_order("CID-PARTIAL")
     assert cancel_result.status == OrderStatus.CANCELLED
+    # Whatever really filled is preserved -- a cancel never erases fills.
+    assert cancel_result.filled_quantity == 25
+    assert (await broker.get_order("CID-PARTIAL")).status == OrderStatus.CANCELLED
+
+
+@pytest.mark.asyncio
+async def test_cancel_of_an_unknown_order_is_not_a_silent_success():
+    broker = PaperBroker()
+    await broker.connect()
+    result = await broker.cancel_order("CID-NEVER-PLACED")
+    assert result.status == OrderStatus.UNKNOWN
+    assert result.message == "not_found"
 
 
 # --------------------------------------------------------------------- #

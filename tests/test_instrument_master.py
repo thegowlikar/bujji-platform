@@ -189,3 +189,59 @@ async def test_lot_size_falls_back_to_parameter_when_row_value_is_invalid(tmp_pa
         strike_interval=50, lot_size=75,
     )
     assert contract.lot_size == 75  # Fell back to the config parameter.
+
+
+# --- Phase 17I.5/17I.6 — additive futures resolution -----------------------
+# `_REAL_ROWS`' one NIFTY future (option_type "XX", NSE:NIFTY26JULFUT, expiry
+# = _FAR_EXPIRY_EPOCH) is already present above -- these tests exercise the
+# new additive read path against it, without touching `_rows_for()` or
+# `resolve_atm()`'s own behavior (already proven unchanged by
+# `test_excludes_futures_rows`, still passing).
+_FAR_EXPIRY_ISO = datetime.fromtimestamp(_FAR_EXPIRY_EPOCH, tz=timezone.utc).date().isoformat()
+
+
+@pytest.mark.asyncio
+async def test_resolve_nearest_future_returns_the_real_symbol_and_expiry(master):
+    symbol, expiry_iso, lot_size = await master.resolve_nearest_future("NIFTY")
+    assert symbol == "NSE:NIFTY26JULFUT"
+    assert expiry_iso == _FAR_EXPIRY_ISO
+    assert lot_size == 65  # Live exchange lot size, same column as options.
+
+
+@pytest.mark.asyncio
+async def test_futures_rows_are_discoverable_without_touching_option_rows(master):
+    """The additive futures read path must not leak into, or be affected
+    by, `_rows_for()`'s own CE/PE-only cache -- the two must stay
+    completely independent."""
+    futures_rows = master._futures_rows_for("NIFTY")  # noqa: SLF001
+    assert len(futures_rows) == 1
+    assert futures_rows[0].option_type == "XX"
+    assert futures_rows[0].symbol == "NSE:NIFTY26JULFUT"
+
+    # Option parsing remains completely unaffected.
+    option_rows = master._rows_for("NIFTY")  # noqa: SLF001
+    assert all(r.option_type in ("CE", "PE") for r in option_rows)
+
+
+@pytest.mark.asyncio
+async def test_resolve_nearest_future_unknown_underlying_raises_lookup_error(master):
+    with pytest.raises(LookupError):
+        await master.resolve_nearest_future("FINNIFTY")
+
+
+@pytest.mark.asyncio
+async def test_resolve_nearest_future_picks_soonest_of_multiple_expiries(tmp_path):
+    """Mirrors `test_prefers_nearest_expiry_over_later_one_at_same_strike`'s
+    own guarantee for options -- multiple futures months listed must
+    resolve to the soonest one, not just the first row in the file."""
+    near = _NOW + 5 * 86400
+    far = _NOW + 33 * 86400
+    rows = [
+        f"101126072861099,NIFTY 33 Day FUT,11,65,0.1,,0915-1530|1815-1915:,2026-07-03,{far},NSE:NIFTY26FARFUT,10,11,61099,NIFTY,26000,-1.0,XX,101000000026000,None,0,0.0",
+        f"101126072861098,NIFTY 5 Day FUT,11,65,0.1,,0915-1530|1815-1915:,2026-07-03,{near},NSE:NIFTY26NEARFUT,10,11,61098,NIFTY,26000,-1.0,XX,101000000026000,None,0,0.0",
+    ]
+    im = InstrumentMaster(tmp_path, __import__("logging").getLogger("test"))
+    im._cache_file.write_text("\n".join(rows))  # noqa: SLF001
+
+    symbol, expiry_iso, lot_size = await im.resolve_nearest_future("NIFTY")
+    assert symbol == "NSE:NIFTY26NEARFUT"

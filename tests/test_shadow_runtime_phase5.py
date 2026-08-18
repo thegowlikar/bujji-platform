@@ -272,7 +272,16 @@ def test_artifact_has_no_decision_or_trade_or_pnl_fields():
         "execution_result", "order",
     }
     assert not (field_names & forbidden), f"forbidden fields found: {field_names & forbidden}"
+    # Phase 15C additive field: recovery_report (a RecoveryReport.to_dict()
+    # or None) -- observational-only, describes WHAT WAS RECOVERED from a
+    # prior session, never a decision/trade/pnl field itself.
+    # Phase 15D additive field: observation_memory_recovery_report --
+    # same observational-only nature as recovery_report above.
     assert field_names == {
         "session_id", "start_time", "end_time", "observations_count",
         "data_quality_summary", "liquidity_summary", "errors", "runtime_health",
+        "recovery_report", "observation_memory_recovery_report",
+        # Phase 15E additive field: premium_behaviour_recovery_report --
+        # same observational-only nature as the two fields above.
+        "premium_behaviour_recovery_report",
     }

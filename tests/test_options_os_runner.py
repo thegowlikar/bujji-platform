@@ -44,6 +44,22 @@ def base_config(tmp_path, trend=None, volatility=None, bhavcopy=REAL_BHAVCOPY):
             "proposed_trade_effect": {"additional_margin": 10000.0, "additional_max_loss": 5000.0},
         },
         "exit_policy": {"profit_target_fraction": 0.5, "max_loss_fraction": 1.0, "mandatory_exit_time": None},
+        # BOUNDED, AND INDEPENDENT OF THE TIME OF DAY. Without this block the
+        # runner falls back to its PRODUCTION defaults -- cycle_interval_
+        # seconds=300, max_cycles=78 -- and `_position_management` sleeps on
+        # the real clock. The loop only exits early when now >= monitor_until
+        # (15:15 by default), so these tests passed in seconds all afternoon
+        # and evening, then hung for 6h30m the moment a run started after
+        # midnight: at 04:47 IST `04:47 >= 15:15` is False, so all 78 cycles
+        # sleep for real. Observed 2026-08-18, a full-suite run stuck at 62%.
+        #
+        # cycle_interval_seconds=0 makes the loop skip its sleep entirely
+        # (`if interval_s > 0`), so the cap alone bounds it. Two passes is
+        # enough to prove the loop runs more than once without asserting
+        # anything about wall-clock duration.
+        "position_management": {
+            "cycle_interval_seconds": 0, "monitor_until": "23:59:59", "max_cycles": 2,
+        },
         "capital_snapshot": {},
         "providers": {
             "market_data": {"type": "replay_chain", "bhavcopy_path": bhavcopy},
@@ -144,10 +160,18 @@ def test_runner_full_lifecycle_no_trade_day_completes_cleanly(tmp_path):
 
 
 def test_runner_full_lifecycle_real_regime_reaches_entry_window(tmp_path):
-    """Documents the real, pre-existing D.2 empty-book gap (RISK_INVALID
-    on a genuinely empty book) rather than papering over it -- session #1
-    against a fresh journal is expected to block at PORTFOLIO, and the
-    runner must still complete cleanly (exit 0) when that happens."""
+    """Session #1 against a fresh journal now reaches a REAL FILL.
+
+    This previously documented the D.2 empty-book gap: an empty book was
+    aggregated with concentration figures left None, which
+    `classify_portfolio_risk` read as INSUFFICIENT_PORTFOLIO_RISK_DATA ->
+    RISK_INVALID -> PIPELINE_BLOCKED. That inverted the risk model at the
+    safest possible moment (a portfolio holding nothing ranked more
+    dangerous than a concentrated one) and made the first trade of any
+    fresh journal unplaceable. Fixed in `portfolio_risk_aggregator` by
+    distinguishing "genuinely zero" from "unknown"; every fail-closed
+    path for a NON-empty book is unchanged (see
+    tests/test_portfolio_risk_empty_book.py)."""
     import logging
     config = base_config(tmp_path, trend="SIDEWAYS", volatility="LOW_VOL")
     logger = logging.getLogger("test-options-os-runner")
@@ -155,6 +179,7 @@ def test_runner_full_lifecycle_real_regime_reaches_entry_window(tmp_path):
     summary = r.run()
     assert summary["strategy_selected"] == "IRON_CONDOR"
     assert summary["entry_allowed"] is True
+    assert summary["entry_filled"] is True, "empty-book blocker regressed: session #1 no longer fills"
     from bujji.production_runtime.trading_session_governor.session_trading_state import TradingSessionState
     assert r._governor.state == TradingSessionState.SESSION_COMPLETE
 

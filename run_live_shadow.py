@@ -20,6 +20,15 @@ touched, so place_order/modify_order/cancel_order/get_open_positions/
 get_order are structurally impossible to reach, independent of anything
 in this script.
 
+DEPRECATION NOTICE (Phase 19.14.1): this is a manual/legacy launcher,
+separate from the authoritative daily runtime
+(`run_daily_intelligence_session.py`, Phase 19.11-19.14, normally
+systemd-timer-driven). `--live` mode now refuses to start
+(`bujji.shadow_runtime.manual_entrypoint_guard`) if the authoritative
+runtime currently owns `data/daily_intelligence.lock`, to avoid a
+duplicate capture/broker session -- see Phase 19.14.0's own audit
+finding and Phase 19.14.1's implementation doc.
+
 Real, disclosed limitation (unchanged since Series 108's own audit): there
 is no live option-CHAIN STRUCTURE feed (which strikes/expiries exist) --
 Bhavcopy is only published end-of-day. `--live` mode therefore loads the
@@ -245,6 +254,22 @@ def _run_live(args) -> int:
     log = logging.getLogger("bujji.run_live_shadow")
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s",
                         handlers=[logging.StreamHandler(), logging.FileHandler(args.log_file)])
+
+    # Phase 19.14.1 -- refuse to start if the authoritative daily
+    # runtime (`run_daily_intelligence_session.py`, normally systemd-
+    # timer-driven) currently owns the shared lock. Checked before the
+    # pre-market checklist even begins -- before any broker connection
+    # -- per Phase 19.14.0's own audit finding that this script shares
+    # no lock with the daily runtime today.
+    from bujji.shadow_runtime.manual_entrypoint_guard import (
+        AuthoritativeRuntimeActiveError,
+        refuse_if_authoritative_runtime_active,
+    )
+    try:
+        refuse_if_authoritative_runtime_active()
+    except AuthoritativeRuntimeActiveError as exc:
+        print(f"REFUSING TO START: {exc}")
+        return 1
 
     print(render_shadow_banner())
     print("\n=== Sprint 114 Deliverable 1: Pre-Market Readiness Checklist ===")

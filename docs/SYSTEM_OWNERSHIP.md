@@ -1,16 +1,29 @@
 # Bujji System Ownership
 
-This repository contains **two unrelated trading systems** plus one
-abandoned intermediate generation. This document is the canonical map of
-which files belong to which system, and — critically — which files are
-**shared infrastructure that must never be deleted or modified** when
-cleaning up either system.
+This repository contains **two unrelated trading systems**, one abandoned
+intermediate generation, and (added Phase 20.14) one evidence-grounded shadow
+DECISION intelligence lineage that never trades. This document is the
+canonical map of which files belong to which system, and — critically —
+which files are **shared infrastructure that must never be deleted or
+modified** when cleaning up any of them.
 
 Verified by direct import/dependency audit (grep + manual call-path tracing)
-against commit `a4a6220` on branch `v1.0-shadow`. Re-verify this document if
-either system's structure changes materially.
+against commit `a4a6220` on branch `v1.0-shadow` (generations 1–3); the
+fourth generation's own audit trail is `docs/PHASE_20_14_SHADOW_DECISION_
+CAMPAIGN_OPERATIONALIZATION_REPORT.md`. Re-verify this document if any
+system's structure changes materially.
 
-## The three generations
+**Known gap, disclosed rather than silently left implicit:** the Phase
+19.x Intelligence Foundation (`MarketRealitySnapshot → MarketIntelligenceSnapshot
+→ DecisionContext → DecisionIntelligenceSnapshot → MarketPhenomena → MarketStateGraph`,
+`bujji.shadow_runtime.daily_session.DailySessionRuntime`, `bujji-daily-
+intelligence.service`) is not tracked as its own numbered generation in this
+document, even though it is a real, distinct lineage the fourth generation
+below depends on (for `DailySessionRuntime` only, reused, never modified).
+Documenting it properly is out of this phase's own scope; noted here so it
+is not mistaken for an oversight.
+
+## The four generations
 
 1. **Legacy ORB-VWAP ATM Seller** — the original, previously-deployed
    strategy bot. **DEPRECATED.** Systemd unit: `bujji-orb-vwap-legacy.service`
@@ -30,6 +43,17 @@ either system's structure changes materially.
    No automated entrypoint exists yet — reserved future systemd unit name:
    **`bujji-options-os.service`** (not yet created; create only once a real
    automated driver/entrypoint exists — do not stand up an empty unit).
+4. **Cycle-1 Shadow Decision Intelligence** (Phase 20.0–20.14, the Bujji OS
+   v1.0 roadmap's own lineage) — evidence-grounded, real-data-validated
+   market intelligence and decision observation, running continuously
+   against real NSE sessions. Systemd unit: **`bujji-shadow-decision-
+   campaign.service`** + **`bujji-shadow-decision-campaign.timer`** (Phase
+   20.14, installed separately from both `bujji-daily-intelligence.service`
+   and the reserved `bujji-options-os.service` — deliberate, disclosed
+   naming distinction, per this document's own established
+   disclosed-collision convention). **Never places an order, never
+   modifies a position, never executes a strategy** — every broker call is
+   read-only and passes through `bujji.broker.guard.disable_live_execution()`.
 
 ## Legacy ORB-VWAP ownership
 
@@ -62,6 +86,30 @@ either system's structure changes materially.
 | Lifecycle management | `bujji/production_runtime/position_lifecycle_runtime.py`, `position_reality_registry.py` |
 | Observability | `bujji/shadow_observatory/*` |
 | Tests | `tests/production_runtime/*`, `tests/test_trade_lifecycle_executor.py`, `tests/test_trading_brain_runtime.py`, and the rest of the F.0–V1.1 test suite |
+
+## Cycle-1 Shadow Decision Intelligence ownership
+
+| Concern | Files |
+|---|---|
+| Systemd unit | `bujji-shadow-decision-campaign.service` + `.timer` (Phase 20.14) |
+| Deployment template | `deploy/bujji-shadow-decision-campaign.service`, `deploy/bujji-shadow-decision-campaign.timer` |
+| Entrypoint | `scripts/run_phase20_13_live_entrypoint.py` (Phase 20.13, extended Phase 20.14 with `ProcessLock`/`MarketCalendar`) |
+| Outer lifecycle (reused, not owned) | `bujji.shadow_runtime.daily_session.DailySessionRuntime` (Phase 19.11 — shared with generation 4's own Phase 19.x lineage; see the disclosed gap note above) |
+| Process safety | `bujji.core.process_lock.ProcessLock` at **`data/shadow_decision_campaign.lock`** (dedicated — never `data/daily_intelligence.lock`) |
+| Calendar awareness | `bujji.market_calendar.MarketCalendar` (reused, unmodified) |
+| Market Intelligence Core | `bujji/mic_v0/*` (Phase 20.1) |
+| Strategy Intelligence | `bujji/strategy_intelligence/*` (Phase 20.5) |
+| Opportunity/Ranking/Capital/Portfolio | `bujji/opportunity_intelligence/*`, `bujji/opportunity_ranking/*`, `bujji/capital_intelligence/*`, `bujji/opportunity_portfolio/*` (Phase 20.6–20.9) |
+| Decision Orchestration | `bujji/decision_orchestration/*` (Phase 20.10) |
+| Shadow observation/collection | `bujji/shadow_decision_runtime/*`, `bujji/shadow_market_campaign/*`, `bujji/live_shadow_runner/*` (Phase 20.11–20.14) |
+| Broker (read-only leg) | `bujji.broker.fyers.FyersBroker`, wrapped by `bujji.broker.guard.disable_live_execution()` — same shared broker files as generations 1/3 below, never a new broker implementation |
+| Tests | `tests/test_shadow_decision_runtime.py`, `tests/test_shadow_market_campaign.py`, `tests/test_live_shadow_runner.py`, `tests/test_live_shadow_runner_continuity.py`, `tests/test_phase20_14_entrypoint_wiring.py` |
+
+**Forbidden, structurally enforced:** order placement, capital allocation,
+broker execution, autonomous trading. `disable_live_execution()` stays on
+every broker instance this generation constructs until a future, explicit,
+separately-scoped phase removes it — see `docs/BUJJI_OS_V1_INTERFACE_MAP.md`
+§4 for the exact gating criterion.
 
 ## Shared infrastructure — DO NOT DELETE, DO NOT MOVE, DO NOT MODIFY as part of ORB-VWAP cleanup
 

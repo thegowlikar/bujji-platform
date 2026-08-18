@@ -19,13 +19,22 @@ adjacent module in this codebase.
 """
 from __future__ import annotations
 
-MARKET_OBSERVATION_VERSION = "1.0.0"
+# Bumped 1.0.0 -> 1.1.0 in Phase 17E: MARKET_DEPTH (below) is a new
+# observation domain a 1.0.0-era consumer cannot be assumed to
+# understand, so new consumers must opt in explicitly rather than
+# silently receive a type they have no handling for.
+MARKET_OBSERVATION_VERSION = "1.1.0"
 
 # ---------------------------------------------------------------------------
 # Schema versions this module recognizes as compatible. Adding a new
 # recognized version is a deliberate, reviewed change, never inferred.
+#
+# 1.0.0 REMAINS RECOGNIZED. The 1.1.0 bump adds a domain; it removes and
+# reshapes nothing, so every record written under 1.0.0 stays valid and
+# readable. History is never invalidated by a version bump -- the bump
+# gates new consumers, not old facts.
 # ---------------------------------------------------------------------------
-RECOGNIZED_SCHEMA_VERSIONS = ("1.0.0",)
+RECOGNIZED_SCHEMA_VERSIONS = ("1.0.0", "1.1.0")
 
 # ---------------------------------------------------------------------------
 # ObservationType -- the 17 observation domains named in MOF v1
@@ -48,6 +57,11 @@ TYPE_CROSS_ASSET = "CROSS_ASSET"
 TYPE_MACRO_CALENDAR = "MACRO_CALENDAR"
 TYPE_TIME_SESSION = "TIME_SESSION"
 TYPE_CORPORATE_EVENT = "CORPORATE_EVENT"
+# Added in Phase 17E (schema 1.1.0). The order-book domain: bid/ask
+# ladders and the open-interest field that rides with them. Confirmed
+# live 2026-08-12 as the ONLY FYERS endpoint carrying futures OI -- the
+# quotes/ltp and optionchain endpoints do not return it for futures.
+TYPE_MARKET_DEPTH = "MARKET_DEPTH"
 TYPE_UNKNOWN = "UNKNOWN"
 
 ALL_OBSERVATION_TYPES = (
@@ -67,6 +81,7 @@ ALL_OBSERVATION_TYPES = (
     TYPE_MACRO_CALENDAR,
     TYPE_TIME_SESSION,
     TYPE_CORPORATE_EVENT,
+    TYPE_MARKET_DEPTH,
     TYPE_UNKNOWN,
 )
 

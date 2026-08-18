@@ -183,18 +183,25 @@ def test_entry_path_healthy_fills_and_transitions_to_position_active(tmp_path, c
     assert root.runtime_state_machine.state == RuntimeState.POSITION_ACTIVE
 
 
-def test_empty_book_first_trade_of_session_is_blocked_at_portfolio(tmp_path, chain, spot):
-    # Documents the pre-existing D.2 gap (flagged during Gate D.6's own
-    # audit): classify_portfolio_risk() returns RISK_INVALID for a
-    # genuinely empty book, so the very first trade of a session is
-    # blocked at PORTFOLIO even though nothing is actually wrong. Not
-    # fixed here -- F.1 only surfaces it via the runtime's own trace.
+def test_empty_book_first_trade_of_session_now_fills(tmp_path, chain, spot):
+    # The D.2 gap this test used to document is FIXED. It previously read:
+    # "classify_portfolio_risk() returns RISK_INVALID for a genuinely
+    # empty book, so the very first trade of a session is blocked at
+    # PORTFOLIO even though nothing is actually wrong. Not fixed here."
+    #
+    # That was a characterization of a known defect, not a specification:
+    # an empty book carries ZERO concentration risk, so ranking it more
+    # dangerous than a concentrated one inverted the risk model at the
+    # safest possible moment and made the first trade of every fresh
+    # journal unplaceable. aggregate_portfolio_risk() now distinguishes
+    # "genuinely zero" from "unknown". Every fail-closed path for a
+    # NON-empty book is unchanged -- see tests/test_portfolio_risk_empty_book.py.
     root, journal = make_root(tmp_path)
     runtime = TradingBrainRuntime(root)
     result = runtime.process_entry_cycle(chain=chain, spot=spot, **cycle_kwargs())
     assert result.proposal.constructed is True
-    assert result.governor_result.blocking_stage == "PORTFOLIO"
-    assert result.filled is False
+    assert result.governor_result.blocking_stage != "PORTFOLIO"
+    assert result.filled is True
 
 
 def test_no_signal_path_unsupported_family_fails_closed(tmp_path, chain, spot):

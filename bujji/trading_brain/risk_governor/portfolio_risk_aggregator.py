@@ -172,7 +172,34 @@ def aggregate_portfolio_risk(
     total_max_loss = None
     largest_position_concentration = None
     strategy_concentration = None
-    if risk_by_position_group_id is not None and active_groups:
+    if risk_by_position_group_id is not None and not active_groups:
+        # EMPTY BOOK. Concentration across zero positions is definitionally
+        # ZERO, not unknown -- there is nothing to be concentrated in.
+        #
+        # Previously this branch did not exist, so an empty book fell
+        # through with all three figures left None, and
+        # `classify_portfolio_risk` read that None as
+        # INSUFFICIENT_PORTFOLIO_RISK_DATA -> RISK_INVALID -> the whole
+        # pipeline BLOCKED. That inverted the risk model at exactly the
+        # safest moment: a portfolio holding nothing was classified more
+        # dangerous than one holding a concentrated position, and the
+        # first trade of a fresh journal could never be placed.
+        #
+        # This distinguishes "genuinely zero" from "unknown"; it does NOT
+        # loosen the fail-closed path. When active groups DO exist, a
+        # missing or negative risk entry still raises below, exactly as
+        # before -- and a caller that supplies no risk map at all
+        # (`risk_by_position_group_id is None`) still leaves these None
+        # and is still correctly classified RISK_INVALID. Zero is only
+        # ever asserted when the caller affirmatively said "here is the
+        # risk map, and there are no positions in it".
+        #
+        # Mirrors this function's own existing zero-risk handling for the
+        # total_max_loss == 0 case a few lines below.
+        total_max_loss = 0.0
+        largest_position_concentration = 0.0
+        strategy_concentration = {}
+    elif risk_by_position_group_id is not None and active_groups:
         group_risks = {}
         for group in active_groups:
             risk = risk_by_position_group_id.get(group.position_group_id)

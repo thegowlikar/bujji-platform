@@ -52,8 +52,9 @@ from __future__ import annotations
 import math
 from typing import Optional
 
-from ..core.clock import now_ist
 from ..core.models import Candle
+from .context import IntelligenceContext
+from .evidence import wrap_evidence
 from .models import DataQuality, RegimeReading, RegimeType
 
 MIN_CANDLES = 6  # 30 minutes at 5-min candles -- below this, refuse to guess.
@@ -72,7 +73,7 @@ class RegimeBrain:
     to trade -- purely an observation, per the Market Intelligence Core's
     first principle."""
 
-    def analyze(self, candles: list[Candle]) -> RegimeReading:
+    def analyze(self, candles: list[Candle], context: IntelligenceContext) -> RegimeReading:
         candles = sorted(candles, key=lambda c: c.timestamp)
         n = len(candles)
 
@@ -83,7 +84,7 @@ class RegimeBrain:
                 data_quality=DataQuality.INSUFFICIENT,
                 reason=f"insufficient_data: {n} candle(s), need >= {MIN_CANDLES}",
                 candles_used=n,
-                as_of=now_ist(),
+                as_of=context.as_of_time,
             )
 
         closes = [c.close for c in candles]
@@ -108,9 +109,10 @@ class RegimeBrain:
             confidence=confidence,
             data_quality=DataQuality.SUFFICIENT,
             evidence=evidence,
+            evidence_lineage=wrap_evidence(evidence, context=context),
             reason=reason,
             candles_used=n,
-            as_of=now_ist(),
+            as_of=context.as_of_time,
         )
 
     # ------------------------------------------------------------------ #

@@ -55,6 +55,43 @@ class PartialFillConfig:
     fill_ratio: Optional[float] = None       # None = always attempt a full fill.
 
 
+def _reference_price_for_side(snapshot, side: str) -> float:
+    """The price this order actually crosses to: the ASK for a BUY, the
+    BID for a SELL. Returns `last_price` when the relevant side is not
+    quoted -- an absent quote is never approximated from the other side,
+    which would invent a spread that was not observed.
+
+    A crossed or inverted book (bid > ask) is left exactly as supplied:
+    this function reports what the caller observed, and inventing a
+    "corrected" mid here would hide a real data-quality problem behind a
+    plausible number.
+    """
+    if side == "BUY" and snapshot.ask is not None:
+        return snapshot.ask
+    if side == "SELL" and snapshot.bid is not None:
+        return snapshot.bid
+    return snapshot.last_price
+
+
+def _depth_impact_multiplier(fill_quantity: int, available_depth) -> float:
+    """How much worse the fill gets for consuming more than top-of-book.
+
+    Returns 1.0 (no change) when depth is unknown or the order fits
+    inside it -- an unknown book is never penalised on a guess. Beyond
+    that, impact scales linearly with how many times over the available
+    depth the order is: 2x the depth pays 2x the slippage.
+
+    MODELLED, NOT MEASURED -- deliberately the simplest defensible shape,
+    in the same disclosed spirit as execution_profiles' own
+    CALIBRATION_PENDING figures. Its purpose is to stop a strategy that
+    is unfillable at real size from scoring identically to one that is
+    genuinely liquid; it is not a claim about true market impact.
+    """
+    if not available_depth or available_depth <= 0 or fill_quantity <= available_depth:
+        return 1.0
+    return fill_quantity / float(available_depth)
+
+
 class IllegalFillSimulationInputError(Exception):
     """Raised on a structurally impossible input -- never silently
     coerced."""
@@ -120,8 +157,33 @@ class FillSimulator:
                 rejection_reason="ZERO_FILL_QUANTITY",
             )
 
-        slippage_delta = SlippageCalculator.compute(snapshot.last_price, side, slippage_config, snapshot.volatility)
-        fill_price = SlippageCalculator.apply(snapshot.last_price, side, slippage_config, snapshot.volatility)
+        # Fill against the side of the book the order actually crosses:
+        # a BUY lifts the ASK, a SELL hits the BID. Previously both sides
+        # filled at the same `last_price`, so a round trip cost nothing --
+        # the spread, which is the dominant real execution cost on the
+        # illiquid OTM wings of an IRON_CONDOR/IRON_FLY, was invisible.
+        # `MarketSnapshot.bid`/`.ask` already existed and were read by
+        # nothing at all.
+        #
+        # Falls back to `last_price` when a real quote is absent, so any
+        # caller that supplies no bid/ask keeps byte-identical behaviour.
+        # Slippage is then applied ON TOP of the correct side -- the two
+        # model different costs (crossing the spread vs. adverse impact)
+        # and must not substitute for one another.
+        reference_price = _reference_price_for_side(snapshot, side)
+        base_delta = SlippageCalculator.compute(reference_price, side, slippage_config, snapshot.volatility)
+        # Size matters. `available_depth` already existed on MarketSnapshot
+        # and was read by nothing, so a 1-lot and a 500-lot order on the
+        # same thin OTM wing filled at the identical price. For a campaign
+        # whose purpose is collecting strategy evidence that is actively
+        # misleading: a structure that is unfillable at real size looks
+        # exactly as good as one that is not.
+        slippage_delta = base_delta * _depth_impact_multiplier(fill_quantity, snapshot.available_depth)
+        # Same formula SlippageCalculator.apply() uses -- applied here
+        # rather than via apply() so the depth-scaled delta is the one
+        # that reaches the price (apply() would recompute the base).
+        fill_price = (reference_price + slippage_delta if side == "BUY"
+                      else reference_price - slippage_delta)
 
         if fill_quantity >= requested_qty:
             status, stage = OrderStatus.FILLED.value, ExecutionStage.FILLED

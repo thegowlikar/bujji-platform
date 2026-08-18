@@ -21,3 +21,19 @@ class ShadowSessionArtifact:
     liquidity_summary: Optional[Dict[str, int]]
     errors: Tuple[str, ...]
     runtime_health: Dict[str, Any]
+    # Phase 15C -- Runtime Recovery Integration. None when recovery was
+    # not requested for this run (regime_memory_event_store_path unset);
+    # a real RecoveryReport.to_dict() when it was. Defaulted so every
+    # pre-Phase-15C caller/test constructing this dataclass positionally
+    # or by keyword without this field keeps working unchanged.
+    recovery_report: Optional[Dict[str, Any]] = None
+    # Phase 15D -- Observation Memory Recovery. None when recovery was
+    # not requested (observation_memory_recovery_enabled=False, the
+    # default); a real RecoveryReport.to_dict() when it was. Kept as
+    # its own field, separate from `recovery_report` (regime memory),
+    # so existing Phase 15C callers/tests reading that field's shape
+    # are completely unaffected.
+    observation_memory_recovery_report: Optional[Dict[str, Any]] = None
+    # Phase 15E -- Premium Behaviour Recovery. Same defaulted, additive
+    # pattern as the two fields above.
+    premium_behaviour_recovery_report: Optional[Dict[str, Any]] = None

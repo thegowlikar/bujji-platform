@@ -426,3 +426,215 @@ async def test_get_vix_omits_prev_close_when_nonpositive_or_missing(config, logg
     }
     vix = await broker.get_vix()
     assert vix == {"level": 13.02}
+
+
+# --- get_futures_quote() + depth() OI cross-check -------------------------
+#
+# Phase 17B certification investigation (2026-08-12) found the 'ltp'/'quotes'
+# action's v-dict has NO 'oi' key at all for futures symbols (confirmed on
+# real NSE:NIFTY26AUGFUT data), while the SDK's 'depth' action DOES carry
+# real, live OI for the same symbol (oi=12645685, live-confirmed). These
+# tests cover the resulting two-call get_futures_quote() behavior: depth()
+# is called as a best-effort OI enrichment, never as a precondition for
+# returning a valid quote.
+
+def _futures_symbol_for_test():
+    from bujji.broker.fyers import _futures_symbol
+    return _futures_symbol("NIFTY")
+
+
+@pytest.mark.asyncio
+async def test_get_futures_quote_enriches_oi_via_depth(config, logger):
+    broker = RecordingFyers(_creds(config).broker, logger)
+    symbol = _futures_symbol_for_test()
+    broker.responses["ltp"] = {
+        "s": "ok",
+        "d": [{"n": symbol, "v": {"lp": 24428.0, "volume": 2493920}}],
+    }
+    broker.responses["depth"] = {
+        "d": {symbol: {"oi": 12645685, "pdoi": 12124000, "ltp": 24428.0}},
+        "s": "ok",
+    }
+    quote = await broker.get_futures_quote("NIFTY")
+    assert quote == {
+        "symbol": symbol, "ltp": 24428.0, "volume": 2493920, "oi": 12645685,
+    }
+    actions = [a for a, _ in broker.calls]
+    assert actions == ["ltp", "depth"]  # depth only called after a valid ltp.
+    _, depth_params = broker.calls[1]
+    assert depth_params["symbol"] == symbol
+    assert depth_params["ohlcv_flag"] == 1
+
+
+@pytest.mark.asyncio
+async def test_get_futures_quote_survives_depth_failure(config, logger):
+    """A depth() failure (network error, unexpected shape, etc.) must not
+    turn an otherwise-valid futures quote into None -- OI simply stays
+    unavailable, exactly like this method's behavior before depth() existed."""
+    broker = RecordingFyers(_creds(config).broker, logger)
+    symbol = _futures_symbol_for_test()
+    broker.responses["ltp"] = {
+        "s": "ok",
+        "d": [{"n": symbol, "v": {"lp": 24428.0, "volume": 2493920}}],
+    }
+
+    def _raise_depth():
+        raise RuntimeError("simulated network failure")
+
+    broker.responses["depth"] = _raise_depth
+    quote = await broker.get_futures_quote("NIFTY")
+    assert quote == {"symbol": symbol, "ltp": 24428.0, "volume": 2493920, "oi": None}
+
+
+@pytest.mark.asyncio
+async def test_get_futures_quote_survives_depth_missing_oi(config, logger):
+    broker = RecordingFyers(_creds(config).broker, logger)
+    symbol = _futures_symbol_for_test()
+    broker.responses["ltp"] = {
+        "s": "ok",
+        "d": [{"n": symbol, "v": {"lp": 24428.0, "volume": 2493920}}],
+    }
+    broker.responses["depth"] = {"d": {}, "s": "ok"}  # No row for our symbol.
+    quote = await broker.get_futures_quote("NIFTY")
+    assert quote["oi"] is None
+
+
+@pytest.mark.asyncio
+async def test_get_futures_quote_still_raises_authentication_error_from_depth(config, logger):
+    """An auth-classified error from the depth() call must still propagate --
+    unlike a generic failure, a dead token is a real signal that must not be
+    silently swallowed into 'oi unavailable'."""
+    from bujji.broker.errors import AuthenticationError
+    broker = RecordingFyers(_creds(config).broker, logger)
+    symbol = _futures_symbol_for_test()
+    broker.responses["ltp"] = {
+        "s": "ok",
+        "d": [{"n": symbol, "v": {"lp": 24428.0, "volume": 2493920}}],
+    }
+    broker.responses["depth"] = {"s": "error", "code": -8, "message": "Your token has expired"}
+    with pytest.raises(AuthenticationError):
+        await broker.get_futures_quote("NIFTY")
+
+
+@pytest.mark.asyncio
+async def test_get_futures_quote_never_calls_depth_without_a_valid_ltp(config, logger):
+    """depth() is an OI enrichment on top of a real quote -- it must not be
+    called at all when there's no valid quote to enrich."""
+    broker = RecordingFyers(_creds(config).broker, logger)
+    broker.responses["ltp"] = {"s": "ok", "d": []}
+    quote = await broker.get_futures_quote("NIFTY")
+    assert quote is None
+    actions = [a for a, _ in broker.calls]
+    assert "depth" not in actions
+
+
+# --- get_depth() -- raw pass-through, no fabrication -----------------------
+@pytest.mark.asyncio
+async def test_get_depth_returns_the_raw_row_unmodified(config, logger):
+    broker = RecordingFyers(_creds(config).broker, logger)
+    symbol = _futures_symbol_for_test()
+    broker.responses["depth"] = {
+        "d": {symbol: {"oi": 12645685, "pdoi": 12124000, "ltp": 24428.0}},
+        "s": "ok",
+    }
+    row = await broker.get_depth(symbol)
+    assert row == {"oi": 12645685, "pdoi": 12124000, "ltp": 24428.0}
+    actions = [a for a, _ in broker.calls]
+    assert actions == ["depth"]
+    _, params = broker.calls[0]
+    assert params["symbol"] == symbol
+    assert params["ohlcv_flag"] == 1
+
+
+@pytest.mark.asyncio
+async def test_get_depth_returns_none_when_symbol_has_no_row(config, logger):
+    broker = RecordingFyers(_creds(config).broker, logger)
+    symbol = _futures_symbol_for_test()
+    broker.responses["depth"] = {"d": {}, "s": "ok"}
+    assert await broker.get_depth(symbol) is None
+
+
+@pytest.mark.asyncio
+async def test_get_depth_never_invents_bids_or_asks_keys(config, logger):
+    """The raw row must pass through exactly as received -- get_depth()
+    must never add 'bids'/'asks' keys that weren't actually in the
+    response, since doing so would fabricate structure this codebase has
+    not live-verified."""
+    broker = RecordingFyers(_creds(config).broker, logger)
+    symbol = _futures_symbol_for_test()
+    broker.responses["depth"] = {"d": {symbol: {"oi": 100}}, "s": "ok"}
+    row = await broker.get_depth(symbol)
+    assert "bids" not in row
+    assert "asks" not in row
+
+
+@pytest.mark.asyncio
+async def test_get_depth_raises_authentication_error(config, logger):
+    from bujji.broker.errors import AuthenticationError
+    broker = RecordingFyers(_creds(config).broker, logger)
+    symbol = _futures_symbol_for_test()
+    broker.responses["depth"] = {"s": "error", "code": -8, "message": "Your token has expired"}
+    with pytest.raises(AuthenticationError):
+        await broker.get_depth(symbol)
+
+
+# --- get_option_chain_raw() -- raw pass-through, no fabrication --------
+@pytest.mark.asyncio
+async def test_get_option_chain_raw_returns_the_full_response_unmodified(config, logger):
+    broker = RecordingFyers(_creds(config).broker, logger)
+    broker.responses["optionchain"] = {
+        "s": "ok", "code": 200, "message": "",
+        "data": {
+            "optionsChain": [
+                {"symbol": "NSE:NIFTY50-INDEX", "strike_price": -1, "option_type": "",
+                 "ltp": 24243.1},
+                {"symbol": "NSE:NIFTY2672124100PE", "strike_price": 24100,
+                 "option_type": "PE", "oi": 17299295, "prev_oi": 10241300, "oich": 7057995},
+            ],
+        },
+    }
+    raw = await broker.get_option_chain_raw("NIFTY", strike_count=3)
+    # Every key from the canned response survives untouched -- nothing
+    # extracted, nothing renamed, nothing dropped.
+    assert raw == broker.responses["optionchain"]
+    action, params = broker.calls[0]
+    assert action == "optionchain"
+    assert params["symbol"] == "NSE:NIFTY50-INDEX"
+    assert params["strikecount"] == 3
+
+
+@pytest.mark.asyncio
+async def test_get_option_chain_raw_never_extracts_only_oi_fields(config, logger):
+    """The specific discipline this method exists to prove: unlike
+    get_option_chain(), it must not silently narrow the row down to
+    strike/option_type/oi -- every field FYERS sent (ltp, symbol, or
+    anything else) must still be present in the returned structure."""
+    broker = RecordingFyers(_creds(config).broker, logger)
+    broker.responses["optionchain"] = {
+        "s": "ok",
+        "data": {"optionsChain": [
+            {"symbol": "NSE:NIFTY2672124100CE", "strike_price": 24100,
+             "option_type": "CE", "oi": 3940820, "ltp": 187.35, "bid": 187.0, "ask": 187.7},
+        ]},
+    }
+    raw = await broker.get_option_chain_raw("NIFTY")
+    row = raw["data"]["optionsChain"][0]
+    assert row["ltp"] == 187.35
+    assert row["bid"] == 187.0
+    assert row["ask"] == 187.7
+
+
+@pytest.mark.asyncio
+async def test_get_option_chain_raw_returns_none_without_a_data_key(config, logger):
+    broker = RecordingFyers(_creds(config).broker, logger)
+    broker.responses["optionchain"] = {"s": "ok", "code": 200, "message": ""}
+    assert await broker.get_option_chain_raw("NIFTY") is None
+
+
+@pytest.mark.asyncio
+async def test_get_option_chain_raw_raises_authentication_error(config, logger):
+    from bujji.broker.errors import AuthenticationError
+    broker = RecordingFyers(_creds(config).broker, logger)
+    broker.responses["optionchain"] = {"s": "error", "code": -8, "message": "Your token has expired"}
+    with pytest.raises(AuthenticationError):
+        await broker.get_option_chain_raw("NIFTY")

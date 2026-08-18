@@ -17,10 +17,12 @@ from bujji.core.enums import Side
 from bujji.execution_reality.liquidity_aggregator import LiquidityHealthReading, compute_liquidity_health
 from bujji.execution_reality.liquidity_pairing_adapter import LegPair, LiquidityPairingAdapter, PairingError
 from bujji.execution_reality.models import DATA_QUALITY_LIVE_QUOTE, LegQuote
+from bujji.intelligence.context import IntelligenceContext
 from bujji.intelligence.liquidity_brain import LiquidityBrain
 from bujji.intelligence.models import DataQuality, LiquidityReading, SpreadTightness
 
 FIXED_NOW = datetime(2026, 8, 4, 9, 30, 0, tzinfo=timezone.utc)
+TEST_CONTEXT = IntelligenceContext(as_of_time=FIXED_NOW)
 
 
 def clock():
@@ -150,7 +152,7 @@ def test_pair_maps_correctly_onto_liquiditybrain_analyze():
     pair = adapter.pair([ce, pe], {"NIFTY25000CE": "body", "NIFTY25000PE": "body"})[0]
 
     brain = LiquidityBrain()
-    reading = brain.analyze(pair.ce_leg.bid, pair.ce_leg.ask, pair.pe_leg.bid, pair.pe_leg.ask)
+    reading = brain.analyze(pair.ce_leg.bid, pair.ce_leg.ask, pair.pe_leg.bid, pair.pe_leg.ask, context=TEST_CONTEXT)
 
     # Real LiquidityBrain output, unmodified signature, unmodified module.
     assert reading.ce_bid == 98.0 and reading.ce_ask == 100.0
