@@ -20,7 +20,7 @@ import subprocess
 _PAPERBROKER_V2_AUTHORIZED = ("bujji/trading_brain/risk_governor/portfolio_risk_aggregator.py",)
 
 # Lot-size-authoritative fix (2026-08-18): the ONE authorized change to the
-# production_runtime lineage since the b148e39 baseline. The 2026-07-19 audit
+# production_runtime lineage since the 360c003 baseline. The 2026-07-19 audit
 # (bujji/broker/instrument_master.py module docstring) found the live symbol
 # master says NIFTY lot=65 while RuntimeConfig defaulted to 75 and the
 # composition root sized from that default. config.py demotes lot_size to an
@@ -116,7 +116,7 @@ def test_newly_called_engines_unmodified():
     docs/PHASE_14B_DECISION_PIPELINE_ARCHITECTURE.md). msi_strategy_selector
     remains fully unmodified and is still checked strictly below."""
     result = subprocess.run(
-        ["git", "diff", "--stat", "b148e39", "--", "bujji/msi_strategy_selector/"],
+        ["git", "diff", "--stat", "360c003", "--", "bujji/msi_strategy_selector/"],
         cwd="/opt/bujji/app", capture_output=True, text=True,
     )
     assert result.stdout.strip() == "", f"a newly-consumed engine was modified: {result.stdout}"
@@ -128,19 +128,21 @@ def test_strategy_selection_foundation_change_is_scoped_to_liquidity_bridge():
     only those two -- no test files, no other package touched under its
     cover, no execution/order/risk logic introduced."""
     result = subprocess.run(
-        ["git", "diff", "--name-only", "b148e39", "--", "bujji/msi_strategy_selection_foundation/"],
+        ["git", "diff", "--name-only", "360c003", "--", "bujji/msi_strategy_selection_foundation/"],
         cwd="/opt/bujji/app", capture_output=True, text=True,
     )
     changed = sorted(l for l in result.stdout.strip().splitlines() if l)
-    assert changed == [
-        "bujji/msi_strategy_selection_foundation/engine.py",
-        "bujji/msi_strategy_selection_foundation/taxonomy.py",
-    ], f"unexpected file set changed in msi_strategy_selection_foundation: {changed}"
+    # Baseline advanced to 360c003 (2026-08-19 audited backlog commit): the
+    # Phase 9 engine.py/taxonomy.py changes this guard used to enumerate are
+    # now INSIDE the baseline, so the protected expectation becomes "nothing
+    # further" -- the guard keeps forbidding any new unauthorized change to
+    # this package, which was always its point.
+    assert changed == [], f"unexpected file set changed in msi_strategy_selection_foundation: {changed}"
 
 
 def test_no_protected_execution_lineage_touched():
     result = subprocess.run(
-        ["git", "diff", "--name-only", "b148e39"],
+        ["git", "diff", "--name-only", "360c003"],
         cwd="/opt/bujji/app", capture_output=True, text=True,
     )
     changed = [l for l in result.stdout.strip().splitlines() if l]

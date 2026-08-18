@@ -20,7 +20,7 @@ import subprocess
 _PAPERBROKER_V2_AUTHORIZED = ("bujji/trading_brain/risk_governor/portfolio_risk_aggregator.py",)
 
 # Lot-size-authoritative fix (2026-08-18): the ONE authorized change to the
-# production_runtime lineage since the b148e39 baseline. The 2026-07-19 audit
+# production_runtime lineage since the 360c003 baseline. The 2026-07-19 audit
 # (bujji/broker/instrument_master.py module docstring) found the live symbol
 # master says NIFTY lot=65 while RuntimeConfig defaulted to 75 and the
 # composition root sized from that default. config.py demotes lot_size to an
@@ -90,7 +90,7 @@ _PHASE14B_EXCEPTION = (
 
 def test_msi_consensus_and_decision_synthesis_engines_unmodified():
     result = subprocess.run(
-        ["git", "diff", "--stat", "b148e39", "--",
+        ["git", "diff", "--stat", "360c003", "--",
          "bujji/msi_consensus/", "bujji/msi_decision_synthesis/",
          "bujji/msi_market_direction/", "bujji/msi_market_structure/",
          "bujji/msi_price_structure/", "bujji/msi_participant_positioning/",
@@ -104,7 +104,7 @@ def test_msi_consensus_and_decision_synthesis_engines_unmodified():
 
 def test_no_decision_modules_beyond_consensus_and_synthesis_touched():
     result = subprocess.run(
-        ["git", "diff", "--name-only", "b148e39"],
+        ["git", "diff", "--name-only", "360c003"],
         cwd="/opt/bujji/app", capture_output=True, text=True,
     )
     changed = [l for l in result.stdout.strip().splitlines() if l]
@@ -135,7 +135,7 @@ def test_shadow_session_runner_and_broker_unchanged():
     )
     assert out == "", f"unexpected direct domain_view_adapter coupling: {out}"
     result = subprocess.run(
-        ["git", "diff", "--stat", "b148e39", "--", "bujji/broker/fyers.py"],
+        ["git", "diff", "--stat", "360c003", "--", "bujji/broker/fyers.py"],
         cwd="/opt/bujji/app", capture_output=True, text=True,
     )
     stat_line = result.stdout.strip()

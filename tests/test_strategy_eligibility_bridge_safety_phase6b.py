@@ -19,7 +19,7 @@ import subprocess
 _PAPERBROKER_V2_AUTHORIZED = ("bujji/trading_brain/risk_governor/portfolio_risk_aggregator.py",)
 
 # Lot-size-authoritative fix (2026-08-18): the ONE authorized change to the
-# production_runtime lineage since the b148e39 baseline. The 2026-07-19 audit
+# production_runtime lineage since the 360c003 baseline. The 2026-07-19 audit
 # (bujji/broker/instrument_master.py module docstring) found the live symbol
 # master says NIFTY lot=65 while RuntimeConfig defaulted to 75 and the
 # composition root sized from that default. config.py demotes lot_size to an
@@ -81,7 +81,7 @@ def test_no_ranking_preference_or_recommendation_identifiers_as_code():
 
 def test_strategy_eligibility_engine_unmodified():
     result = subprocess.run(
-        ["git", "diff", "--stat", "b148e39", "--", "bujji/msi_strategy_eligibility/"],
+        ["git", "diff", "--stat", "360c003", "--", "bujji/msi_strategy_eligibility/"],
         cwd="/opt/bujji/app", capture_output=True, text=True,
     )
     assert result.stdout.strip() == "", f"msi_strategy_eligibility was modified: {result.stdout}"
@@ -98,7 +98,7 @@ _PHASE14B_EXCEPTION = (
 
 def test_consensus_and_decision_synthesis_and_trade_thesis_unmodified():
     result = subprocess.run(
-        ["git", "diff", "--stat", "b148e39", "--",
+        ["git", "diff", "--stat", "360c003", "--",
          "bujji/msi_consensus/", "bujji/msi_decision_synthesis/", "bujji/msi_trade_thesis/",
          "bujji/market_state/domain_view_adapter.py", "bujji/market_state/trade_thesis_bridge.py"],
         cwd="/opt/bujji/app", capture_output=True, text=True,
@@ -110,7 +110,7 @@ def test_consensus_and_decision_synthesis_and_trade_thesis_unmodified():
 
 def test_no_forbidden_protected_package_touched():
     result = subprocess.run(
-        ["git", "diff", "--name-only", "b148e39"],
+        ["git", "diff", "--name-only", "360c003"],
         cwd="/opt/bujji/app", capture_output=True, text=True,
     )
     changed = [l for l in result.stdout.strip().splitlines() if l]
@@ -141,7 +141,7 @@ def test_shadow_session_runner_and_broker_unchanged():
     )
     assert out == "", f"unexpected direct strategy_eligibility_bridge coupling: {out}"
     result = subprocess.run(
-        ["git", "diff", "--stat", "b148e39", "--", "bujji/broker/fyers.py"],
+        ["git", "diff", "--stat", "360c003", "--", "bujji/broker/fyers.py"],
         cwd="/opt/bujji/app", capture_output=True, text=True,
     )
     stat_line = result.stdout.strip()

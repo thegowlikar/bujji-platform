@@ -66,7 +66,7 @@ def test_shadow_session_runner_diff_has_no_removed_code_only_docstring_wording()
         "reading = self._liquidity_brain.analyze(pair.ce_leg.bid, pair.ce_leg.ask, pair.pe_leg.bid, pair.pe_leg.ask)"
     )
     result = subprocess.run(
-        ["git", "diff", "b148e39", "--", "bujji/shadow_runtime/shadow_session_runner.py"],
+        ["git", "diff", "360c003", "--", "bujji/shadow_runtime/shadow_session_runner.py"],
         cwd="/opt/bujji/app", capture_output=True, text=True,
     )
     removed = [
@@ -92,7 +92,7 @@ def test_market_perception_enabled_defaults_to_false():
 
 def test_intelligence_runner_and_brains_classification_logic_untouched():
     """UPDATED, Phase 19.2.2: this guard originally asserted zero diff at
-    all against b148e39, back when this phase's predecessor treated the
+    all against 360c003, back when this phase's predecessor treated the
     brains as permanently read-only. Phase 19.2.2's own explicit mandate
     is to modify exactly runner.py + the six in-scope brains (clock
     injection + evidence lineage -- see
@@ -113,7 +113,7 @@ def test_intelligence_runner_and_brains_classification_logic_untouched():
         "bujji/intelligence/event_brain.py",
     )
     result = subprocess.run(
-        ["git", "diff", "b148e39", "--", *modified_files],
+        ["git", "diff", "360c003", "--", *modified_files],
         cwd="/opt/bujji/app", capture_output=True, text=True,
     )
     removed = [
@@ -127,7 +127,7 @@ def test_intelligence_runner_and_brains_classification_logic_untouched():
     assert removed_method_defs == [], f"a brain/runner method definition was removed: {removed_method_defs}"
 
     out_of_scope_result = subprocess.run(
-        ["git", "diff", "--stat", "b148e39", "--",
+        ["git", "diff", "--stat", "360c003", "--",
          "bujji/intelligence/premium_brain.py", "bujji/intelligence/behaviour_brain.py"],
         cwd="/opt/bujji/app", capture_output=True, text=True,
     )

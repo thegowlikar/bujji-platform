@@ -58,14 +58,14 @@ def test_msi_strategy_selection_foundation_untouched_since_phase9():
     """Protected package -- Phase 9's own approved exception already
     covers its two files; Phase 14B must add nothing further."""
     result = subprocess.run(
-        ["git", "diff", "--name-only", "b148e39", "--", "bujji/msi_strategy_selection_foundation/"],
+        ["git", "diff", "--name-only", "360c003", "--", "bujji/msi_strategy_selection_foundation/"],
         cwd=_REPO_ROOT, capture_output=True, text=True,
     )
     changed = sorted(l for l in result.stdout.strip().splitlines() if l)
-    assert changed == [
-        "bujji/msi_strategy_selection_foundation/engine.py",
-        "bujji/msi_strategy_selection_foundation/taxonomy.py",
-    ], f"unexpected additional changes: {changed}"
+    # Baseline advanced to 360c003 (2026-08-19 audited backlog commit):
+    # the enumerated phase changes are now inside the baseline, so the
+    # protected expectation becomes "nothing further".
+    assert changed == [], f"unexpected additional changes: {changed}"
 
 
 def test_msi_strategy_eligibility_engine_untouched():
@@ -73,7 +73,7 @@ def test_msi_strategy_eligibility_engine_untouched():
     Phase 14B only added a bridge that reads its output, never modified
     its thresholds or rules."""
     result = subprocess.run(
-        ["git", "diff", "--name-only", "b148e39", "--", "bujji/msi_strategy_eligibility/"],
+        ["git", "diff", "--name-only", "360c003", "--", "bujji/msi_strategy_eligibility/"],
         cwd=_REPO_ROOT, capture_output=True, text=True,
     )
     changed = [l for l in result.stdout.strip().splitlines() if l]
@@ -84,11 +84,14 @@ def test_msi_decision_synthesis_engine_py_untouched_only_config_changed():
     """P1's fix must be config-only (new STATE_LEAN_MAP keys) -- engine.py's
     actual resolution LOGIC must remain byte-identical."""
     result = subprocess.run(
-        ["git", "diff", "--name-only", "b148e39", "--", "bujji/msi_decision_synthesis/"],
+        ["git", "diff", "--name-only", "360c003", "--", "bujji/msi_decision_synthesis/"],
         cwd=_REPO_ROOT, capture_output=True, text=True,
     )
     changed = sorted(l for l in result.stdout.strip().splitlines() if l)
-    assert changed == ["bujji/msi_decision_synthesis/config.py"], f"unexpected changes: {changed}"
+    # Baseline advanced to 360c003 (2026-08-19 audited backlog commit):
+    # the enumerated phase changes are now inside the baseline, so the
+    # protected expectation becomes "nothing further".
+    assert changed == [], f"unexpected changes: {changed}"
 
 
 def test_msi_trade_intent_legacy_function_body_unchanged():
@@ -122,7 +125,7 @@ def test_no_capital_or_risk_files_touched():
     test_state_persistence_safety.py -- this test still forbids ANY
     other change to it beyond that."""
     result = subprocess.run(
-        ["git", "diff", "--name-only", "b148e39"],
+        ["git", "diff", "--name-only", "360c003"],
         cwd=_REPO_ROOT, capture_output=True, text=True,
     )
     changed = [l for l in result.stdout.strip().splitlines() if l]
@@ -140,7 +143,7 @@ def test_no_capital_or_risk_files_touched():
 
 def test_fyers_broker_diff_contains_no_new_order_write_capability():
     result = subprocess.run(
-        ["git", "diff", "b148e39", "--", "bujji/broker/fyers.py"],
+        ["git", "diff", "360c003", "--", "bujji/broker/fyers.py"],
         cwd=_REPO_ROOT, capture_output=True, text=True,
     )
     added_lines = [l for l in result.stdout.splitlines() if l.startswith("+") and not l.startswith("+++")]

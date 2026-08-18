@@ -101,7 +101,7 @@ def test_msi_trade_construction_still_byte_identical_to_baseline():
     import subprocess
     repo_root = Path(__file__).resolve().parent.parent
     result = subprocess.run(
-        ["git", "diff", "--name-only", "b148e39", "--", "bujji/msi_trade_construction/"],
+        ["git", "diff", "--name-only", "360c003", "--", "bujji/msi_trade_construction/"],
         cwd=repo_root, capture_output=True, text=True,
     )
     changed = [l for l in result.stdout.strip().splitlines() if l]

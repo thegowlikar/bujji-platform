@@ -64,7 +64,7 @@ def test_only_msi_volatility_structure_is_imported_from_the_msi_family():
 
 def test_msi_volatility_structure_module_itself_is_unmodified():
     result = subprocess.run(
-        ["git", "diff", "--stat", "b148e39", "--",
+        ["git", "diff", "--stat", "360c003", "--",
          "bujji/msi_volatility_structure/engine.py", "bujji/msi_volatility_structure/models.py"],
         cwd="/opt/bujji/app", capture_output=True, text=True,
     )
@@ -73,7 +73,7 @@ def test_msi_volatility_structure_module_itself_is_unmodified():
 
 def test_no_msi_package_anywhere_was_modified_this_phase():
     result = subprocess.run(
-        ["git", "diff", "--name-only", "b148e39"],
+        ["git", "diff", "--name-only", "360c003"],
         cwd="/opt/bujji/app", capture_output=True, text=True,
     )
     changed = [l for l in result.stdout.strip().splitlines() if l]

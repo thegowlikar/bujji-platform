@@ -352,7 +352,7 @@ def test_legacy_runtime_untouched():
     # 2026-08-18: it now carries the ONE authorized lot-size-authoritative
     # change (resolve the exchange lot size from the instrument master,
     # fail closed -- see the _LOT_SIZE_AUTHORITATIVE_AUTHORIZED exception in
-    # the b148e39 baseline guards and tests/test_lot_size_from_master.py,
+    # the 360c003 baseline guards and tests/test_lot_size_from_master.py,
     # which pins the new behaviour directly). runtime.py remains pinned
     # byte-for-byte.
     import subprocess

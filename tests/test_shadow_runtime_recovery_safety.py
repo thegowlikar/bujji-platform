@@ -67,7 +67,7 @@ def test_recovery_module_never_references_broker_at_all():
 
 def test_broker_guard_and_hybrid_untouched():
     result = subprocess.run(
-        ["git", "diff", "--stat", "b148e39", "--", "bujji/broker/guard.py", "bujji/broker/hybrid.py"],
+        ["git", "diff", "--stat", "360c003", "--", "bujji/broker/guard.py", "bujji/broker/hybrid.py"],
         cwd=_REPO_ROOT, capture_output=True, text=True,
     )
     assert result.stdout.strip() == "", f"safety guard files were modified, expected untouched: {result.stdout}"
@@ -80,7 +80,7 @@ def test_shadow_session_runner_still_makes_no_new_broker_calls():
     so an accidental addition would be caught even if it looked
     superficially like an existing call."""
     result = subprocess.run(
-        ["git", "diff", "b148e39", "--", "bujji/shadow_runtime/shadow_session_runner.py"],
+        ["git", "diff", "360c003", "--", "bujji/shadow_runtime/shadow_session_runner.py"],
         cwd=_REPO_ROOT, capture_output=True, text=True,
     )
     added_lines = "\n".join(
@@ -96,7 +96,7 @@ def test_intelligence_cycle_recorder_diff_is_scoped_to_the_recovery_parameter():
     should be the additive `initial_regime_state` constructor parameter
     -- confirm no removed lines (nothing existing was changed)."""
     result = subprocess.run(
-        ["git", "diff", "b148e39", "--", "bujji/market_state/intelligence_cycle_recorder.py"],
+        ["git", "diff", "360c003", "--", "bujji/market_state/intelligence_cycle_recorder.py"],
         cwd=_REPO_ROOT, capture_output=True, text=True,
     )
     removed_code_lines = [

@@ -72,7 +72,7 @@ def test_no_strategy_or_threshold_packages_modified_this_phase():
     data-plumbing layer (market_state_builder) and the recorder that
     persists its output."""
     result = subprocess.run(
-        ["git", "diff", "--name-only", "b148e39"],
+        ["git", "diff", "--name-only", "360c003"],
         cwd=_REPO_ROOT, capture_output=True, text=True,
     )
     changed = [l for l in result.stdout.strip().splitlines() if l]

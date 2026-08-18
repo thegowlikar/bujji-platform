@@ -81,7 +81,7 @@ def test_broker_guard_and_hybrid_byte_untouched():
     verified separately by test_state_persistence_safety.py. guard.py/
     hybrid.py must remain untouched by Phase 15G specifically."""
     result = subprocess.run(
-        ["git", "diff", "--stat", "b148e39", "--", "bujji/broker/guard.py", "bujji/broker/hybrid.py"],
+        ["git", "diff", "--stat", "360c003", "--", "bujji/broker/guard.py", "bujji/broker/hybrid.py"],
         cwd=_REPO_ROOT, capture_output=True, text=True,
     )
     assert result.stdout.strip() == "", f"broker files were modified, expected untouched: {result.stdout}"

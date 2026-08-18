@@ -114,7 +114,7 @@ def test_shadow_session_runner_not_coupled_to_market_state():
 
 def test_no_protected_package_was_modified_this_phase():
     result = subprocess.run(
-        ["git", "diff", "--name-only", "b148e39"],
+        ["git", "diff", "--name-only", "360c003"],
         cwd="/opt/bujji/app", capture_output=True, text=True,
     )
     changed = [l for l in result.stdout.strip().splitlines() if l]

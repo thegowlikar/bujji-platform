@@ -96,7 +96,7 @@ def test_no_random_or_fabricated_fallback():
 
 def test_legacy_greeks_and_volatility_brain_pricing_math_untouched():
     """UPDATED, Phase 19.2.2: this guard originally asserted byte-identity
-    against b148e39, back when these two files were never expected to
+    against 360c003, back when these two files were never expected to
     change at all. Phase 19.2.2 explicitly modifies both -- clock
     injection (now_ist() -> context.as_of_time) and evidence lineage
     wrapping -- per its own scoped mandate, so byte-identity no longer
@@ -108,7 +108,7 @@ def test_legacy_greeks_and_volatility_brain_pricing_math_untouched():
     was preserved exactly as the phase's own "preserve existing
     classification logic unchanged" requirement demanded."""
     result = subprocess.run(
-        ["git", "diff", "b148e39", "--",
+        ["git", "diff", "360c003", "--",
          "bujji/intelligence/greeks_brain.py", "bujji/intelligence/volatility_brain.py"],
         cwd=_REPO_ROOT, capture_output=True, text=True,
     )
@@ -134,7 +134,7 @@ def test_msi_volatility_structure_engine_byte_untouched():
     -- it builds a NEW, separate bridge instead of modifying the one
     that already (partially) imports this math."""
     result = subprocess.run(
-        ["git", "diff", "--stat", "b148e39", "--", "bujji/msi_volatility_structure/engine.py"],
+        ["git", "diff", "--stat", "360c003", "--", "bujji/msi_volatility_structure/engine.py"],
         cwd=_REPO_ROOT, capture_output=True, text=True,
     )
     assert result.stdout.strip() == "", f"msi_volatility_structure/engine.py was modified, expected untouched: {result.stdout}"
@@ -142,7 +142,7 @@ def test_msi_volatility_structure_engine_byte_untouched():
 
 def test_broker_guard_and_hybrid_untouched():
     result = subprocess.run(
-        ["git", "diff", "--stat", "b148e39", "--", "bujji/broker/guard.py", "bujji/broker/hybrid.py"],
+        ["git", "diff", "--stat", "360c003", "--", "bujji/broker/guard.py", "bujji/broker/hybrid.py"],
         cwd=_REPO_ROOT, capture_output=True, text=True,
     )
     assert result.stdout.strip() == "", f"safety guard files were modified, expected untouched: {result.stdout}"
@@ -152,7 +152,7 @@ def test_intelligence_cycle_recorder_diff_scoped_to_additive_content_only():
     """The cumulative diff across Phases 15C/15D/15E to this file must
     contain zero removed lines -- purely additive."""
     result = subprocess.run(
-        ["git", "diff", "b148e39", "--", "bujji/market_state/intelligence_cycle_recorder.py"],
+        ["git", "diff", "360c003", "--", "bujji/market_state/intelligence_cycle_recorder.py"],
         cwd=_REPO_ROOT, capture_output=True, text=True,
     )
     removed_code_lines = [

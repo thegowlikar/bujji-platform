@@ -77,7 +77,7 @@ def test_broker_guard_and_hybrid_and_paper_untouched_this_phase():
     legitimate change remains the Phase 15B one, already covered by its
     own dedicated exception in test_phase14b_safety.py."""
     result = subprocess.run(
-        ["git", "diff", "--stat", "b148e39", "--", "bujji/broker/guard.py", "bujji/broker/hybrid.py"],
+        ["git", "diff", "--stat", "360c003", "--", "bujji/broker/guard.py", "bujji/broker/hybrid.py"],
         cwd=_REPO_ROOT, capture_output=True, text=True,
     )
     assert result.stdout.strip() == "", f"safety guard files were modified, expected untouched: {result.stdout}"
@@ -85,7 +85,7 @@ def test_broker_guard_and_hybrid_and_paper_untouched_this_phase():
 
 def test_shadow_session_runner_diff_adds_no_new_broker_call():
     result = subprocess.run(
-        ["git", "diff", "b148e39", "--", "bujji/shadow_runtime/shadow_session_runner.py"],
+        ["git", "diff", "360c003", "--", "bujji/shadow_runtime/shadow_session_runner.py"],
         cwd=_REPO_ROOT, capture_output=True, text=True,
     )
     added_lines = "\n".join(
@@ -101,7 +101,7 @@ def test_intelligence_cycle_recorder_diff_scoped_to_additive_params_only():
     phases touched it) contains zero removed lines -- purely additive
     across both phases combined."""
     result = subprocess.run(
-        ["git", "diff", "b148e39", "--", "bujji/market_state/intelligence_cycle_recorder.py"],
+        ["git", "diff", "360c003", "--", "bujji/market_state/intelligence_cycle_recorder.py"],
         cwd=_REPO_ROOT, capture_output=True, text=True,
     )
     removed_code_lines = [
@@ -117,7 +117,7 @@ def test_market_state_builder_module_itself_untouched():
     must remain byte-for-byte untouched (recovery.py only calls its
     already-existing public constructor/process()/memory interface)."""
     result = subprocess.run(
-        ["git", "diff", "--stat", "b148e39", "--", "bujji/market_state_builder/market_state.py"],
+        ["git", "diff", "--stat", "360c003", "--", "bujji/market_state_builder/market_state.py"],
         cwd=_REPO_ROOT, capture_output=True, text=True,
     )
     assert result.stdout.strip() == "", f"market_state.py was modified, expected untouched: {result.stdout}"

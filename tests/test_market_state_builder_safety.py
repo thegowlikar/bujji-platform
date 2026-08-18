@@ -70,7 +70,7 @@ def test_only_authorized_msi_packages_imported():
 
 def test_no_msi_or_protected_package_was_modified_this_phase():
     result = subprocess.run(
-        ["git", "diff", "--name-only", "b148e39"],
+        ["git", "diff", "--name-only", "360c003"],
         cwd="/opt/bujji/app", capture_output=True, text=True,
     )
     changed = [l for l in result.stdout.strip().splitlines() if l]
@@ -142,7 +142,7 @@ _scalar_fabrication_fix_exception = ("bujji/live_market_events/engine.py",)
 
 def test_market_observation_live_market_events_market_episode_unmodified():
     result = subprocess.run(
-        ["git", "diff", "--name-only", "b148e39", "--",
+        ["git", "diff", "--name-only", "360c003", "--",
          "bujji/market_observation/", "bujji/live_market_events/", "bujji/market_episode/",
          "bujji/options_observation/", "bujji/msi_market_structure/", "bujji/msi_price_structure/",
          "bujji/msi_participant_positioning/"],

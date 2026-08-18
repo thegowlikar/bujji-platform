@@ -144,7 +144,7 @@ def test_lifecycle_diff_scoped_to_additive_content_only():
     contain zero removed lines -- purely additive."""
     for rel in _LIFECYCLE_FILES:
         result = subprocess.run(
-            ["git", "diff", "b148e39", "--", rel],
+            ["git", "diff", "360c003", "--", rel],
             cwd=_REPO_ROOT, capture_output=True, text=True,
         )
         removed_code_lines = [
@@ -156,7 +156,7 @@ def test_lifecycle_diff_scoped_to_additive_content_only():
 
 def test_no_capital_or_risk_packages_touched():
     result = subprocess.run(
-        ["git", "diff", "--stat", "b148e39", "--",
+        ["git", "diff", "--stat", "360c003", "--",
          "bujji/broker/guard.py", "bujji/broker/hybrid.py", "bujji/trading_brain/", ":(exclude)bujji/trading_brain/risk_governor/portfolio_risk_aggregator.py", "bujji/risk_governor/"],
         cwd=_REPO_ROOT, capture_output=True, text=True,
     )

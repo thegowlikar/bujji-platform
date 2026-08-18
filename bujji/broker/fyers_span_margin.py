@@ -9,7 +9,7 @@ Live Certification"; docs/AUDIT_LOG.md Pass 8) but is hardcoded to a 2-leg
 CE+PE straddle. This module is the bridge: the certified endpoint mechanics,
 generalized to the whole-book leg array, shaped as the `HttpCaller` Gate C
 already expects. It lives in `bujji/broker/` because `bujji/broker/fyers.py`
-is byte-pinned against baseline b148e39 by the safety guards and must not
+is byte-pinned against baseline 360c003 by the safety guards and must not
 grow this code.
 
 THE NORMALIZATION, AND WHY IT IS NOT A HACK: the 2026-07-19 certification

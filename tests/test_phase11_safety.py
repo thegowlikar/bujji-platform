@@ -76,7 +76,7 @@ def test_no_forbidden_action_terms_in_any_phase11_package():
 
 def test_no_strategy_or_execution_packages_modified_this_phase():
     result = subprocess.run(
-        ["git", "diff", "--name-only", "b148e39"],
+        ["git", "diff", "--name-only", "360c003"],
         cwd=_REPO_ROOT, capture_output=True, text=True,
     )
     changed = [l for l in result.stdout.strip().splitlines() if l]

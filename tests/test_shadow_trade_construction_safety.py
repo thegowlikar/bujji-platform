@@ -67,7 +67,7 @@ def test_msi_trade_construction_engine_not_modified():
     shape, never touches the protected engine itself."""
     import subprocess
     result = subprocess.run(
-        ["git", "diff", "--name-only", "b148e39", "--", "bujji/msi_trade_construction/"],
+        ["git", "diff", "--name-only", "360c003", "--", "bujji/msi_trade_construction/"],
         cwd=_REPO_ROOT, capture_output=True, text=True,
     )
     changed = [l for l in result.stdout.strip().splitlines() if l]

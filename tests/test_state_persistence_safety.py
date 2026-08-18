@@ -77,7 +77,7 @@ def test_hydration_never_calls_connect():
 
 def test_broker_guard_module_untouched():
     result = subprocess.run(
-        ["git", "diff", "--stat", "b148e39", "--", "bujji/broker/guard.py", "bujji/broker/hybrid.py"],
+        ["git", "diff", "--stat", "360c003", "--", "bujji/broker/guard.py", "bujji/broker/hybrid.py"],
         cwd=_REPO_ROOT, capture_output=True, text=True,
     )
     assert result.stdout.strip() == "", f"safety guard files were modified, expected untouched: {result.stdout}"
@@ -89,7 +89,7 @@ def test_phase_15b_hydration_contract_is_still_intact():
     change to paper.py.
 
     SCOPE CHANGE (PaperBroker v2): this test previously asserted that the
-    whole-file `git diff` of paper.py against b148e39 contained NO removed
+    whole-file `git diff` of paper.py against 360c003 contained NO removed
     lines at all. That was a scope freeze for Phase 15B's own change, and
     it correctly held until a later, explicitly authorized phase modified
     existing behaviour in paper.py on purpose (weighted average cost

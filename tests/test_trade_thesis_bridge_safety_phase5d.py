@@ -19,7 +19,7 @@ import subprocess
 _PAPERBROKER_V2_AUTHORIZED = ("bujji/trading_brain/risk_governor/portfolio_risk_aggregator.py",)
 
 # Lot-size-authoritative fix (2026-08-18): the ONE authorized change to the
-# production_runtime lineage since the b148e39 baseline. The 2026-07-19 audit
+# production_runtime lineage since the 360c003 baseline. The 2026-07-19 audit
 # (bujji/broker/instrument_master.py module docstring) found the live symbol
 # master says NIFTY lot=65 while RuntimeConfig defaulted to 75 and the
 # composition root sized from that default. config.py demotes lot_size to an
@@ -79,7 +79,7 @@ def test_trade_thesis_assessment_has_no_instruction_fields():
 
 def test_msi_trade_thesis_engine_unmodified():
     result = subprocess.run(
-        ["git", "diff", "--stat", "b148e39", "--", "bujji/msi_trade_thesis/"],
+        ["git", "diff", "--stat", "360c003", "--", "bujji/msi_trade_thesis/"],
         cwd="/opt/bujji/app", capture_output=True, text=True,
     )
     assert result.stdout.strip() == "", f"msi_trade_thesis was modified: {result.stdout}"
@@ -87,7 +87,7 @@ def test_msi_trade_thesis_engine_unmodified():
 
 def test_msi_consensus_and_domain_view_adapter_unchanged_by_this_phase():
     result = subprocess.run(
-        ["git", "diff", "--stat", "b148e39", "--",
+        ["git", "diff", "--stat", "360c003", "--",
          "bujji/msi_consensus/", "bujji/market_state/domain_view_adapter.py"],
         cwd="/opt/bujji/app", capture_output=True, text=True,
     )
@@ -97,7 +97,7 @@ def test_msi_consensus_and_domain_view_adapter_unchanged_by_this_phase():
 
 def test_no_forbidden_protected_package_touched():
     result = subprocess.run(
-        ["git", "diff", "--name-only", "b148e39"],
+        ["git", "diff", "--name-only", "360c003"],
         cwd="/opt/bujji/app", capture_output=True, text=True,
     )
     changed = [l for l in result.stdout.strip().splitlines() if l]
@@ -136,7 +136,7 @@ def test_shadow_session_runner_and_broker_unchanged():
     )
     assert out == "", f"unexpected direct trade_thesis_bridge coupling: {out}"
     result = subprocess.run(
-        ["git", "diff", "--stat", "b148e39", "--", "bujji/broker/fyers.py"],
+        ["git", "diff", "--stat", "360c003", "--", "bujji/broker/fyers.py"],
         cwd="/opt/bujji/app", capture_output=True, text=True,
     )
     stat_line = result.stdout.strip()

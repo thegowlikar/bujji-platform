@@ -182,7 +182,7 @@ def test_deterministic_same_input_same_output(chain, spot):
 
 def test_msi_trade_construction_still_byte_identical_to_baseline():
     result = subprocess.run(
-        ["git", "diff", "--name-only", "b148e39", "--", "bujji/msi_trade_construction/"],
+        ["git", "diff", "--name-only", "360c003", "--", "bujji/msi_trade_construction/"],
         cwd=_REPO_ROOT, capture_output=True, text=True,
     )
     changed = [l for l in result.stdout.strip().splitlines() if l]

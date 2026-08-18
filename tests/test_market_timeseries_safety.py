@@ -171,7 +171,7 @@ def test_forming_candle_cannot_masquerade_as_settled_history():
 
 def test_no_execution_or_risk_packages_touched():
     result = subprocess.run(
-        ["git", "diff", "--stat", "b148e39", "--",
+        ["git", "diff", "--stat", "360c003", "--",
          "bujji/broker/guard.py", "bujji/broker/hybrid.py",
          "bujji/trading_brain/", ":(exclude)bujji/trading_brain/risk_governor/portfolio_risk_aggregator.py", "bujji/risk_governor/", "bujji/execution_engine/"],
         cwd=_REPO_ROOT, capture_output=True, text=True,

@@ -97,6 +97,16 @@ class TestPlanResolution:
 class TestNarrowing:
     def _plan(self, monkeypatch):
         mod = _load_script(monkeypatch)
+        # Freeze the plan clock. The fixture's expiry set pins 2026-08-18 as
+        # the front weekly, but the plan is centred on now_ist().date() -- so
+        # this suite passed all day on 2026-08-18 and broke at midnight when
+        # the front expiry became the past. A fixture that pins expiries must
+        # pin the date they are relative to.
+        import datetime as _dt
+        monkeypatch.setattr(
+            mod, "now_ist",
+            lambda: _dt.datetime(2026, 8, 18, 10, 0,
+                                 tzinfo=_dt.timezone(_dt.timedelta(hours=5, minutes=30))))
         plan = mod._ensure_capture_plan(
             {"optionsChain": [{"strike_price": -1, "ltp": 24287.65}]},
             ["2026-08-18", "2026-08-25", "2026-09-01", "2026-09-29",

@@ -19,7 +19,7 @@ import subprocess
 _PAPERBROKER_V2_AUTHORIZED = ("bujji/trading_brain/risk_governor/portfolio_risk_aggregator.py",)
 
 # Lot-size-authoritative fix (2026-08-18): the ONE authorized change to the
-# production_runtime lineage since the b148e39 baseline. The 2026-07-19 audit
+# production_runtime lineage since the 360c003 baseline. The 2026-07-19 audit
 # (bujji/broker/instrument_master.py module docstring) found the live symbol
 # master says NIFTY lot=65 while RuntimeConfig defaulted to 75 and the
 # composition root sized from that default. config.py demotes lot_size to an
@@ -93,7 +93,7 @@ _PHASE14B_EXCEPTION = (
 
 def test_all_consumed_bridges_and_engines_unmodified_this_phase():
     result = subprocess.run(
-        ["git", "diff", "--stat", "b148e39", "--",
+        ["git", "diff", "--stat", "360c003", "--",
          "bujji/market_state/direction_bridge.py", "bujji/market_state/synthesizer.py",
          "bujji/market_state/domain_view_adapter.py", "bujji/market_state/trade_thesis_bridge.py",
          "bujji/market_state/strategy_eligibility_bridge.py",
@@ -110,7 +110,7 @@ def test_all_consumed_bridges_and_engines_unmodified_this_phase():
 
 def test_no_protected_lineage_package_touched():
     result = subprocess.run(
-        ["git", "diff", "--name-only", "b148e39"],
+        ["git", "diff", "--name-only", "360c003"],
         cwd="/opt/bujji/app", capture_output=True, text=True,
     )
     changed = [l for l in result.stdout.strip().splitlines() if l]
@@ -145,7 +145,7 @@ def test_shadow_session_runner_diff_has_no_removed_code():
         "reading = self._liquidity_brain.analyze(pair.ce_leg.bid, pair.ce_leg.ask, pair.pe_leg.bid, pair.pe_leg.ask)"
     )
     result = subprocess.run(
-        ["git", "diff", "b148e39", "--", RUNNER_FILE],
+        ["git", "diff", "360c003", "--", RUNNER_FILE],
         cwd="/opt/bujji/app", capture_output=True, text=True,
     )
     removed = [

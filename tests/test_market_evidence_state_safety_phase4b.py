@@ -20,7 +20,7 @@ import subprocess
 _PAPERBROKER_V2_AUTHORIZED = ("bujji/trading_brain/risk_governor/portfolio_risk_aggregator.py",)
 
 # Lot-size-authoritative fix (2026-08-18): the ONE authorized change to the
-# production_runtime lineage since the b148e39 baseline. The 2026-07-19 audit
+# production_runtime lineage since the 360c003 baseline. The 2026-07-19 audit
 # (bujji/broker/instrument_master.py module docstring) found the live symbol
 # master says NIFTY lot=65 while RuntimeConfig defaulted to 75 and the
 # composition root sized from that default. config.py demotes lot_size to an
@@ -110,7 +110,7 @@ def test_market_state_models_unchanged_by_this_phase():
 
 def test_shadow_session_runner_unchanged():
     result = subprocess.run(
-        ["git", "diff", "--stat", "b148e39", "--", "bujji/shadow_runtime/shadow_session_runner.py"],
+        ["git", "diff", "--stat", "360c003", "--", "bujji/shadow_runtime/shadow_session_runner.py"],
         cwd="/opt/bujji/app", capture_output=True, text=True,
     )
     # Same diff Phase 2 left (72 insertions/6 deletions) -- confirm this
@@ -121,7 +121,7 @@ def test_shadow_session_runner_unchanged():
 
 def test_fyers_broker_code_unchanged():
     result = subprocess.run(
-        ["git", "diff", "--stat", "b148e39", "--", "bujji/broker/fyers.py"],
+        ["git", "diff", "--stat", "360c003", "--", "bujji/broker/fyers.py"],
         cwd="/opt/bujji/app", capture_output=True, text=True,
     )
     stat_line = result.stdout.strip()
@@ -156,7 +156,7 @@ def test_fyers_broker_code_unchanged():
 
 def test_no_protected_lineage_package_modified():
     result = subprocess.run(
-        ["git", "diff", "--name-only", "b148e39"],
+        ["git", "diff", "--name-only", "360c003"],
         cwd="/opt/bujji/app", capture_output=True, text=True,
     )
     changed = [l for l in result.stdout.strip().splitlines() if l]

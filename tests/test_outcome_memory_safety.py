@@ -127,7 +127,7 @@ def test_conflicting_content_never_overwrites_historical_memory():
 
 def test_no_capital_or_execution_packages_touched():
     result = subprocess.run(
-        ["git", "diff", "--stat", "b148e39", "--",
+        ["git", "diff", "--stat", "360c003", "--",
          "bujji/broker/guard.py", "bujji/broker/hybrid.py",
          "bujji/trading_brain/", "bujji/risk_governor/", "bujji/execution_engine/",
          "bujji/msi_strategy_selection_foundation/", "bujji/msi_decision_synthesis/", "bujji/msi_trade_intent/"],

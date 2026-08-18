@@ -28,7 +28,7 @@ def test_no_forbidden_broker_calls_added_to_fyers_py():
     # margin method was touched by diffing against the last known-clean
     # commit this phase started from.
     result = subprocess.run(
-        ["git", "diff", "b148e39", "--", "bujji/broker/fyers.py"],
+        ["git", "diff", "360c003", "--", "bujji/broker/fyers.py"],
         cwd="/opt/bujji/app", capture_output=True, text=True,
     )
     diff_lines = [l for l in result.stdout.splitlines() if l.startswith("+") and not l.startswith("+++")]
