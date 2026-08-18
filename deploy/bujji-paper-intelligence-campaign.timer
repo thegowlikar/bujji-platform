@@ -8,9 +8,9 @@
 # own proven pattern exactly. This timer is the ONLY scheduling
 # mechanism for its service; nothing else triggers it.
 #
-# STATUS: written and committed, NOT yet installed in /etc/systemd/system
-# (verified 2026-08-19: no journal entries, not in list-unit-files).
-# Installing it is a deliberate operator action, not implied by this file.
+# STATUS: INSTALLED 2026-08-19 from this tracked copy (deploy/ is the
+# source of truth; /etc/systemd/system holds the installed copy).
+# Operator-approved install, same session as the 09:27:30 collision fix.
 # =========================================================================
 Description=Daily trigger for Bujji Paper Intelligence Campaign (weekdays only)
 

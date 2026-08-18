@@ -131,12 +131,31 @@ async def _main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--cycle-interval-seconds", type=int, default=300,
                          help="5 minutes -- matches this project's other intraday cycle cadences (Phase 15Q candle store).")
+    parser.add_argument("--market-open", default="09:15:00",
+                         help="refuse to start before this IST time -- a pre-open "
+                              "campaign reasons about a market that is not there")
     parser.add_argument("--market-close", default="15:20:00", help="stop issuing new cycles after this IST time")
     parser.add_argument("--fyers-env-file", default="/tmp/local_fyers.env")
     parser.add_argument("--lock-path", default=DEFAULT_LOCK_PATH)
     parser.add_argument("--skip-calendar-check", action="store_true",
                          help="bypass the trading-day gate -- manual/testing use only, never systemd")
     args = parser.parse_args()
+
+    # OPEN GATE (added 2026-08-19). This launcher always bounded its END
+    # (max_cycles to --market-close) but never its START: a 05:02 IST manual
+    # start of the freshly installed unit ran happily and persisted a
+    # DecisionArtifact reasoned against a market four hours from opening --
+    # the same class of pre-open fabrication capture_market_reality_session's
+    # within_market_hours() gate exists to prevent. The 09:27:30 timer never
+    # hits this; manual starts and any future Persistent= replay do.
+    open_time = datetime.strptime(args.market_open, "%H:%M:%S").time()
+    if _ist_now().time() < open_time:
+        print(f"Before market open ({_ist_now().isoformat()} IST < {args.market_open}) -- "
+              "refusing to start: a pre-open campaign would reason about a market "
+              "that is not there. The timer fires at 09:27:30; wait for it.",
+              file=sys.stderr)
+        return 1
+
 
     from bujji.market_calendar import MarketCalendar
     from bujji.shadow_runtime.manual_entrypoint_guard import (
