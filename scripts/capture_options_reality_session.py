@@ -57,6 +57,7 @@ import argparse
 import asyncio
 import datetime
 import logging
+import os
 import sys
 from pathlib import Path
 from typing import List, Optional
@@ -78,6 +79,78 @@ MARKET_CLOSE = datetime.time(15, 30)  # Per this phase's explicit instruction.
 IST = datetime.timezone(datetime.timedelta(hours=5, minutes=30))
 
 LOG = logging.getLogger("capture_options_reality_session")
+
+# --- CAPTURE UNIVERSE (Phase 19.21) --------------------------------------
+# This script previously captured EVERY expiry FYERS lists, at
+# STRIKE_COUNT=50 each, under an explicit earlier instruction ("do not only
+# capture ATM... the whole observable universe"). That instruction is
+# deliberately superseded here, on measured evidence rather than taste --
+# from the real 2026-08-14 capture (2,190 contracts, 162,150 rows):
+#
+#   * the nearest expiry alone was 94.31% of all traded volume, the front
+#     two 99.21%; SIX of the eighteen expiries traded ZERO contracts.
+#   * long-dated LEAPS were 34% of stored rows for 0.05% of volume.
+#   * the whole-universe shape costs ~305 MB/day (~76 GB/year) against
+#     51 GB of free disk -- roughly 167 sessions before it is full.
+#
+# `bujji.capture_universe` narrows this to ~246 contracts (~34 MB/day)
+# holding ~99.5% of volume and ~92% of open interest. Set
+# CAPTURE_UNIVERSE=full to restore the original whole-universe behaviour;
+# the earlier decision is reversible, not erased.
+CAPTURE_UNIVERSE_MODE = os.environ.get("CAPTURE_UNIVERSE", "tiered").strip().lower()
+
+# Resolved ONCE per session, not per cycle. A band that re-centred as spot
+# drifted would start and stop capturing contracts mid-session, leaving
+# ragged partial series that are far harder to backtest than a fixed,
+# rectangular set where every captured contract has a full day of rows.
+_CAPTURE_PLAN = None
+_CAPTURE_PLAN_RESOLVED = False
+
+
+def _underlying_spot(data: dict) -> Optional[float]:
+    """The chain response carries the underlying on a sentinel strike of -1
+    (read from the real 2026-08-13 capture, not assumed)."""
+    for row in data.get("optionsChain", []) or []:
+        if row.get("strike_price") == -1:
+            try:
+                ltp = float(row.get("ltp"))
+            except (TypeError, ValueError):
+                return None
+            return ltp if ltp > 0 else None
+    return None
+
+
+def _ensure_capture_plan(data: dict, expiry_isos: List[str]):
+    """Resolve the tier plan from the first cycle's real spot and real
+    expiry list. Returns None to mean "capture everything" -- either the
+    operator asked for the full universe, or no underlying price was
+    present, in which case capturing wide is strictly safer than centring
+    a band on a spot we do not actually have."""
+    global _CAPTURE_PLAN, _CAPTURE_PLAN_RESOLVED
+    if CAPTURE_UNIVERSE_MODE == "full":
+        return None
+    if _CAPTURE_PLAN_RESOLVED:
+        return _CAPTURE_PLAN
+    spot = _underlying_spot(data)
+    if spot is None:
+        LOG.warning(
+            "No underlying price in the chain response -- capturing the FULL "
+            "universe this cycle rather than centring a band on an invented "
+            "spot. Retrying plan resolution next cycle.")
+        return None
+    from bujji.capture_universe.builder import plan_capture
+    expiries = [datetime.date.fromisoformat(e) for e in expiry_isos]
+    _CAPTURE_PLAN = plan_capture(expiries, spot, now_ist().date())
+    _CAPTURE_PLAN_RESOLVED = True
+    LOG.info("CAPTURE PLAN spot=%s atm=%s roles=%s", spot, _CAPTURE_PLAN.atm_strike,
+             {r: e.isoformat() for r, e in _CAPTURE_PLAN.roles_resolved.items()})
+    for note in _CAPTURE_PLAN.notes:
+        LOG.info("CAPTURE PLAN note: %s", note)
+    LOG.info("CAPTURE PLAN capturing %d of %d listed expiries",
+             len(_CAPTURE_PLAN.band_by_expiry), len(expiries))
+    return _CAPTURE_PLAN
+
+
 
 
 def now_ist() -> datetime.datetime:
@@ -132,7 +205,8 @@ def _validate_row(row: dict) -> Optional[str]:
 
 
 async def _capture_one_expiry(broker, *, expiry_epoch: Optional[int], expiry_iso: str,
-                               capture_ts: str, store, cert_status: str, cert_ref) -> dict:
+                               capture_ts: str, store, cert_status: str, cert_ref,
+                               plan=None) -> dict:
     """Fetches and writes one expiry's chain. Returns per-expiry counts."""
     accepted = 0
     rejected = 0
@@ -152,6 +226,15 @@ async def _capture_one_expiry(broker, *, expiry_epoch: Optional[int], expiry_iso
 
     rows = data.get("optionsChain", [])
     option_rows = [r for r in rows if r.get("option_type") in ("CE", "PE")]
+    if plan is not None:
+        expiry_date = datetime.date.fromisoformat(expiry_iso)
+        before = len(option_rows)
+        # A row with no strike scores as outside every band and is dropped --
+        # never captured on the assumption it might have been in range.
+        option_rows = [r for r in option_rows
+                       if plan.accepts(expiry_date, r.get("strike_price") or 0)]
+        LOG.debug("expiry %s: %d of %d rows inside the tier band",
+                  expiry_iso, len(option_rows), before)
 
     from bujji.historical_reality.capture import build_historical_observation
     from bujji.historical_reality.store import ConflictingHistoricalObservationError
@@ -210,7 +293,74 @@ async def _capture_one_expiry(broker, *, expiry_epoch: Optional[int], expiry_iso
             "rows_seen": len(option_rows)}
 
 
-async def _capture_one_cycle(broker, store, *, cert_status: str, cert_ref) -> List[dict]:
+def _write_spot_observation(store, data: dict, capture_ts: str, *,
+                            cert_status: str, cert_ref) -> bool:
+    """Persist the underlying spot the chain response already carries.
+
+    `_underlying_spot()` has always read this value -- it is what centres the
+    tier band -- and then thrown it away. Meanwhile every brain that forms a
+    market view needs spot: volatility_brain solves IV from (spot, strike,
+    premium, t), greeks_brain needs spot + that IV, structure_brain needs spot
+    to place the OI wall. Measured 2026-08-18: every live row in the store was
+    an OPTION, and the newest SPOT row was 2026-08-14T15:25 from the EOD
+    backfill. Those brains have therefore never had a live spot to reason from.
+
+    Written ONCE per cycle from the single default-expiry probe, so the natural
+    key (identity, resolution, timestamp, source) cannot collide with itself.
+
+    ADDITIVE AND NON-FATAL: this is a second instrument type on an access method
+    certified only for OPTION, so it stays behind its own certification check
+    exactly like the option write does. Until
+    (direct_sdk_fyers_optionchain_reality, SPOT) is CERTIFIED_AVAILABLE this is
+    a no-op, and no failure here ever stops the option capture.
+    """
+    from bujji.historical_reality.capture import build_historical_observation
+    from bujji.historical_reality.store import ConflictingHistoricalObservationError
+    from bujji.market_observation import taxonomy as moc_taxonomy
+    from bujji.market_reality import taxonomy as reality_taxonomy
+
+    if cert_status != reality_taxonomy.CERTIFIED_AVAILABLE:
+        return False
+
+    spot = _underlying_spot(data)
+    if spot is None:
+        LOG.warning("cycle at %s: chain response carried no underlying -- no SPOT row.",
+                    capture_ts)
+        return False
+
+    obs = build_historical_observation(
+        # INDEX_SYMBOL is deliberately the identity string the historical
+        # backfill already uses for NIFTY spot ("NSE:NIFTY50-INDEX"), so live
+        # and backfilled rows land on one series instead of two.
+        instrument_identity=INDEX_SYMBOL,
+        instrument_type=reality_taxonomy.INSTRUMENT_SPOT,
+        resolution=moc_taxonomy.RESOLUTION_FIVE_MINUTE,
+        timestamp=capture_ts,
+        # A point-in-time LTP sample, not an OHLC bar -- same value_kind and
+        # same honesty as the option rows written beside it.
+        payload={"ltp": spot},
+        source=SOURCE,
+        access_method=ACCESS_METHOD,
+        value_kind=moc_taxonomy.VALUE_KIND_MAPPING,
+        source_epoch=int(datetime.datetime.fromisoformat(capture_ts).timestamp()),
+        source_symbol=INDEX_SYMBOL,
+        raw_artifact_ref="",
+        ingestion_run_id=f"OPTCHAIN-SPOT-{capture_ts}",
+        retrieved_at=capture_ts,
+        certification_status=cert_status,
+        certification_ref=cert_ref,
+    )
+    try:
+        store.write(obs)
+        LOG.info("cycle at %s: SPOT %s = %s", capture_ts, INDEX_SYMBOL, spot)
+        return True
+    except ConflictingHistoricalObservationError as exc:
+        LOG.error("CONFLICT for %s: %s", INDEX_SYMBOL, exc)
+        return False
+
+
+async def _capture_one_cycle(broker, store, *, cert_status: str, cert_ref,
+                             spot_cert_status: str = "", spot_cert_ref=None) -> List[dict]:
     """Discovers the real, currently-listed expiry set via one
     default-expiry call, then fetches every expiry's own chain
     (including the nearest one again, via its real epoch) -- one extra
@@ -229,14 +379,29 @@ async def _capture_one_cycle(broker, store, *, cert_status: str, cert_ref) -> Li
         LOG.warning("cycle at %s: no expiryData returned.", capture_ts)
         return []
 
+    expiry_isos = [_expiry_iso_from_epoch(e["expiry"]) for e in expiry_list]
+    plan = _ensure_capture_plan(data, expiry_isos)
+
+    # Same `data`, same cycle timestamp -- the spot that centred the plan above
+    # is now recorded instead of discarded.
+    _write_spot_observation(store, data, capture_ts,
+                            cert_status=spot_cert_status, cert_ref=spot_cert_ref)
+
     results = []
+    skipped = 0
     for entry in expiry_list:
         expiry_iso = _expiry_iso_from_epoch(entry["expiry"])
+        if plan is not None and datetime.date.fromisoformat(expiry_iso) not in plan.band_by_expiry:
+            skipped += 1
+            continue      # no tier selected this expiry -- and one fewer API call.
         result = await _capture_one_expiry(
             broker, expiry_epoch=int(entry["expiry"]), expiry_iso=expiry_iso, capture_ts=capture_ts,
-            store=store, cert_status=cert_status, cert_ref=cert_ref,
+            store=store, cert_status=cert_status, cert_ref=cert_ref, plan=plan,
         )
         results.append(result)
+    if skipped:
+        LOG.info("cycle at %s: skipped %d untiered expiries (%d API calls saved)",
+                 capture_ts, skipped, skipped)
 
     return results
 
@@ -274,6 +439,19 @@ async def run(*, cycles: Optional[int]) -> int:
         )
         return 2
 
+    # SPOT rides the same chain response but is a DIFFERENT instrument type on
+    # this access method, so it needs its own certification. Absent one, option
+    # capture proceeds exactly as before and no SPOT row is written.
+    spot_cert_status, spot_cert_ref = gate.status_for(
+        ACCESS_METHOD, reality_taxonomy.INSTRUMENT_SPOT)
+    if spot_cert_status != reality_taxonomy.CERTIFIED_AVAILABLE:
+        LOG.warning(
+            "%s/SPOT is %s, not CERTIFIED_AVAILABLE -- capturing OPTION only, no "
+            "SPOT rows. Run scripts/certify_fyers_optionchain_spot_access.py "
+            "during market hours to open this.",
+            ACCESS_METHOD, spot_cert_status,
+        )
+
     try:
         await broker.connect()
     except AuthenticationError as exc:
@@ -302,7 +480,15 @@ async def run(*, cycles: Optional[int]) -> int:
             if cert_status != reality_taxonomy.CERTIFIED_AVAILABLE:
                 LOG.error("certification status changed mid-run to %s -- stopping.", cert_status)
                 return 2
-            results = await _capture_one_cycle(broker, store, cert_status=cert_status, cert_ref=cert_ref)
+            # Re-resolved live each cycle for the same reason the option
+            # status is: a certification can be revoked mid-session, and SPOT
+            # may become certified mid-session too -- this picks that up
+            # without a restart.
+            spot_cert_status, spot_cert_ref = gate.status_for(
+                ACCESS_METHOD, reality_taxonomy.INSTRUMENT_SPOT)
+            results = await _capture_one_cycle(
+                broker, store, cert_status=cert_status, cert_ref=cert_ref,
+                spot_cert_status=spot_cert_status, spot_cert_ref=spot_cert_ref)
             total_accepted = sum(r.get("accepted", 0) for r in results)
             total_rejected = sum(r.get("rejected", 0) for r in results)
             LOG.info(
