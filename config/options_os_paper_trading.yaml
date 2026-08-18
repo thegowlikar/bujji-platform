@@ -1,20 +1,14 @@
-# Bujji Options OS -- Shadow Mode configuration.
+# Bujji Options OS -- PAPER TRADING session config.
 #
-# This is NOT config/config.yaml. This file belongs ONLY to
-# bujji_options_os_runner.py (the Trading Session Governor stack). It has
-# zero overlap with the legacy ORB-VWAP bot's configuration -- see
-# docs/SYSTEM_OWNERSHIP.md for the full ownership map. The legacy
-# config/config.yaml is never read by this runner, and this file is never
-# read by bujji/app.py.
-#
-# shadow_mode is always true in Phase-1 -- there is no live-broker mode for
-# this runner. See the Phase-1 design audit for what "Category C" work
-# (live broker, MIC, restart recovery) is explicitly deferred.
+# Used by deploy/bujji-options-os-trading.service. PaperBroker only: no
+# real capital can be committed by this configuration. The FYERS
+# connection below supplies market DATA for the intelligence stack and is
+# execution-neutered by bujji.broker.guard.disable_live_execution().
 
 shadow_mode: true
 
 logging:
-  namespace: bujji-options-os-shadow
+  namespace: bujji-options-os-trading
 
 session:
   underlying: NIFTY
@@ -27,12 +21,12 @@ session:
   proposed_trade_effect:
     additional_margin: 10000.0
     additional_max_loss: 5000.0
-  direction: null
-  expected_move_pct: null
 
 exit_policy:
   profit_target_fraction: 0.5
   max_loss_fraction: 1.0
+  # Hard EOD square-off. With the management loop and a live tick source
+  # this can genuinely fire intraday; before those it could not.
   mandatory_exit_time: "15:15:00"
 
 capital_snapshot:
@@ -60,6 +54,14 @@ capital_snapshot:
   daily_loss_limit: 25000.0
   max_allowed_drawdown: 0.20
 
+position_management:
+  # Revalue every 5 minutes across the session. Two passes per day (the
+  # prior behaviour) cannot express an excursion, so stop-loss and
+  # profit-target were unreachable no matter how they were configured.
+  cycle_interval_seconds: 300
+  monitor_until: "15:15:00"
+  max_cycles: 78          # safety cap; the clock normally ends the loop first.
+
 providers:
   # Margin provider for the risk context (Gate C). Three honest states:
   #   simulated         -- test-fixture margin, margin_verified=True with NO
@@ -82,14 +84,25 @@ providers:
     # capital_check -- revert to fyers_uncertified to halt entries honestly.
     type: fyers_certified
 
+  # Live chain for entry. Falls back to nothing: if FYERS is unreachable
+  # the session refuses rather than trading on stale data.
   market_data:
-    type: replay_chain          # ReplayChainProvider -- the only Phase-1 implementation
-    bhavcopy_path: null         # REQUIRED -- must be set via config or --bhavcopy-path before running
+    type: fyers_live
+    # Strikes each side of ATM. Wider than the 5 used for OI
+    # reconciliation: construction needs both short legs and both wings.
+    strike_count: 20
+
+  # Live per-leg prices for revaluation. Without this every cycle is
+  # BLIND (revalued from entry prices) and the runner says so loudly.
+  tick_source:
+    type: broker
+
+  # Bujji derives its OWN regime from live market evidence. No human
+  # types a regime; if the evidence is too thin, the session honestly
+  # declines to trade.
   regime:
-    type: human_supplied        # HumanSuppliedRegimeProvider -- the only Phase-1 implementation
-    trend_regime: null          # REQUIRED -- must be set explicitly; the runner fails closed if missing
-    volatility_regime: null     # REQUIRED -- must be set explicitly; the runner fails closed if missing
+    type: market_thesis_live
 
 artifacts:
-  shadow_sessions_root: shadow_sessions
-  journal_path: data/options_os_shadow_position_group_journal.db
+  shadow_sessions_root: /opt/bujji/app/shadow_sessions
+  journal_path: /opt/bujji/app/data/options_os_trading_journal.db

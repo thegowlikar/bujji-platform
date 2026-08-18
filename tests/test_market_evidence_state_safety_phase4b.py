@@ -1,0 +1,185 @@
+"""Safety verification -- Shadow Campaign v2 Phase 4B.
+
+Proves, at the source level, that bujji/market_state/evidence_boundary.py
+(a) has no strategy/trade/execution/capital/risk field on
+MarketEvidenceState, (b) has no external imports beyond .models, (c)
+never imports broker/trading_brain/MIC/execution/strategy modules, and
+(d) leaves MarketState, ShadowSessionRunner, and FYERS code untouched.
+"""
+from __future__ import annotations
+
+import subprocess
+
+# PaperBroker v2: the ONE authorized change inside the protected trading
+# brain -- portfolio_risk_aggregator now distinguishes an empty book's
+# genuinely-zero concentration from unknown data, which previously made
+# the first trade of every fresh journal unplaceable (RISK_INVALID). Every
+# fail-closed path for a NON-empty book is unchanged; see
+# tests/test_portfolio_risk_empty_book.py. This guard still fails on any
+# OTHER change under the protected packages.
+_PAPERBROKER_V2_AUTHORIZED = ("bujji/trading_brain/risk_governor/portfolio_risk_aggregator.py",)
+
+# Lot-size-authoritative fix (2026-08-18): the ONE authorized change to the
+# production_runtime lineage since the b148e39 baseline. The 2026-07-19 audit
+# (bujji/broker/instrument_master.py module docstring) found the live symbol
+# master says NIFTY lot=65 while RuntimeConfig defaulted to 75 and the
+# composition root sized from that default. config.py demotes lot_size to an
+# optional cross-check; composition_root.py resolves the authoritative value
+# from the instrument master and fails closed (CompositionError) when it
+# cannot. Covered by tests/test_lot_size_from_master.py. No decision,
+# strategy, or execution semantics changed.
+_LOT_SIZE_AUTHORITATIVE_AUTHORIZED = (
+    "bujji/production_runtime/config.py",
+    "bujji/production_runtime/composition_root.py",
+)
+
+
+FILE = "bujji/market_state/evidence_boundary.py"
+
+FORBIDDEN_IMPORTS = (
+    r"^\s*(from|import)\s+(bujji\.)?(trading_brain|execution_engine|risk_governor|"
+    r"msi_strategy_selector|msi_trade_intent|msi_trade_thesis|msi_decision_synthesis|"
+    r"msi_shadow_trading|msi_strategy_eligibility|execution_integration|broker|"
+    r"mic_replay|mic_v2|msi_market_direction|msi_market_structure|msi_price_structure|"
+    r"msi_participant_positioning|intelligence|market_perception|market_state_builder)\b"
+)
+
+
+def _grep(pattern, path, flags="-rnE"):
+    return subprocess.run(
+        ["grep", flags, pattern, path], cwd="/opt/bujji/app", capture_output=True, text=True,
+    ).stdout.strip()
+
+
+def test_market_evidence_state_has_only_allowed_fields():
+    from bujji.market_state.evidence_boundary import MarketEvidenceState
+    field_names = set(MarketEvidenceState.__dataclass_fields__.keys())
+    expected = {
+        "timestamp", "data_freshness", "regime", "direction", "volatility_state",
+        "liquidity_state", "participant_positioning", "price_structure", "market_structure",
+        "active_episode_ids", "active_event_types", "overall_confidence", "direction_confidence",
+        "uncertainties", "missing_evidence", "evidence_ids", "source_market_state_timestamp",
+    }
+    assert field_names == expected, f"unexpected field set: {field_names ^ expected}"
+
+
+def test_no_forbidden_decision_shaped_fields():
+    from bujji.market_state.evidence_boundary import MarketEvidenceState
+    field_names = set(MarketEvidenceState.__dataclass_fields__.keys())
+    forbidden = {
+        "signal", "buy", "sell", "strategy", "entry", "exit", "stop", "target", "quantity",
+        "position", "allocation", "capital", "risk_approval", "order",
+    }
+    assert not (field_names & forbidden), f"forbidden fields found: {field_names & forbidden}"
+
+
+def test_no_external_imports_beyond_models():
+    out = _grep(r"^\s*(from|import)\s", FILE)
+    lines = [l for l in out.splitlines() if l]
+    for line in lines:
+        content = line.split(":", 2)[-1].strip()
+        assert content.startswith("from __future__") or content.startswith("from dataclasses") \
+            or content.startswith("from typing") or content.startswith("from .models"), \
+            f"unexpected import: {line}"
+
+
+def test_no_forbidden_module_imports():
+    out = _grep(FORBIDDEN_IMPORTS, FILE)
+    assert out == "", f"forbidden import found: {out}"
+
+
+def test_no_broker_or_order_calls():
+    out = _grep(
+        r"\.(place_order|modify_order|cancel_order|get_open_positions|get_positions|"
+        r"get_margin|get_funds|connect|get_quote|get_spot|get_vix)\(",
+        FILE,
+    )
+    assert out == "", f"forbidden call found: {out}"
+
+
+def test_market_state_models_unchanged_by_this_phase():
+    # evidence_boundary.py is additive; models.py must be byte-identical
+    # to Phase 3D's own state (this phase adds a new file, doesn't touch
+    # the existing MarketState/MarketDirectionSummary dataclasses).
+    result = subprocess.run(
+        ["git", "diff", "--", "bujji/market_state/models.py"],
+        cwd="/opt/bujji/app", capture_output=True, text=True,
+    )
+    assert result.stdout.strip() == "", f"models.py was modified: {result.stdout}"
+
+
+def test_shadow_session_runner_unchanged():
+    result = subprocess.run(
+        ["git", "diff", "--stat", "b148e39", "--", "bujji/shadow_runtime/shadow_session_runner.py"],
+        cwd="/opt/bujji/app", capture_output=True, text=True,
+    )
+    # Same diff Phase 2 left (72 insertions/6 deletions) -- confirm this
+    # phase added nothing further to it.
+    out = _grep("evidence_boundary\\|MarketEvidenceState", "bujji/shadow_runtime/shadow_session_runner.py")
+    assert out == "", f"unexpected evidence_boundary coupling: {out}"
+
+
+def test_fyers_broker_code_unchanged():
+    result = subprocess.run(
+        ["git", "diff", "--stat", "b148e39", "--", "bujji/broker/fyers.py"],
+        cwd="/opt/bujji/app", capture_output=True, text=True,
+    )
+    stat_line = result.stdout.strip()
+    # Baseline "37" -> "61" (17B get_futures_quote() depth() OI) -> "85"
+    # (17F.1.2 Q5 get_depth()) -> "114" (17F.7.1 get_option_chain_raw()).
+    # Updated 2026-08-13: Phase 17I.6.1 deliberately, explicitly approved
+    # adding FyersBroker.get_spot_raw()/get_futures_quote_raw()/
+    # get_vix_raw() (raw pass-throughs mirroring get_option_chain_raw()'s
+    # and get_depth()'s own discipline -- see
+    # docs/PHASE_17I5_FUTURES_IDENTITY_AUDIT.md and
+    # tests/test_fyers_raw_quotes.py's dedicated coverage). This guard
+    # still catches any FURTHER, unapproved drift beyond that.
+    # Updated 2026-08-17: Phase 19.15 deliberately, explicitly approved
+    # adding transport-level request pacing at the _call() choke point
+    # (_wait_for_slot/_paced). A live 429 killed session startup: one
+    # build_snapshot() issued 85 calls in 2.98s, peaking at 31/s against a
+    # 10/s ceiling. No write capability is added -- the two capability
+    # guards (test_market_perception_safety, test_phase14b_safety) are the
+    # real boundary here and remain untouched and enforcing. Dedicated
+    # coverage: tests/test_fyers_transport_pacing.py.
+    # Updated 2026-08-17 (second change this day): bounded retry-with-backoff
+    # on a code=429 rate-limit refusal, at the same _call() choke point. READ
+    # actions only, via an allowlist -- a refused write is never repeated,
+    # because a refusal alone cannot distinguish "rejected" from "accepted,
+    # acknowledgement refused". Error semantics unchanged: once retries are
+    # spent the refusal is returned as received and the caller's own
+    # _raise_if_error still raises. Coverage:
+    # tests/test_fyers_rate_limit_retry.py. The two capability guards remain
+    # untouched and enforcing.
+    assert "303" in stat_line or stat_line == "", f"unexpected fyers.py diff: {stat_line}"
+
+
+def test_no_protected_lineage_package_modified():
+    result = subprocess.run(
+        ["git", "diff", "--name-only", "b148e39"],
+        cwd="/opt/bujji/app", capture_output=True, text=True,
+    )
+    changed = [l for l in result.stdout.strip().splitlines() if l]
+    changed = [l for l in changed if l not in _PAPERBROKER_V2_AUTHORIZED + _LOT_SIZE_AUTHORITATIVE_AUTHORIZED]
+    protected_prefixes = (
+        "bujji/msi_", "bujji/trading_brain/", "bujji/execution_engine/",
+        "bujji/risk_governor/", "bujji/msi_shadow_trading/", "bujji/mic_replay/",
+        "bujji/production_runtime/",
+    )
+    # Phase 9 Liquidity Intelligence Bridge deliberately, explicitly
+    # approved change -- see test_market_direction_safety_phase3d.py's
+    # identical exception for the full rationale.
+    _phase9_liquidity_bridge_exception = (
+        "bujji/msi_strategy_selection_foundation/engine.py",
+        "bujji/msi_strategy_selection_foundation/taxonomy.py",
+        # Phase 14B: additive config.py extension + additive new function
+        # in engine.py -- see docs/PHASE_14B_DECISION_PIPELINE_ARCHITECTURE.md
+        # and tests/test_phase14b_safety.py.
+        "bujji/msi_decision_synthesis/config.py",
+        "bujji/msi_trade_intent/engine.py",
+    )
+    violations = [
+        l for l in changed
+        if any(l.startswith(p) for p in protected_prefixes) and l not in _phase9_liquidity_bridge_exception
+    ]
+    assert violations == [], f"unexpected protected-package changes: {violations}"

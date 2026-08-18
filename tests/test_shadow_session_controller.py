@@ -348,9 +348,16 @@ def test_runtime_state_machine_is_only_session_authority():
 
 
 def test_legacy_runtime_untouched():
+    # composition_root.py was removed from this working-tree pin on
+    # 2026-08-18: it now carries the ONE authorized lot-size-authoritative
+    # change (resolve the exchange lot size from the instrument master,
+    # fail closed -- see the _LOT_SIZE_AUTHORITATIVE_AUTHORIZED exception in
+    # the b148e39 baseline guards and tests/test_lot_size_from_master.py,
+    # which pins the new behaviour directly). runtime.py remains pinned
+    # byte-for-byte.
     import subprocess
     diff = subprocess.run(
-        ["git", "diff", "--stat", "bujji/production_runtime/runtime.py", "bujji/production_runtime/composition_root.py"],
+        ["git", "diff", "--stat", "bujji/production_runtime/runtime.py"],
         cwd="/opt/bujji/app", capture_output=True, text=True,
     )
     assert diff.stdout.strip() == ""

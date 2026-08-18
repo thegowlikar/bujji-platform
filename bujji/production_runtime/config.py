@@ -28,7 +28,7 @@ READ_ONLY or SHADOW.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any, Dict
+from typing import Any, Dict, Optional
 
 RUNTIME_MODE_READ_ONLY = "READ_ONLY"
 RUNTIME_MODE_SHADOW = "SHADOW"
@@ -53,7 +53,14 @@ class RuntimeConfig:
     mode: str = RUNTIME_MODE_SHADOW
     broker_name: str = "paper"           # "paper" | "fyers" -- which production Broker to construct.
     broker_display_name: str = "FYERS"   # Name passed to the Broker Adapter (Series 40)'s translate().
-    lot_size: int = 75
+    # Cross-check ONLY -- the authoritative lot size is read from the FYERS
+    # instrument master at composition time (2026-08-18 fix; the 2026-07-19
+    # audit found the master said NIFTY=65 while this default said 75, and the
+    # default won). None means "no cross-check declared". There is
+    # deliberately no way to force a lot size from config: pin a fixture
+    # master via `instrument_master_directory` instead.
+    lot_size: Optional[int] = None
+    instrument_master_directory: str = "data/instrument_master"
     capital_policy_value: str = "SIMULATION"
     qualification_fingerprint: str = "RFP-0000000000000000"
     replay_status: str = "PASSED"
@@ -74,6 +81,8 @@ class RuntimeConfig:
             raise InvalidRuntimeConfig(f"Unrecognized broker_name: {self.broker_name!r}")
         if self.market_source not in ALL_MARKET_SOURCES:
             raise InvalidRuntimeConfig(f"Unrecognized market_source: {self.market_source!r}")
+        if self.lot_size is not None and self.lot_size <= 0:
+            raise InvalidRuntimeConfig(f"lot_size cross-check must be positive: {self.lot_size!r}")
         # P1-1 fix (TODO.md): a live-capable broker must never be
         # constructible outside Mode 3. Before this check, `RuntimeConfig(
         # mode="SHADOW", broker_name="fyers")` constructed successfully and

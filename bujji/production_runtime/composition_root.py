@@ -124,11 +124,36 @@ def build_composition_root(
     except Exception as exc:  # noqa: BLE001
         raise CompositionError(f"Failed to construct ExecutionEngine: {exc!r}") from exc
 
+    # Exchange lot size: the instrument master is authoritative (same rule as
+    # bujji_options_os_runner._resolve_exchange_lot_size, same 2026-07-19
+    # audit finding). config.lot_size, if declared, is only a cross-check.
+    # Unresolvable -> CompositionError: sizing off a guess is worse than not
+    # constructing the runtime at all.
+    try:
+        from pathlib import Path as _Path
+
+        from ..broker.instrument_master import InstrumentMaster
+
+        lot_size = InstrumentMaster(
+            _Path(config.instrument_master_directory), log
+        ).lot_size_for("NIFTY")
+    except Exception as exc:  # noqa: BLE001
+        raise CompositionError(
+            f"Exchange lot size unresolvable from the instrument master "
+            f"({config.instrument_master_directory}): {exc!r}"
+        ) from exc
+    if config.lot_size is not None and config.lot_size != lot_size:
+        log.warning(
+            "lot_size cross-check mismatch: config declares %s, instrument "
+            "master says %s -- using the master.",
+            config.lot_size, lot_size,
+        )
+
     try:
         authentication_adapter = ProductionAuthenticationAdapter(
             broker, broker_identity=config.broker_display_name
         )
-        execution_adapter = ProductionExecutionAdapter(execution_engine, lot_size=config.lot_size)
+        execution_adapter = ProductionExecutionAdapter(execution_engine, lot_size=lot_size)
     except Exception as exc:  # noqa: BLE001
         raise CompositionError(f"Failed to construct integration adapters: {exc!r}") from exc
 
@@ -152,7 +177,7 @@ def build_composition_root(
             ),
             capital_policy=CapitalPolicy(policy=config.capital_policy_value),
             lot_spec=LotSpecification(
-                underlying="NIFTY", lot_size=config.lot_size, effective_date="1970-01-01"
+                underlying="NIFTY", lot_size=lot_size, effective_date="1970-01-01"
             ),
             sizing_config=PositionSizingConfig(),
             execution_policy=ExecutionPolicy(policy="MARKET"),

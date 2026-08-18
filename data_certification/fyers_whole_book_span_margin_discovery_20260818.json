@@ -1,0 +1,65 @@
+{
+  "timestamp": "2026-08-18T20:01:39.742947+05:30",
+  "purpose": "whole-book span_margin discovery -- evidence for the operator decision on providers.margin: fyers_certified",
+  "endpoint": "https://api.fyers.in/api/v2/span_margin",
+  "request_body": {
+    "data": [
+      {
+        "symbol": "NSE:NIFTY26AUG23950CE",
+        "qty": 65,
+        "side": -1,
+        "type": 2,
+        "productType": "INTRADAY",
+        "limitPrice": 0,
+        "stopLoss": 0
+      },
+      {
+        "symbol": "NSE:NIFTY26AUG23950PE",
+        "qty": 65,
+        "side": -1,
+        "type": 2,
+        "productType": "INTRADAY",
+        "limitPrice": 0,
+        "stopLoss": 0
+      }
+    ]
+  },
+  "snapshot": {
+    "margin_source": "WHOLE_BOOK_UNCERTIFIED",
+    "margin_verified": false,
+    "required_margin": 220455.74,
+    "span": 157653.0,
+    "expo": 62802.74,
+    "benefit": 124987.20000000001,
+    "parse_error": null
+  },
+  "raw_broker_response": {
+    "code": 200,
+    "message": "",
+    "data": {
+      "span": 157653,
+      "expo": 62802.74,
+      "total": 220455.74,
+      "benefit": 124987.20000000001
+    },
+    "s": "ok",
+    "individual_info": {
+      "101126082561587": {
+        "ltp_info": 296.65,
+        "span": 157653,
+        "expo": 31401.37,
+        "total": 189054.37
+      },
+      "101126082561588": {
+        "ltp_info": 45.8,
+        "span": 124987.2,
+        "expo": 31401.37,
+        "total": 156388.57
+      }
+    },
+    "latency": ""
+  },
+  "repeat_call_identical": true,
+  "lot_size_used": 65,
+  "verdict_hint": "PARSE-AND-SHAPE-OK"
+}
