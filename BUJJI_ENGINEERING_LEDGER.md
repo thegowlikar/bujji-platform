@@ -78,3 +78,50 @@ Append-only record of engineering decisions and verified events. Newest last.
 - Test suite caught a would-be live crash: poll-batch vs window stride
   validation conflated; both geometries now validated upfront.
 - 7,138 green. Tomorrow 09:22:30 is the first continuous day.
+
+## 2026-08-19 night — Bujji wakes with the market (09:15:00)
+
+- Operator finding: the capture units were fixed for first-tick capture but
+  the TRADING unit was left at 09:22:30, asleep for the opening 7.5 minutes.
+- `OptionsOSRunner._await_market_open()` — authoritative in-process
+  market-hours gate, before the broker connects: waits near the open,
+  REFUSES far from it or past the session's configured end. Upper bound
+  derived from existing config; deliberately NOT a fourth close constant.
+  Explicit `--skip-market-hours-check` for replay/tests, guarded by tests
+  over installed units, repo unit files and the production config.
+- Timer 09:22:30 → 09:14, demoted to the coarse first net. The burst offset
+  it was silently carrying moved to
+  `session.continuous.decision_phase_offset_seconds: 150` (cycle 1 only), and
+  `market_open_offset_seconds: 8` gives this unit its own slot now that three
+  units release at the open.
+- Rule learned: never move an order-placing unit's schedule without checking
+  what that schedule is silently guarding.
+- `git add -A` swept a day of live session output into the commit; caught
+  pre-push. `layer0_data/`, `shadow_sessions/`, `paper_intelligence_sessions/`
+  now gitignored (an open CP-D item, closed).
+- 7,157 green.
+
+## 2026-08-19 night — D-5: persist the reasoning, not just the verdict
+
+- A session recorded its conclusion and discarded its reasoning: "why no
+  trade on 2026-08-19?" had no answer in any artifact. Two real computations
+  were dropped every cycle — `record_cycle()`'s returned understanding
+  record, and the thesis's full 13-family verdict
+  (preferred/rejected/insufficient_evidence).
+- New `bujji/shadow_observatory/thesis_artifact.build_thesis_artifact()`
+  (pure) + `recorder.record_market_thesis()` → `market_thesis.jsonl`, one
+  record per derivation, linking cycle record → thesis → family verdict →
+  stability verdict → the two strings the selector was actually handed.
+  Absence recorded as absence: `absent_fields`, and `families_assessed=None`
+  vs `0` distinguishes "never assessed" from "assessed, none fit".
+- This makes the SELECTOR AUTHORITY question measurable: divergence between
+  the 13-family verdict and the two-input lookup now accumulates in the
+  artifacts, so that operator gate can be decided from observation.
+- Deployment timer guard rewritten: it demanded a fire after 09:15 (correct
+  only while the timer was the sole protection); it now asserts the pairing
+  of a pre-open fire WITH the in-process gate.
+- 7,172 green. NOT yet proven live — the derivation path needs a live
+  broker, so the first real `market_thesis.jsonl` lands 2026-08-20.
+- Next: D-7 (broker realism: set_quote/set_depth/set_capital before
+  place_order), then D-8 (durable OutcomeMemoryRecord + real fees into
+  close_position).
