@@ -61,6 +61,26 @@ def _grep(pattern, path, flags="-rnE"):
     ).stdout.strip()
 
 
+# CP-C evidence + execution realism (D-5/D-7/D-8, 2026-08-19). THREE NEW
+# FILES under a protected prefix, authorized by name rather than by
+# advancing the baseline -- advancing it would blanket-approve every diff
+# since 360c003, including ones nobody reviewed. Each is ADDITIVE: a new
+# module with no existing caller changed, no protected decision module
+# touched, no risk rule's meaning altered.
+#   paper_market_sync    -- pushes REAL observed bid/ask into PaperBroker so
+#                           fills stop being frictionless (D-7).
+#   execution_costs      -- sums the broker's OWN reported charges/slippage
+#                           so an outcome is net, not gross (D-8).
+#   outcome_memory_writer-- appends the OutcomeMemoryRecord to the SAME
+#                           EventStore outcome_memory.recovery already
+#                           replays, so a trade survives the process (D-8).
+_CPC_EVIDENCE_AND_REALISM_AUTHORIZED = (
+    "bujji/production_runtime/paper_market_sync.py",
+    "bujji/production_runtime/execution_costs.py",
+    "bujji/production_runtime/outcome_memory_writer.py",
+)
+
+
 def test_no_forbidden_module_imports_in_adapter():
     out = _grep(FORBIDDEN_IMPORTS, FILE)
     assert out == "", f"forbidden import found: {out}"
@@ -120,7 +140,7 @@ def test_no_decision_modules_beyond_consensus_and_synthesis_touched():
         cwd="/opt/bujji/app", capture_output=True, text=True,
     )
     changed = [l for l in result.stdout.strip().splitlines() if l]
-    changed = [l for l in changed if l not in _PAPERBROKER_V2_AUTHORIZED + _LOT_SIZE_AUTHORITATIVE_AUTHORIZED + _CPC_SAFETY_SPINE_AUTHORIZED]
+    changed = [l for l in changed if l not in _PAPERBROKER_V2_AUTHORIZED + _LOT_SIZE_AUTHORITATIVE_AUTHORIZED + _CPC_SAFETY_SPINE_AUTHORIZED + _CPC_EVIDENCE_AND_REALISM_AUTHORIZED]
     forbidden_prefixes = (
         "bujji/msi_trade_thesis/", "bujji/msi_trade_intent/",
         "bujji/msi_strategy_eligibility/", "bujji/msi_strategy_selector/",

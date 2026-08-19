@@ -391,6 +391,10 @@ class OptionsOSRunner:
         self._lifecycle_states: Dict[str, Any] = {}
         self._canonical_position_id: Optional[str] = None
         self._exit_prices_by_leg: Dict[str, dict] = {}
+        # D-8: every REAL order this session placed, entry and exit. A
+        # position's cost is what it cost to get in AND out; charging one
+        # side understates every round trip.
+        self._execution_order_ids: List[str] = []
         self._contracts_by_symbol: Dict[str, Any] = {}
         self._outcome_memory_record = None
         # Real per-cycle unrealized P&L for the open position, appended
@@ -1210,6 +1214,10 @@ class OptionsOSRunner:
         from bujji.trading_brain.risk_governor.msi_entry_bridge import _leg_to_core_contract
         contracts = {}
         entry_prices: Dict[str, float] = {}
+        for order_result in cycle_result.order_results:
+            order_id = getattr(order_result, "client_order_id", None)
+            if order_id:
+                self._execution_order_ids.append(order_id)
         for leg, order_result in zip(cycle_result.proposal.legs, cycle_result.order_results):
             contract = _leg_to_core_contract(leg, self._root.underlying, self._root.exchange_lot_size)
             contracts[contract.symbol] = contract
@@ -1473,6 +1481,10 @@ class OptionsOSRunner:
                 lifecycle, exit_symbols, execution.orders_submitted, self._contracts_by_symbol,
             )
             self._exit_prices_by_leg.update(mapped)
+            for submitted in execution.orders_submitted:
+                order_id = getattr(submitted, "client_order_id", None)
+                if order_id:
+                    self._execution_order_ids.append(order_id)
             self._logger.info("Captured %d real exit fill(s) for %s", len(mapped), self._canonical_position_id)
         except Exception as exc:  # noqa: BLE001 -- bookkeeping never kills a live session.
             self._logger.exception("exit-fill capture failed (session continues): %s", exc)
@@ -1597,10 +1609,33 @@ class OptionsOSRunner:
             return
         try:
             exit_ts = self._clock().isoformat()
+
+            # D-8: the broker computed real charges and slippage on every
+            # fill and filed them in its execution reports; close_position
+            # has accepted fees=/slippage= all along and nobody connected
+            # them, so every outcome recorded a GROSS result as if it were
+            # net. Absent measurements stay None -- never 0.0, which would
+            # claim the trade was free and be indistinguishable from one
+            # that genuinely was.
+            from bujji.production_runtime.execution_costs import collect_execution_costs
+
+            costs = collect_execution_costs(self._broker, self._execution_order_ids)
+            self._governor_result_summary["execution_costs"] = costs.as_dict()
+            if not costs.is_complete:
+                self._logger.warning(
+                    "EXECUTION COSTS INCOMPLETE -- %d/%d orders reported charges "
+                    "(missing_report=%d no_charges=%d); the recorded outcome is NOT fully net.",
+                    costs.orders_with_report, costs.orders_seen,
+                    costs.orders_missing_report, costs.orders_without_charges)
+            else:
+                self._logger.info("EXECUTION COSTS -- fees=%.2f slippage=%.2f across %d orders",
+                                  costs.fees, costs.slippage or 0.0, costs.orders_seen)
+
             self._lifecycle_states, close_outcome = close_position(
                 self._lifecycle_states, self._session_id, self._canonical_position_id,
                 exit_timestamp=exit_ts, exit_reason="SESSION_END",
                 exit_prices=self._exit_prices_by_leg,
+                fees=costs.fees, slippage=costs.slippage,
             )
             self._governor_result_summary["canonical_close_outcome"] = close_outcome
             if close_outcome != "ACCEPTED":
@@ -1613,6 +1648,13 @@ class OptionsOSRunner:
             )
             self._outcome_memory_record = record
             self._governor_result_summary["outcome_memory_outcome"] = mem_outcome
+
+            # D-8: the record used to stop here, in a dict that died with the
+            # process -- Bujji forgot every trade it ever made. The store is
+            # the SAME EventStore that outcome_memory.recovery already
+            # replays cross-session; no new persistence mechanism.
+            persisted = self._persist_outcome_memory(record, recorded_at=exit_ts)
+            self._governor_result_summary["outcome_memory_persisted"] = persisted
             if record is not None:
                 self._governor_result_summary["outcome_memory_id"] = record.memory_id
                 self._logger.info(
@@ -1623,6 +1665,46 @@ class OptionsOSRunner:
                 self._logger.info("No outcome memory recorded (%s) -- honest skip, never speculative.", mem_outcome)
         except Exception as exc:  # noqa: BLE001 -- bookkeeping never kills a live session.
             self._logger.exception("canonical lifecycle close failed (session continues): %s", exc)
+
+    def _persist_outcome_memory(self, record, *, recorded_at: str) -> str:
+        """Append the record to the durable cross-session outcome store.
+
+        Never raises into the session: this runs at the very end of a real
+        trading day, and a write failure must not turn a completed, correctly
+        closed position into a crashed session. It is loud on failure -- a
+        forgotten trade is exactly the write-only-memory failure this phase
+        exists to end."""
+        from bujji.production_runtime.outcome_memory_writer import persist_outcome_memory
+
+        try:
+            store = self._outcome_memory_store()
+            outcome = persist_outcome_memory(
+                store, record, session_id=self._session_id, recorded_at=recorded_at)
+            if outcome == "PERSISTED":
+                self._logger.info("OUTCOME MEMORY persisted durably: id=%s -> %s",
+                                  record.memory_id, getattr(store, "path", "?"))
+            return outcome
+        except Exception as exc:  # noqa: BLE001 -- a completed trade must not become a crashed session
+            self._logger.exception("OUTCOME MEMORY persistence FAILED -- this trade will be "
+                                   "forgotten (session continues): %s", exc)
+            return f"FAILED:{type(exc).__name__}"
+
+    def _outcome_memory_store(self):
+        """The durable store, built lazily from config. Deliberately its OWN
+        path: outcome memory is cross-session by design, so it must not live
+        inside a per-session artifact directory that a reader would have to
+        enumerate to reconstruct the campaign."""
+        from bujji.state_persistence.store import EventStore
+
+        existing = getattr(self, "_outcome_store", None)
+        if existing is not None:
+            return existing
+        artifacts_cfg = self._config.get("artifacts", {}) or {}
+        path = REPO_ROOT / artifacts_cfg.get(
+            "outcome_memory_store_path", "data/outcome_memory_events.jsonl")
+        path.parent.mkdir(parents=True, exist_ok=True)
+        self._outcome_store = EventStore(str(path))
+        return self._outcome_store
 
     def _shutdown(self) -> None:
         self._stage = RunnerStage.SHUTDOWN
