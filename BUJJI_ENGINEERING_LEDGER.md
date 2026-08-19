@@ -67,3 +67,14 @@ Append-only record of engineering decisions and verified events. Newest last.
   sessions exempt by design.
 - 12 new tests; 7,132 green as service user. Remaining CP-C: D-5 evidence
   persistence, D-7 broker realism inputs, D-8 outcome durability.
+
+## 2026-08-19 night — Continuous session (operator directive)
+
+- Bujji now lives through the whole market day: rolling 30s evidence window,
+  regime re-derived per 5-min cycle, entry whenever the gate passes (one
+  strategy/day unchanged), observation continues after any position close to
+  15:30. Mandatory close = position rule, not lifetime. Production yaml opts
+  in; single-shot preserved for replay/tests.
+- Test suite caught a would-be live crash: poll-batch vs window stride
+  validation conflated; both geometries now validated upfront.
+- 7,138 green. Tomorrow 09:22:30 is the first continuous day.

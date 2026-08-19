@@ -413,8 +413,11 @@ class OptionsOSRunner:
             self._startup()
             self._pre_market_check()
             self._market_session()
-            self._entry_window()
-            self._position_management()
+            if self._session_cfg.get("continuous"):
+                self._continuous_session()
+            else:
+                self._entry_window()
+                self._position_management()
             self._eod_close()
             self._session_archive()
         finally:
@@ -768,7 +771,7 @@ class OptionsOSRunner:
                           outcome.replayed)
         return outcome.memory
 
-    def _build_market_thesis_regime_provider(self):
+    def _build_market_thesis_regime_provider(self, seeded_memory=None):
         """Run one real intelligence cycle and translate its thesis into
         the governor's regime vocabulary.
 
@@ -810,7 +813,11 @@ class OptionsOSRunner:
         # starved" into "NO_TRADE because the structure is not resolvable",
         # with the disagreeing strides named. Absent the config block the
         # single-cycle behaviour below is unchanged.
-        warmup_memory = self._warm_up_observation_memory(adapter)
+        # Continuous mode hands in its OWN rolling evidence window -- the
+        # one-shot warm-up (8 minutes of fresh polls) is the single-shot
+        # path's way of building what continuous mode maintains all day.
+        warmup_memory = (seeded_memory if seeded_memory is not None
+                         else self._warm_up_observation_memory(adapter))
         recorder = IntelligenceCycleRecorder(
             underlying=self._root.underlying,
             initial_observation_memory=warmup_memory,
@@ -873,16 +880,149 @@ class OptionsOSRunner:
         self._logger.info("MARKET_SESSION -- observing.")
         self._governor.begin_market_analysis()
 
+    def _continuous_session(self) -> None:
+        """Bujji lives through the WHOLE market day (operator directive
+        2026-08-19): mandatory close is a rule about POSITIONS, never about
+        the organism. The single-shot session sampled the stability gate at
+        one instant and exited; this loop maintains a rolling evidence
+        window all day, re-derives the regime every decision cycle, attempts
+        entry WHENEVER evidence stabilises (one strategy per day, unchanged,
+        enforced by the governor's own lock), manages any position via the
+        existing loop (including the emergency brake), and after any close --
+        target, stop, emergency, or 15:15 mandatory -- keeps OBSERVING until
+        the market ends. Every phase is built from the already-tested
+        pieces: poll_spot_series, assess_stability, replay_snapshots, the
+        extracted _attempt_entry, and _position_management."""
+        import asyncio
+        import datetime as _dt
+
+        from bujji.market_state_builder.recovery import replay_snapshots
+        from bujji.regime_stability import WarmupPlan, assess_stability, poll_spot_series
+
+        self._stage = RunnerStage.ENTRY_WINDOW
+        ccfg = self._session_cfg.get("continuous")
+        ccfg = ccfg if isinstance(ccfg, dict) else {}
+        poll_interval = max(float(ccfg.get("evidence_poll_interval_seconds", 30.0)), 0.01)
+        decision_interval = float(ccfg.get("decision_interval_seconds", 300.0))
+        window = int(ccfg.get("evidence_window_polls", 16))
+        strides = tuple(ccfg.get("strides", (1, 2, 4)))
+        # Hard cycle cap is the final authority on termination, same rule as
+        # the management loop -- a mis-set clock can never spin forever.
+        max_cycles = int(ccfg.get("max_cycles", 96))
+
+        def _parse_t(key, default):
+            h, m = str(ccfg.get(key, default)).split(":")[:2]
+            return _dt.time(int(h), int(m))
+
+        entry_cutoff = _parse_t("entry_cutoff", "14:30")
+        observe_until = _parse_t("observe_until", "15:30")
+        polls_per_cycle = max(1, int(decision_interval // poll_interval))
+        # The STRIDES belong to the stability assessment over the trailing
+        # WINDOW (which must support them); the per-cycle poll batch is just
+        # data collection and validates against stride (1,) only. Conflating
+        # the two made every production cycle's 10-poll batch fail the
+        # window's stride-4 requirement (caught by the test suite before it
+        # ever ran live).
+        from bujji.regime_stability.warmup import MIN_OBSERVATIONS_PER_STRIDE
+        if polls_per_cycle < MIN_OBSERVATIONS_PER_STRIDE:
+            raise ConfigurationError(
+                f"continuous.decision_interval_seconds/{'{'}evidence_poll_interval_seconds{'}'} "
+                f"yields {polls_per_cycle} polls per cycle; the gate needs >= "
+                f"{MIN_OBSERVATIONS_PER_STRIDE}. Widen the decision interval or narrow polling.")
+        widest = max(strides)
+        if window < widest * MIN_OBSERVATIONS_PER_STRIDE:
+            raise ConfigurationError(
+                f"continuous.evidence_window_polls={window} cannot support stride "
+                f"{widest} (needs >= {widest * MIN_OBSERVATIONS_PER_STRIDE}).")
+
+        broker = self._intelligence_broker
+        snapshots: list = []
+        entered = False
+        cycles = 0
+        self._governor_result_summary["continuous_mode"] = True
+        trail = self._governor_result_summary.setdefault("continuous_evidence", [])
+
+        def _derive(win):
+            outcome = replay_snapshots(win)
+            if outcome.last_assessment is None:
+                return None
+            state = outcome.last_assessment.price_structure.structure_state
+            return None if state == "UNKNOWN" else state
+
+        while cycles < max_cycles:
+            now = self._clock()
+            if now.time() >= observe_until:
+                break
+            cycles += 1
+            plan = WarmupPlan(polls=polls_per_cycle, interval_seconds=poll_interval, strides=(1,))
+            snapshots.extend(poll_spot_series(
+                fetch_spot=lambda: asyncio.run(broker.get_spot(self._root.underlying)),
+                clock=self._clock, plan=plan, logger=self._logger,
+            ))
+            del snapshots[:-window]
+            verdict = assess_stability(snapshots, _derive, strides=strides) if len(snapshots) >= window else None
+            trail.append({
+                "cycle": cycles, "at": now.isoformat(), "spots": len(snapshots),
+                "stable": None if verdict is None else verdict.is_stable,
+                "reason": None if verdict is None else verdict.reason,
+            })
+            if now.time() >= entry_cutoff:
+                continue  # past the entry cutoff: observation only, all day
+            if verdict is None or not verdict.is_stable:
+                continue
+            try:
+                self._regime_provider = self._build_market_thesis_regime_provider(
+                    seeded_memory=replay_snapshots(snapshots).memory)
+                trend_regime, volatility_regime = self._regime_provider.get_regime()
+            except Exception as exc:  # noqa: BLE001 -- one failed derivation never ends the day
+                self._logger.warning("continuous cycle %d: regime derivation failed (%s) -- observing on.",
+                                     cycles, exc)
+                continue
+            self._logger.info("CONTINUOUS cycle %d -- STABLE evidence, regime trend=%s vol=%s",
+                              cycles, trend_regime, volatility_regime)
+            if self._attempt_entry(trend_regime, volatility_regime):
+                entered = True
+                break
+
+        if entered:
+            self._position_management()
+
+        # Post-trade / post-cutoff observation: the position may be closed;
+        # Bujji is not. The organism watches until the market ends.
+        self._stage = RunnerStage.MARKET_SESSION
+        phase = "POST_TRADE_OBSERVATION" if entered else "OBSERVATION"
+        while cycles < max_cycles:
+            now = self._clock()
+            if now.time() >= observe_until:
+                break
+            cycles += 1
+            plan = WarmupPlan(polls=polls_per_cycle, interval_seconds=poll_interval, strides=(1,))
+            snapshots.extend(poll_spot_series(
+                fetch_spot=lambda: asyncio.run(broker.get_spot(self._root.underlying)),
+                clock=self._clock, plan=plan, logger=self._logger,
+            ))
+            del snapshots[:-window]
+            trail.append({"cycle": cycles, "at": now.isoformat(), "phase": phase,
+                          "spots": len(snapshots)})
+        self._governor_result_summary["continuous_cycles"] = cycles
+
     def _entry_window(self) -> None:
         self._stage = RunnerStage.ENTRY_WINDOW
         trend_regime, volatility_regime = self._regime_provider.get_regime()
         self._logger.info("ENTRY_WINDOW -- regime trend=%s volatility=%s", trend_regime, volatility_regime)
+        self._attempt_entry(trend_regime, volatility_regime)
 
+    def _attempt_entry(self, trend_regime, volatility_regime) -> bool:
+        """One complete entry attempt: selection -> Gate B'd risk pipeline ->
+        fills -> registry -> canonical lifecycle. Returns True only when a
+        position is actually OPEN. Shared verbatim by the single-shot entry
+        window and the continuous session loop -- one entry path, two clocks."""
         selection = self._governor.select_and_lock_strategy(trend_regime, volatility_regime)
         self._governor_result_summary["strategy_selected"] = selection.selected_strategy
         if selection.selected_strategy is None:
-            self._logger.info("No strategy selected for this regime -- NO_TRADE day. Ending session.")
-            return
+            self._logger.info("No strategy for regime (trend=%s, vol=%s) -- no entry this cycle.",
+                              trend_regime, volatility_regime)
+            return False
 
         chain = self._market_data_provider.get_option_chain(self._as_of_date)
         spot = self._market_data_provider.get_spot()
@@ -908,8 +1048,8 @@ class OptionsOSRunner:
 
         if not cycle_result or not cycle_result.filled:
             reason = cycle_result.governor_result.blocking_stage if cycle_result and cycle_result.governor_result else "not constructed"
-            self._logger.info("Entry did not fill (reason=%s). No position this session.", reason)
-            return
+            self._logger.info("Entry did not fill (reason=%s).", reason)
+            return False
 
         from bujji.trading_brain.risk_governor.msi_entry_bridge import _leg_to_core_contract
         contracts = {}
@@ -936,6 +1076,8 @@ class OptionsOSRunner:
         self._record_canonical_entry(
             pg_id, cycle_result, spot, trend_regime, selection,
         )
+
+        return True
 
     def _record_canonical_entry(self, pg_id, cycle_result, spot, trend_regime, selection) -> None:
         """Open the canonical PositionLifecycle for a real, already-filled

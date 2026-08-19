@@ -12,6 +12,19 @@ logging:
 
 session:
   underlying: NIFTY
+  # CONTINUOUS SESSION (operator directive 2026-08-19): Bujji runs through
+  # the whole market day. Rolling 30s spot polls, regime re-derived every
+  # 5-min decision cycle from the trailing 16-poll window, entry attempted
+  # WHENEVER the stability gate passes (one strategy/day unchanged), and
+  # after any position close the organism keeps observing to 15:30.
+  # Mandatory close remains a POSITION rule (exit_policy), never a lifetime.
+  continuous:
+    evidence_poll_interval_seconds: 30
+    decision_interval_seconds: 300
+    evidence_window_polls: 16
+    entry_cutoff: "14:30"
+    observe_until: "15:30"
+    max_cycles: 96
   # Cross-check only -- the runner reads the authoritative lot size from
   # the FYERS instrument master and warns if this disagrees (audit
   # 2026-07-19: master said 65 while this file said 75).
