@@ -4,7 +4,7 @@
 WHY THIS EXISTS
 ---------------
 The FYERS access token dies at a fixed 06:00 IST cutover every day, and the
-capture/trading timers fire between 09:10 and 09:22:30. That leaves a
+capture/trading timers fire between 09:10 and 09:27:30. That leaves a
 mandatory human refresh in a ~3h10m window every trading morning (the refresh
 API is SEBI-disabled -- see docs/FYERS_TOKEN_LIFECYCLE.md). Nothing checked
 that the refresh had actually happened, so a missed morning produced a silent,

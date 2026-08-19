@@ -60,8 +60,31 @@ BACKUPS_TO_KEEP = 5
 _BACKUP_NAME = re.compile(r"^\.env\.bak-(\d{8}T\d{6})$")
 
 IST = datetime.timezone(datetime.timedelta(hours=5, minutes=30))
-FIRST_FIRE = datetime.time(9, 10)     # bujji-shadow-decision-campaign
-LAST_FIRE = datetime.time(9, 22, 30)  # bujji-options-os-trading
+# Bracket of TOKEN-CONSUMING timer fires, verified against the installed
+# units on 2026-08-19 (every service with EnvironmentFile=/opt/bujji/.env or
+# --fyers-env-file):
+#
+#   09:10     bujji-shadow-decision-campaign      <- FIRST_FIRE
+#   09:14     bujji-daily-intelligence
+#   09:14     bujji-futures-depth-poller
+#   09:14     bujji-options-os-trading
+#   09:27:30  bujji-paper-intelligence-campaign   <- LAST_FIRE
+#
+# CORRECTED 2026-08-19. LAST_FIRE said 09:22:30 and named
+# bujji-options-os-trading, which had already moved to a 09:14 pre-open fire
+# (it now waits for the open in-process). Worse, 09:22:30 was EARLIER than
+# the real last consumer at 09:27:30, so this check reported "outlives the
+# fire" while the paper-intelligence campaign could still start on a dead
+# token. No day was lost to it -- the token dies at 06:00, which fails every
+# comparison -- but the claim was narrower than its wording.
+#
+# THESE ARE STILL CONSTANTS AND CONSTANTS DRIFT: this one went stale within a
+# day of the timer moving. scripts/preflight_fyers_token.py deliberately asks
+# systemd for each bujji-*.timer's real next elapse instead, so moving a timer
+# moves that check automatically. Doing the same here is the durable fix and
+# is left as a separate decision rather than folded into a label correction.
+FIRST_FIRE = datetime.time(9, 10)      # bujji-shadow-decision-campaign
+LAST_FIRE = datetime.time(9, 27, 30)   # bujji-paper-intelligence-campaign
 
 _KEY = re.compile(r"^\s*(?:export\s+)?([A-Z_][A-Z0-9_]*)\s*=")
 
