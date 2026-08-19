@@ -69,6 +69,7 @@ class TradingSessionGovernor:
         self, session_id: str, trading_brain_runtime: TradingBrainRuntime, registry: PositionRealityRegistry,
         lifecycle_runtime: PositionLifecycleRuntime, executor: TradeLifecycleExecutor,
         exit_policy_config: ExitPolicyConfig, clock: Clock, event_bus=None,
+        defined_risk_only: bool = False,
     ) -> None:
         self._session_id = session_id
         self._trading_brain_runtime = trading_brain_runtime
@@ -78,6 +79,10 @@ class TradingSessionGovernor:
         self._exit_policy_config = exit_policy_config
         self._clock = clock
         self._event_bus = event_bus
+        # Real money never sells a shape whose loss is unbounded. DERIVED by
+        # the caller from the execution mode, never configured on its own --
+        # see OptionsOSRunner._startup, which fails closed.
+        self._defined_risk_only = defined_risk_only
         self._state_tracker = SessionTradingStateTracker(publish_fn=self._publish_state_change)
         self._strategy_lock = StrategyLock()
         self._position_group_id: Optional[str] = None
@@ -96,7 +101,8 @@ class TradingSessionGovernor:
     def select_and_lock_strategy(self, trend_regime: Optional[str], volatility_regime: Optional[str]) -> StrategySelectionResult:
         """Component 2 + 3: select (deterministic lookup, existing
         regime vocabulary only) then lock (one-time, immutable)."""
-        result = select_strategy(trend_regime, volatility_regime, self._clock)
+        result = select_strategy(trend_regime, volatility_regime, self._clock,
+                                 defined_risk_only=self._defined_risk_only)
         self._publish("STRATEGY_SELECTION_EVALUATED", {
             "trend_regime": result.trend_regime, "volatility_regime": result.volatility_regime,
             "selected_strategy": result.selected_strategy, "reasoning": result.reasoning, "confidence": result.confidence,

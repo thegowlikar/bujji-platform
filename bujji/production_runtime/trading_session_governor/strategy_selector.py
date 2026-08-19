@@ -122,8 +122,44 @@ SIDEWAYS_SHAPE_BY_VOLATILITY = {
     VOL_CONTRACTION: FAMILY_SHORT_STRANGLE,
 }
 
+# ---------------------------------------------------------------------------
+# DEFINED-RISK MODE (operator decision, 2026-08-20)
+# ---------------------------------------------------------------------------
+# Measured over 168,194 real 5-minute NIFTY bars (2017-2026): the stop-loss,
+# the daily loss limit and the emergency brake are all evaluated on ONE
+# 300-second management heartbeat, and the worst single 5-minute bar in nine
+# years ranged 611.8 points. Against the real ATM straddle credit measured on
+# 2026-08-19 (240.95 pts, 1 lot), that is ~Rs 39,764 of adverse move inside a
+# single unchecked interval -- 2.5x the stop and 1.6x the entire daily loss
+# limit. Bars of 200+ points occur ~5 times a year; 300+ about once.
+#
+# A naked short strangle has no structural floor: its loss is bounded only by
+# a control that runs every five minutes. A wing is a floor that holds
+# regardless of how slowly the loop runs -- a structural guarantee rather
+# than a procedural one, and only the structural kind survives a gap.
+#
+# So for REAL MONEY the sideways branch takes the defined-risk twin. The
+# substitution is unusually clean because the twins share the naked shapes'
+# short strikes exactly (FAMILY_DELTA_TARGETS: NEUTRAL_PREMIUM_SELLING and
+# IRON_CONDOR are both 0.20; VOLATILITY_COMPRESSION and IRON_FLY are both
+# ATM/0.50). The trade thesis is unchanged -- same view, same strikes, wings
+# added. It costs some premium and nothing else.
+#
+# The trending branches need no twin: BULL_PUT_SPREAD and BEAR_CALL_SPREAD
+# already pair every short leg with a protective long.
+DEFINED_RISK_TWIN = {
+    FAMILY_SHORT_STRADDLE: "IRON_FLY",       # same ATM shorts, plus wings
+    FAMILY_SHORT_STRANGLE: "IRON_CONDOR",    # same 0.20-delta shorts, plus wings
+}
 
-def select_strategy(trend_regime: Optional[str], volatility_regime: Optional[str], clock: Clock) -> StrategySelectionResult:
+
+def select_strategy(trend_regime: Optional[str], volatility_regime: Optional[str],
+                    clock: Clock, *, defined_risk_only: bool = False) -> StrategySelectionResult:
+    """`defined_risk_only` substitutes each naked sideways shape for its
+    defined-risk twin. It is DERIVED from the execution mode by the caller,
+    never configured independently -- see OptionsOSRunner, which fails closed:
+    anything other than a literal `shadow_mode: true` selects defined-risk
+    only, so a missing key, a typo or a real-money switch all land safe."""
     now = clock()
 
     # 1. NO OPINION -> NO TRADE. Unchanged: an absent or unrecognised regime
@@ -165,6 +201,20 @@ def select_strategy(trend_regime: Optional[str], volatility_regime: Optional[str
         rationale = ("premium at the money is rich enough to pay for the gamma"
                      if family == FAMILY_SHORT_STRADDLE
                      else "premium is thin, so distance from the money is worth more than the credit")
+
+        if defined_risk_only:
+            naked, family = family, DEFINED_RISK_TWIN[family]
+            return StrategySelectionResult(
+                selected_strategy=family, trend_regime=trend_regime,
+                volatility_regime=volatility_regime,
+                reasoning=f"Range-bound market ({trend_regime}) with {volatility_regime} "
+                          f"volatility -- {shape}: {rationale}. DEFINED-RISK MODE: {naked} "
+                          f"substituted for {family}, same short strikes with protective wings, "
+                          f"because loss on a naked shape is bounded only by a control that runs "
+                          f"every 300s and a 5-minute bar can exceed the stop.",
+                confidence="HIGH", evaluated_at=now,
+            )
+
         return StrategySelectionResult(
             selected_strategy=family, trend_regime=trend_regime, volatility_regime=volatility_regime,
             reasoning=f"Range-bound market ({trend_regime}) with {volatility_regime} volatility -- "

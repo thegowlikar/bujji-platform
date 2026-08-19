@@ -506,10 +506,25 @@ class OptionsOSRunner:
             mandatory_exit_time=mandatory_exit_time,
         )
 
+        # DEFINED-RISK MODE, derived from the execution mode and FAIL-CLOSED.
+        # Anything other than a literal `shadow_mode: true` -- a missing key, a
+        # typo, a string "false", or the real-money switch itself -- selects
+        # defined-risk only. Operator decision 2026-08-20: real money never
+        # sells a shape whose loss is bounded only by a 300-second heartbeat.
+        # It is deliberately NOT its own config flag; a second switch is a
+        # second thing to forget on the day it matters most.
+        defined_risk_only = self._config.get("shadow_mode") is not True
+        if defined_risk_only:
+            self._logger.warning(
+                "DEFINED-RISK MODE ACTIVE (shadow_mode=%r) -- naked sideways shapes are "
+                "substituted for their winged twins.", self._config.get("shadow_mode"))
+        self._governor_result_summary["defined_risk_only"] = defined_risk_only
+
         self._governor = TradingSessionGovernor(
             session_id=self._session_id, trading_brain_runtime=self._trading_brain_runtime,
             registry=self._registry, lifecycle_runtime=self._lifecycle_runtime, executor=self._executor,
             exit_policy_config=exit_policy_config, clock=self._clock, event_bus=self._root.event_bus,
+            defined_risk_only=defined_risk_only,
         )
 
         shadow_sessions_root = REPO_ROOT / artifacts_cfg.get("shadow_sessions_root", "shadow_sessions")

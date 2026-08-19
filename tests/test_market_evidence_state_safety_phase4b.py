@@ -136,6 +136,26 @@ _THREE_PART_SELECTION_AUTHORIZED = (
     "bujji/production_runtime/trading_session_governor/strategy_selector.py",
 )
 
+# AUTHORIZED CHANGE (2026-08-20, operator decision): DEFINED-RISK MODE for
+# real money. Measured over 168,194 real 5-minute NIFTY bars: the stop-loss,
+# daily loss limit and emergency brake all run on ONE 300-second management
+# heartbeat, and the worst single bar in nine years ranged 611.8 points --
+# ~Rs 39,764 of adverse move against a real 240.95-point straddle credit
+# inside one unchecked interval, 2.5x the stop. A naked shape has no
+# structural floor; a wing holds regardless of loop cadence.
+#
+#   .../trading_session_governor/session_governor.py  threads defined_risk_only
+#     into select_strategy. Additive keyword, default False; the RUNNER owns
+#     the fail-closed derivation (anything not literally `shadow_mode: true`
+#     selects defined-risk only). No existing behaviour changes in paper mode.
+#
+# The selector itself is already covered by _THREE_PART_SELECTION_AUTHORIZED.
+# Coverage: tests/test_defined_risk_mode.py, which enumerates every regime and
+# asserts no real-money selection can land on an UNDEFINED_RISK_FAMILY.
+_DEFINED_RISK_MODE_AUTHORIZED = (
+    "bujji/production_runtime/trading_session_governor/session_governor.py",
+)
+
 
 def test_market_evidence_state_has_only_allowed_fields():
     from bujji.market_state.evidence_boundary import MarketEvidenceState
@@ -265,7 +285,7 @@ def test_no_protected_lineage_package_modified():
         cwd="/opt/bujji/app", capture_output=True, text=True,
     )
     changed = [l for l in result.stdout.strip().splitlines() if l]
-    changed = [l for l in changed if l not in _PAPERBROKER_V2_AUTHORIZED + _LOT_SIZE_AUTHORITATIVE_AUTHORIZED + _CPC_SAFETY_SPINE_AUTHORIZED + _CPC_EVIDENCE_AND_REALISM_AUTHORIZED + _LIVE_PREMIUM_FIX_AUTHORIZED + _THREE_PART_SELECTION_AUTHORIZED]
+    changed = [l for l in changed if l not in _PAPERBROKER_V2_AUTHORIZED + _LOT_SIZE_AUTHORITATIVE_AUTHORIZED + _CPC_SAFETY_SPINE_AUTHORIZED + _CPC_EVIDENCE_AND_REALISM_AUTHORIZED + _LIVE_PREMIUM_FIX_AUTHORIZED + _THREE_PART_SELECTION_AUTHORIZED + _DEFINED_RISK_MODE_AUTHORIZED]
     protected_prefixes = (
         "bujji/msi_", "bujji/trading_brain/", "bujji/execution_engine/",
         "bujji/risk_governor/", "bujji/msi_shadow_trading/", "bujji/mic_replay/",
