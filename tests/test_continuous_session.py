@@ -129,3 +129,40 @@ class TestTheOrganismOutlivesItsDecisions:
                                        session_id="T-SINGLE", logger=logging.getLogger("continuous-test"))
         r._startup()
         assert not r._session_cfg.get("continuous")
+
+
+class TestTheBurstOffsetLivesOnTheCadenceNotTheStartTime:
+    """The 09:22:30 start bought FYERS burst separation from the shadow
+    campaign by sacrificing the opening 7.5 minutes. The separation is a
+    property of the decision cadence, so it belongs there: cycle 1 runs
+    longer, later cycles are unchanged, and the session still begins at the
+    open."""
+
+    def test_offset_lengthens_only_the_first_cycle(self, tmp_path):
+        base, _ = _continuous_runner(tmp_path, max_cycles=3)
+        base._continuous_session()
+        base_calls = base._intelligence_broker.calls
+
+        offset_seconds = 0.05  # == one extra decision interval at the test cadence
+        r, _ = _continuous_runner(tmp_path, max_cycles=3,
+                                  decision_phase_offset_seconds=offset_seconds)
+        r._continuous_session()
+
+        extra = int(round(offset_seconds / 0.01))  # offset / poll interval
+        assert r._intelligence_broker.calls == base_calls + extra, (
+            "the offset must add polls to cycle 1 ONLY -- not to every cycle")
+
+    def test_zero_offset_is_the_default_and_changes_nothing(self, tmp_path):
+        a, _ = _continuous_runner(tmp_path, max_cycles=3)
+        a._continuous_session()
+        b, _ = _continuous_runner(tmp_path, max_cycles=3, decision_phase_offset_seconds=0)
+        b._continuous_session()
+        assert a._intelligence_broker.calls == b._intelligence_broker.calls
+
+    def test_the_offset_never_delays_the_start_of_observation(self, tmp_path):
+        """Evidence collection begins immediately; the offset defers the first
+        DECISION, never the first observation."""
+        r, _ = _continuous_runner(tmp_path, max_cycles=2, decision_phase_offset_seconds=0.05)
+        r._continuous_session()
+        trail = r._governor_result_summary["continuous_evidence"]
+        assert trail and trail[0]["spots"] > 0

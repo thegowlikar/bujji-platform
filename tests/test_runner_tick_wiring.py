@@ -25,7 +25,7 @@ def cfg(tmp_path, *, tick=None, market_data=None, mgmt=None):
     base = {
         "shadow_mode": True, "logging": {"namespace": "tick-wiring-test"},
         "session": {"underlying": "NIFTY", "exchange_lot_size": 75, "desired_quantity": 1,
-                    "requested_risk": 5000.0,
+                    "requested_risk": 5000.0, "skip_market_hours_check": True,
                     "proposed_trade_effect": {"additional_margin": 10000.0, "additional_max_loss": 5000.0}},
         "exit_policy": {"profit_target_fraction": 0.5, "max_loss_fraction": 1.0, "mandatory_exit_time": None},
         "capital_snapshot": {},

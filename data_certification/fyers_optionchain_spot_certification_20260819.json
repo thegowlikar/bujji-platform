@@ -1,0 +1,68 @@
+{
+  "timestamp": "2026-08-19T09:17:29.259898+05:30",
+  "broker": "fyers",
+  "access_method": "direct_sdk_fyers_optionchain_reality",
+  "instrument": "NIFTY_SPOT",
+  "symbol_requested": "NSE:NIFTY50-INDEX",
+  "claim": "the option chain response's sentinel-strike (-1) ltp is a faithful NIFTY spot price, equal within tolerance to FyersBroker.get_spot() sampled at the same moment",
+  "extraction_function": "capture_options_reality_session._underlying_spot",
+  "validation_result": "CERTIFIED_AVAILABLE",
+  "samples_requested": 5,
+  "samples_usable": 5,
+  "tolerance_bps": 5.0,
+  "max_diff_bps": 0.24881450256736956,
+  "mean_diff_bps": 0.06220783169282339,
+  "max_abs_diff_points": 0.5999999999985448,
+  "issues": [],
+  "samples": [
+    {
+      "at": "2026-08-19T09:16:48.433557+05:30",
+      "chain_spot": 24113.75,
+      "broker_spot": 24114.35,
+      "error": null,
+      "abs_diff": 0.5999999999985448,
+      "diff_bps": 0.24881450256736956,
+      "within_tolerance": true
+    },
+    {
+      "at": "2026-08-19T09:16:58.610819+05:30",
+      "chain_spot": 24113.45,
+      "broker_spot": 24113.45,
+      "error": null,
+      "abs_diff": 0.0,
+      "diff_bps": 0.0,
+      "within_tolerance": true
+    },
+    {
+      "at": "2026-08-19T09:17:08.775876+05:30",
+      "chain_spot": 24106.35,
+      "broker_spot": 24106.2,
+      "error": null,
+      "abs_diff": 0.1499999999978172,
+      "diff_bps": 0.062224655896747395,
+      "within_tolerance": true
+    },
+    {
+      "at": "2026-08-19T09:17:18.941714+05:30",
+      "chain_spot": 24105.35,
+      "broker_spot": 24105.35,
+      "error": null,
+      "abs_diff": 0.0,
+      "diff_bps": 0.0,
+      "within_tolerance": true
+    },
+    {
+      "at": "2026-08-19T09:17:29.104623+05:30",
+      "chain_spot": 24106.8,
+      "broker_spot": 24106.8,
+      "error": null,
+      "abs_diff": 0.0,
+      "diff_bps": 0.0,
+      "within_tolerance": true
+    }
+  ],
+  "limitations": [
+    "Compares against FyersBroker.get_spot(), itself certified under access_method=direct_sdk_fyers_broker_py -- this certifies agreement with that source, not independent correctness of either.",
+    "The chain and spot calls are sequential (one pacer slot apart), so a non-zero difference is expected and is not evidence of staleness on its own; the tolerance exists for exactly that reason."
+  ]
+}

@@ -9,38 +9,46 @@
 Description=Daily trigger for Bujji Options OS paper trading session (weekdays only)
 
 [Timer]
-# 09:20 IST -- deliberately after market open (09:15) so the entry window
-# reads a formed book rather than the opening auction, and after the two
-# observation timers (09:00 daily-intelligence, 09:10 shadow-decision) so
-# the three systems' startup logs stay untangled and the observation
-# capture has begun writing the day's rows.
+# 09:14 IST -- pre-open, holding at the runner's own market-hours gate so
+# the session begins WITH the open at 09:15:00 rather than minutes into it.
+# See the FIRE TIME block below for why this is safe and where the old
+# 09:22:30 burst offset went.
 #
 # Weekends are excluded structurally by Mon..Fri -- a first, coarse net.
 # The SECOND, authoritative check is the runner's own
 # MarketCalendar.is_trading_day() gate, which also knows listed NSE
 # holidays. On a holiday the timer still fires and the runner exits 0
 # immediately: a clean, expected skip, never a fabricated session.
-# FIRE TIME: half a cycle off the observation units, on purpose.
+# FIRE TIME: 09:14 IST -- PRE-OPEN, deliberately.
 #
-# 09:20 was already substantially correct -- after the 09:15 open, with a
-# few minutes of post-open structure before the entry window. The 2.5
-# minute nudge is PHASE, not timing: this runner and the shadow campaign
-# both poll on a 5-minute cadence, and the campaign's cycles land on
-# :15/:20/:25... so a 09:20 start put this session's bursts on the
-# campaign's beat, on every cycle, for the whole session.
+# OPERATOR DIRECTIVE 2026-08-19: "Bujji should run through every market
+# tick." It previously fired at 09:22:30 and so was ASLEEP for the first 7.5
+# minutes of every live session -- the most volatile, least recoverable part
+# of the day. The capture units were already fixed this way (09:14 fire +
+# bujji/market_reality/open_wait.wait_until_open); this unit now matches, so
+# its first decision-grade observation lands with the first tick at 09:15:01.
 #
-# Two 5-minute loops drift under a second per cycle, so an alignment at
-# start persists for hours rather than averaging out. Each collision puts
-# two independently paced processes on one FYERS account: the pacer in
-# bujji/broker/fyers.py is MODULE level, i.e. per interpreter, with no IPC
-# and no broker-side coordination, so two processes each pace to ~8.3
-# calls/s and the account sees ~16.7 against a documented 10/s ceiling.
-# Schedule separation is the only cross-process rate control that exists.
+# WHY THIS IS SAFE NOW, AND WAS NOT BEFORE: this unit connects the broker and
+# pulls a live chain the instant it starts, and it used to have no
+# market-hours gate of any kind -- this timer was its ONLY protection against
+# acting on a closed-market book. It now has its own AUTHORITATIVE in-process
+# gate, OptionsOSRunner._await_market_open(), which runs BEFORE the broker
+# connects: close to the open it waits for 09:15:00; far from the open (a
+# stray fire, a manual 05:00 run) it REFUSES with a configuration error.
+# The timer is demoted to the coarse first net, exactly like the Mon..Fri
+# weekday filter above the runner's authoritative calendar check.
 #
-# Half a cycle (150s) costs 2.5 minutes of pre-entry observation, changes
-# nothing about the entry logic, and guarantees the two loops never share
-# a burst window.
-OnCalendar=Mon..Fri 09:22:30 Asia/Kolkata
+# THE 09:22:30 OFFSET WAS NOT DISCARDED, IT MOVED. It existed to keep this
+# session's 5-minute bursts off the shadow campaign's :15/:20/:25 beat: the
+# pacer in bujji/broker/fyers.py is MODULE level, i.e. per interpreter, with
+# no IPC, so two aligned processes pace to ~8.3 calls/s each and the account
+# sees ~16.7 against a documented 10/s ceiling. Schedule separation is still
+# the only cross-process rate control that exists. That separation is a
+# property of the DECISION cadence, not of the start time, so it now lives
+# in config as session.continuous.decision_phase_offset_seconds: 150 --
+# cycle 1 runs 150s longer, decisions still land on :22:30/:27:30..., and
+# the opening minutes are observed instead of slept through.
+OnCalendar=Mon..Fri 09:14:00 Asia/Kolkata
 
 # A missed fire (VPS rebooting at 09:20) still runs once the machine is
 # back -- but see the runner's own entry-window logic: arriving late in

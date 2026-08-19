@@ -12,6 +12,20 @@ logging:
 
 session:
   underlying: NIFTY
+  # Bujji goes LIVE with the market, not after it (operator directive
+  # 2026-08-19). The unit's timer now fires pre-open and the runner's own
+  # market-hours gate (_await_market_open) waits for THIS instant before the
+  # broker connects -- so the first decision-grade observation lands with the
+  # first tick at 09:15:01, exactly like the capture units. Far-from-open
+  # starts are refused by that gate, not by the schedule.
+  market_open: "09:15:00"
+  # Startup slot inside the opening seconds. The three 09:14 units release
+  # together at the open; the capture scripts take +0s (spot/vix/futures),
+  # +2s (option chain) and +5s (depth), so this one -- the heaviest starter,
+  # broker connect plus a full chain pull -- takes +8s. First observation
+  # still lands in the opening seconds; the bursts never stack against the
+  # shared 10/s FYERS account ceiling.
+  market_open_offset_seconds: 8
   # CONTINUOUS SESSION (operator directive 2026-08-19): Bujji runs through
   # the whole market day. Rolling 30s spot polls, regime re-derived every
   # 5-min decision cycle from the trailing 16-poll window, entry attempted
@@ -25,6 +39,13 @@ session:
     entry_cutoff: "14:30"
     observe_until: "15:30"
     max_cycles: 96
+    # Burst separation from the shadow campaign's :15/:20/:25 beat, moved
+    # off the START time and onto the DECISION cadence: cycle 1 runs 150s
+    # longer, so decisions land on :22:30/:27:30... as before while evidence
+    # collection begins at the open. Needed because the FYERS pacer is
+    # per-interpreter -- schedule separation is still the only cross-process
+    # rate control (CP-D owns the real fix).
+    decision_phase_offset_seconds: 150
   # Cross-check only -- the runner reads the authoritative lot size from
   # the FYERS instrument master and warns if this disagrees (audit
   # 2026-07-19: master said 65 while this file said 75).

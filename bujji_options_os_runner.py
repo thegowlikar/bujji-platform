@@ -120,6 +120,10 @@ def parse_args(argv) -> argparse.Namespace:
                          help="Single-instance lock. Its OWN path -- never another system's.")
     parser.add_argument("--skip-calendar-check", action="store_true",
                          help="bypass the trading-day gate -- manual/testing only, never systemd.")
+    parser.add_argument("--skip-market-hours-check", action="store_true",
+                         help="bypass the market-hours gate -- replay/testing only, NEVER systemd. "
+                              "The gate is this order-placing unit's protection against running "
+                              "against a closed-market book.")
     parser.add_argument("--bhavcopy-path", default=None, help="Override providers.market_data.bhavcopy_path.")
     parser.add_argument("--trend-regime", default=None, help="Override regime.trend_regime.")
     parser.add_argument("--volatility-regime", default=None, help="Override regime.volatility_regime.")
@@ -849,9 +853,94 @@ class OptionsOSRunner:
         self._governor_result_summary["derived_market_regime"] = getattr(thesis, "market_regime", None)
         return MarketThesisRegimeProvider(thesis, volatility_regime)
 
+    def _await_market_open(self) -> None:
+        """AUTHORITATIVE, in-process market-hours gate for the ONE unit that
+        places orders.
+
+        WHY (operator directive, 2026-08-19): the capture units were moved to
+        a 09:14 fire + wait-for-open so the first sample lands at 09:15:01.
+        This unit was left at 09:22:30, so Bujji was ASLEEP for the first 7.5
+        minutes of every live session. Moving its timer earlier is only safe
+        once the timer stops being the sole market-hours protection -- this
+        unit connects the broker and pulls a live chain the instant it
+        starts, so a pre-open fire needs a real gate here, not a schedule.
+
+        Two outcomes, both honest:
+          - close to the open -> WAIT, then proceed at the open instant.
+          - far from the open -> REFUSE (ConfigurationError), never a session
+            against a closed-market book.
+
+        The upper bound is DERIVED from the session's own configured end
+        (continuous.observe_until, else management.monitor_until) rather than
+        introducing a fourth market-close constant -- that split is a known,
+        separately-tracked defect and this gate does not add to it.
+        """
+        import datetime as _dt
+        import time as _time
+
+        from bujji.market_reality.open_wait import wait_until_open
+
+        if self._session_cfg.get("skip_market_hours_check"):
+            # Explicit, loud, and never a default. Replay and unit tests run
+            # at arbitrary wall-clock times and exercise lifecycle mechanics,
+            # not market hours. A test asserts no installed systemd unit
+            # passes the flag that sets this.
+            self._logger.warning(
+                "MARKET_HOURS_GATE BYPASSED (skip_market_hours_check) -- replay/testing only. "
+                "A live session must never run with this set.")
+            return
+
+        def _as_time(text, field):
+            parts = [int(x) for x in str(text).split(":")]
+            while len(parts) < 3:
+                parts.append(0)
+            try:
+                return _dt.time(*parts[:3])
+            except ValueError as exc:
+                raise ConfigurationError(f"{field}={text!r} is not a valid time: {exc}") from exc
+
+        market_open = _as_time(self._session_cfg.get("market_open", "09:15:00"), "session.market_open")
+        # OWN SLOT IN THE OPENING SECONDS. Three units now wake at 09:14 and
+        # release at the open; without per-unit offsets their startup bursts
+        # would stack against the shared 10/s FYERS ceiling -- the same
+        # collision the capture scripts avoid with +0/+2/+5s. This unit is
+        # the heaviest starter (broker connect + full chain pull), so it
+        # takes the last slot: still inside the opening seconds, never first.
+        open_offset = float(self._session_cfg.get("market_open_offset_seconds", 0.0))
+
+        if not wait_until_open(now_fn=self._clock, market_open=market_open,
+                               open_offset_seconds=open_offset,
+                               sleep_fn=_time.sleep, logger=self._logger):
+            raise ConfigurationError(
+                f"REFUSING TO START: the market open ({market_open.isoformat()}) is not "
+                f"imminent (now={self._clock().time().isoformat()}). This unit places orders "
+                f"and pulls a live chain on start; it will not run against a closed-market "
+                f"book. This is the expected outcome of a stray or far-from-open start.")
+
+        ccfg = self._session_cfg.get("continuous")
+        if isinstance(ccfg, dict):
+            session_end = _as_time(ccfg.get("observe_until", "15:30"), "session.continuous.observe_until")
+        else:
+            mgmt = self._session_cfg.get("management") or {}
+            session_end = _as_time(mgmt.get("monitor_until", "15:15:00"), "session.management.monitor_until")
+
+        now_t = self._clock().time()
+        if now_t >= session_end:
+            raise ConfigurationError(
+                f"REFUSING TO START: now={now_t.isoformat()} is at or past this session's "
+                f"configured end ({session_end.isoformat()}). A late start would connect the "
+                f"broker after the book stops being tradeable.")
+        self._logger.info("MARKET_HOURS_GATE -- open=%s(+%.0fs) end=%s now=%s: cleared.",
+                          market_open.isoformat(), open_offset, session_end.isoformat(),
+                          now_t.isoformat())
+
     def _pre_market_check(self) -> None:
         self._stage = RunnerStage.PRE_MARKET_CHECK
         self._logger.info("PRE_MARKET_CHECK")
+
+        # Market-hours gate FIRST: before the broker connects, before any live
+        # chain is pulled. The timer is now only the coarse first net.
+        self._await_market_open()
 
         import asyncio
         asyncio.run(self._broker.connect())
@@ -917,6 +1006,20 @@ class OptionsOSRunner:
         entry_cutoff = _parse_t("entry_cutoff", "14:30")
         observe_until = _parse_t("observe_until", "15:30")
         polls_per_cycle = max(1, int(decision_interval // poll_interval))
+        # PHASE, not start time. The 09:22:30 timer bought burst separation
+        # from the shadow campaign's :15/:20/:25 beat by starting LATE --
+        # which cost 7.5 minutes of live market. That separation is a
+        # property of the DECISION cadence, so it belongs here: Bujji wakes
+        # at the open and collects evidence from the first tick, while the
+        # first decision cycle is lengthened by the offset so every
+        # chain-pulling burst still lands off the campaign's beat. The
+        # evidence polls are single-call and do not collide.
+        phase_offset = max(float(ccfg.get("decision_phase_offset_seconds", 0.0)), 0.0)
+        first_cycle_extra_polls = int(round(phase_offset / poll_interval))
+        if first_cycle_extra_polls:
+            self._logger.info(
+                "Continuous decision cadence phase-offset by %.0fs (+%d polls on cycle 1) to keep "
+                "chain bursts off the shadow campaign's beat.", phase_offset, first_cycle_extra_polls)
         # The STRIDES belong to the stability assessment over the trailing
         # WINDOW (which must support them); the per-cycle poll batch is just
         # data collection and validates against stride (1,) only. Conflating
@@ -954,7 +1057,9 @@ class OptionsOSRunner:
             if now.time() >= observe_until:
                 break
             cycles += 1
-            plan = WarmupPlan(polls=polls_per_cycle, interval_seconds=poll_interval, strides=(1,))
+            plan = WarmupPlan(
+                polls=polls_per_cycle + (first_cycle_extra_polls if cycles == 1 else 0),
+                interval_seconds=poll_interval, strides=(1,))
             snapshots.extend(poll_spot_series(
                 fetch_spot=lambda: asyncio.run(broker.get_spot(self._root.underlying)),
                 clock=self._clock, plan=plan, logger=self._logger,
@@ -1484,6 +1589,8 @@ def _run_session(args, as_of_date: str) -> int:
         config = load_config(Path(args.config))
         if args.bhavcopy_path:
             config.setdefault("providers", {}).setdefault("market_data", {})["bhavcopy_path"] = args.bhavcopy_path
+        if getattr(args, "skip_market_hours_check", False):
+            config.setdefault("session", {})["skip_market_hours_check"] = True
         if args.trend_regime:
             config.setdefault("providers", {}).setdefault("regime", {})["trend_regime"] = args.trend_regime
         if args.volatility_regime:
