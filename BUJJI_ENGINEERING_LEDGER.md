@@ -300,3 +300,31 @@ respecting, are TRADING judgements — both orderings ship, neither privileged.
   canonical strategy authority. Record divergence first.
 - Lesson: a green suite proves the paths it drives. The live path was never
   driven end to end until tonight's probe. 7,380 green.
+
+## 2026-08-19 night — Part 2 decided: measure, do not swap
+
+Operator delegated the call. Built the divergence recorder; deliberately did
+NOT swap the IV derivation driving strike selection.
+
+**Why not swap tonight:** tomorrow is the FIRST day strike selection can run
+live at all (premium fix) — swapping IV underneath it makes any odd first
+trade unattributable; we had zero measurements; and tomorrow already carries
+the largest new live surface Bujji has taken.
+
+**Measured over 40 real captured snapshots (08-14 → 08-19), 27 comparisons:**
+- disagree on some target: **20 (74%)**; agree on all: 7 (26%)
+- median |IV diff| **0.492 vol pts**; median max |delta diff| **0.0685**
+- agreement at the premium-selling target (0.20): CE 70.4%, PE 74.1%
+- **when they differ: +50 points, 66 times out of 66** — systematic and
+  one-directional, not noise. Parity's forward sits above spot, shifting the
+  whole delta curve; a parity strangle sits one strike higher on both legs.
+- rate: engine assumes flat 6.500%; parity implies 6.91% near, 5.99% monthly
+  (weekly 12.38% — confirms the short-tenor DF noise caveat).
+
+`divergence.py` calls the REAL `_build_strike_evidence` (import only, never a
+copy — a copy would drift and measure my idea of the engine). Wired into the
+entry path, recorded to the session summary, **consumed by nothing**.
+
+**OPERATOR GATE, now decidable from a record:** does parity replace spot-BS
+as the delta authority for strike selection? Evidence accumulates per entry
+attempt. 7,397 green.
