@@ -11,6 +11,7 @@ This package is additive and observation-only. It publishes levels; it does
 not select strikes, size positions, or influence any existing decision. That
 step is an operator gate, not an implementation detail.
 """
+from .context import LevelContext, build_level_context
 from .engine import count_touches, detect_levels, detect_zones
 from .models import Bar, LevelSet, PriceLevel, SupplyDemandZone, SwingPoint, ZoneSet
 from .swings import detect_swings_at_strength, swings_surviving_agreement
@@ -18,6 +19,7 @@ from .zones import build_zones, track_zone, true_range, typical_range
 
 __all__ = [
     "Bar", "LevelSet", "PriceLevel", "SwingPoint", "SupplyDemandZone", "ZoneSet",
+    "LevelContext", "build_level_context",
     "detect_levels", "detect_zones", "count_touches",
     "detect_swings_at_strength", "swings_surviving_agreement",
     "build_zones", "track_zone", "true_range", "typical_range",
