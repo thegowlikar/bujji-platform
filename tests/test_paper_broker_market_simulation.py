@@ -100,9 +100,14 @@ def test_charges_each_component_present():
 
 
 def test_charges_total_matches_sum_of_components():
+    """Every component must be inside the total. This test earned its keep on
+    2026-08-19: the rate-card correction added clearing charges and IPFT, and
+    this assertion failed until both were folded into `total` -- exactly the
+    silent-understatement it exists to catch."""
     breakdown = ChargesCalculator.calculate(75000.0, "SELL", ChargesConfig())
     expected = (breakdown.brokerage + breakdown.stt + breakdown.exchange_charges
-                + breakdown.gst + breakdown.sebi_charges + breakdown.stamp_duty)
+                + breakdown.clearing_charges + breakdown.gst + breakdown.sebi_charges
+                + breakdown.ipft + breakdown.stamp_duty)
     assert breakdown.total == pytest.approx(expected)
 
 
@@ -112,10 +117,75 @@ def test_charges_negative_turnover_rejected():
 
 
 def test_charges_configurable_not_hardcoded():
-    custom = ChargesConfig(brokerage_per_order=0.0, stt_sell_percentage=0.0, exchange_charges_percentage=0.0,
-                            gst_percentage=0.0, sebi_charges_percentage=0.0, stamp_duty_percentage=0.0)
+    """Zeroing EVERY rate must produce a zero total -- proof that no rate is
+    baked into the calculator. Any new rate must be added here too, or this
+    test quietly stops proving what it claims."""
+    custom = ChargesConfig(brokerage_per_order=0.0, stt_sell_percentage=0.0,
+                            exchange_charges_percentage=0.0, clearing_charges_percentage=0.0,
+                            gst_percentage=0.0, sebi_charges_percentage=0.0,
+                            ipft_percentage=0.0, stamp_duty_percentage=0.0)
     breakdown = ChargesCalculator.calculate(100000.0, "SELL", custom)
     assert breakdown.total == 0.0
+
+
+def test_every_configured_rate_is_zeroable():
+    """Mechanically catches a rate added to ChargesConfig but forgotten in the
+    test above -- the failure mode that would let a hardcoded charge slip in
+    behind a still-green suite."""
+    import dataclasses
+
+    zeroed = {f.name: 0.0 for f in dataclasses.fields(ChargesConfig)}
+    assert ChargesCalculator.calculate(100000.0, "SELL", ChargesConfig(**zeroed)).total == 0.0
+    assert ChargesCalculator.calculate(100000.0, "BUY", ChargesConfig(**zeroed)).total == 0.0
+
+
+# --------------------------------------------------------------------- #
+# Rate card, verified 2026-08-19 against fyers.in/charges-list and
+# corroborated against zerodha.com/charges. These are FYERS retail rates
+# for NSE equity/index options. Pinned so a silent drift back to the old
+# "illustrative" values -- which understated real cost by 4.4% on a short
+# strangle -- fails loudly instead of quietly moving every P&L number.
+# --------------------------------------------------------------------- #
+
+def test_rate_card_matches_the_published_fyers_charges():
+    c = ChargesConfig()
+    assert c.brokerage_per_order == 20.0                    # Flat Rs 20 per executed order
+    assert c.stt_sell_percentage == 0.0015                  # 0.15% SELL, on premium
+    assert c.exchange_charges_percentage == 0.000355299     # 0.0355299% on premium
+    assert c.clearing_charges_percentage == 0.00009         # 0.009% on premium
+    assert c.gst_percentage == 0.18                         # 18%
+    assert c.sebi_charges_percentage == 0.0000010           # Rs 10/crore
+    assert c.ipft_percentage == 0.0000001                   # Rs 0.01/crore
+    assert c.stamp_duty_percentage == 0.00003               # 0.003% BUY side
+
+
+def test_gst_is_levied_on_the_published_base_and_not_on_taxes():
+    """GST applies to brokerage + transaction + clearing + SEBI + IPFT. It is
+    NOT levied on STT or stamp duty, which are themselves taxes -- taxing a
+    tax would overstate cost as surely as omitting one understates it."""
+    c = ChargesConfig()
+    sell = ChargesCalculator.calculate(100000.0, "SELL", c)
+    expected_base = (sell.brokerage + sell.exchange_charges + sell.clearing_charges
+                     + sell.sebi_charges + sell.ipft)
+    assert sell.gst == pytest.approx(expected_base * c.gst_percentage)
+    assert sell.stt > 0                                     # present, and outside the GST base
+
+
+def test_stt_is_sell_side_only_and_stamp_duty_buy_side_only():
+    c = ChargesConfig()
+    sell = ChargesCalculator.calculate(100000.0, "SELL", c)
+    buy = ChargesCalculator.calculate(100000.0, "BUY", c)
+    assert sell.stt > 0 and sell.stamp_duty == 0.0
+    assert buy.stamp_duty > 0 and buy.stt == 0.0
+
+
+def test_a_real_short_strangle_round_trip_costs_what_the_card_says():
+    """One lot (65) sold at 120, bought back at 60, two legs. Anchored on a
+    real arithmetic result so a rate change cannot pass unnoticed."""
+    c = ChargesConfig()
+    per_leg = (ChargesCalculator.calculate(120.0 * 65, "SELL", c).total
+               + ChargesCalculator.calculate(60.0 * 65, "BUY", c).total)
+    assert per_leg * 2 == pytest.approx(130.36, abs=0.05)
 
 
 # --------------------------------------------------------------------- #
