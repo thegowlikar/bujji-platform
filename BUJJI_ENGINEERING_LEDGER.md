@@ -422,3 +422,40 @@ naked → tighter loop.
 
 7,520 green (272s, back to normal). Blind-window exposure for naked shapes cut
 ~5×. Genuinely continuous still needs the websocket (certified, unwired).
+
+## 2026-08-20 pre-open — vision audit: two findings, both fixed
+
+**1. The learning loop was open at the read end.** D-8 made outcomes durable;
+`governor_context_builder` asks `AdaptiveRiskMemory.all_entries()` /
+`.lookup()` on every entry decision — and the runner passed
+`AdaptiveRiskMemory()`, fresh and empty, every session. `append_observation`
+had **zero callers anywhere**. The risk chain was interrogating a memory that
+could not answer. New `risk_memory_bridge.py` hydrates it from the durable
+store; refuses to invent `volatility_regime` (UNKNOWN + named note, never
+back-filled from today) or mfe/mae (None, never derived from realized_pnl).
+Inert today (0 records), live from the first trade.
+
+**2. Tests were writing into the REAL durable store.**
+`_outcome_memory_store()` defaulted to `data/outcome_memory_events.jsonl`
+under REPO_ROOT regardless of the session's artifacts root. Found by hydrating
+it and getting **78 records back from a system that has never traded** —
+sessions `OUTCOME-1/2/6`, family `SHORT_STRANGLE` (not in SUPPORTED_FAMILIES),
+890 KB, growing every regression. They would have been the first thing the
+hydrated risk memory learned from. **Fixed structurally**: the default now
+derives from the journal's directory, so production is unmoved and any
+sandboxed caller is sandboxed automatically. Polluted file **quarantined, not
+deleted**. Two standing guards now assert the real store holds no synthetic
+session ids and no unbuildable families.
+
+7,535 green; a full regression no longer creates the real store at all.
+
+### Audit gaps found but NOT fixed (operator decisions)
+- **Sizing is static**: `desired_quantity: 1`, no sizing module anywhere. And
+  `initial_risk` for the stop is a flat `requested_risk: 5000` — **independent
+  of quantity**. Raise lots without raising it and the stop becomes
+  meaningless. They must move together; nothing enforces it.
+- Holiday calendar still `holiday_calendar_verified=False`.
+- `_wing_width` percentage-vs-fraction trap; `_nearest_grid` clamping makes
+  REJECT_IMPOSSIBLE_WING_WIDTH unreachable (both shared with IRON_CONDOR).
+- Websocket certified but unwired; slippage modelled, never measured.
+- Futures identity in the normalized store (rolled continuous vs real contract).
