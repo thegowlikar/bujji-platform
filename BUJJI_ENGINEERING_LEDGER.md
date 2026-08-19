@@ -328,3 +328,41 @@ entry path, recorded to the session summary, **consumed by nothing**.
 **OPERATOR GATE, now decidable from a record:** does parity replace spot-BS
 as the delta authority for strike selection? Evidence accumulates per entry
 attempt. 7,397 green.
+
+## 2026-08-19 night — charges rate card + three-part regime selection
+
+**Charges verified against FYERS' published card** (corroborated vs Zerodha).
+Three defaults were wrong: STT 0.10%→**0.15%**, NSE txn 0.053%→**0.0355299%**,
+clearing charges **absent → 0.009%** (no field existed); GST base widened to
+brokerage+txn+clearing+SEBI+IPFT. Correct already: brokerage ₹20, SEBI
+₹10/cr, stamp 0.003% buy. Net: short strangle round trip ₹124.89 → **₹130.36**
+(+4.4% understated). Errors partly cancelled — luck, not design; all pointed
+at understating cost. Two existing tests failed and were RIGHT to (6 of 8
+components summed; 6 of 8 rates zeroed) — completed, plus a reflection-based
+test so a future rate can't be forgotten.
+
+**Three-part strategy selection (operator directive; both approvals given).**
+Old table: 2 tradeable outcomes, both neutral → TRENDING always no-trade,
+because no directional credit spread existed anywhere. Now:
+- SIDEWAYS + HIGH_VOL → **short straddle**; + LOW/CONTRACTION → **short strangle**
+- TRENDING_UP → **BULL_PUT_SPREAD**; TRENDING_DOWN → **BEAR_CALL_SPREAD** (both new)
+- vol EXPANSION checked **before** direction; every no-trade path preserved
+- straddle-vs-strangle is config (`SIDEWAYS_SHAPE_BY_VOLATILITY`), invertible
+
+**RISK POSTURE CHANGED:** naked short legs enter the book for the first time
+(straddle/strangle are UNDEFINED risk). Gate B SPAN, capital check, limits,
+brake and mandatory exit still apply; the SHAPE no longer bounds loss.
+
+Real-chain proof — all four construct: straddle CE/PE 24050 (credit 240.95);
+strangle CE24350/PE23850 (69.65); bull put 23850/23650 (19.80, max loss
+180.20); bear call 24350/24550 (25.35, max loss 174.65). Spread shorts match
+the strangle's strikes — one 0.20 delta policy.
+
+**Two PRE-EXISTING defects found and pinned, not fixed** (shared with
+IRON_CONDOR): (1) `expected_move_pct` is a percentage number, not a fraction —
+0.006 silently falls back to the 200pt constant while still reporting
+"expected_move"; (2) `_nearest_grid` clamps, so REJECT_IMPOSSIBLE_WING_WIDTH is
+unreachable and an impossible wing becomes the furthest strike. Both are
+OPERATOR DECISIONS.
+
+14 guards authorized by name; baseline not advanced. 7,439 green.
