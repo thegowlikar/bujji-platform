@@ -830,7 +830,11 @@ class OptionsOSRunner:
 
         snapshot = asyncio.run(adapter.build_snapshot())
         candles = asyncio.run(broker.get_recent_candles(self._root.underlying, 5, 75))
-        asyncio.run(recorder.record_cycle(snapshot, broker, self._clock, candles=candles))
+        # D-5: record_cycle RETURNS the understanding layer's own honest
+        # record of this cycle's conclusions. It used to be called for its
+        # side effect and the record dropped on the floor -- so a NO_TRADE
+        # day left no trace of WHY. It is now persisted (see _persist_thesis).
+        cycle_record = asyncio.run(recorder.record_cycle(snapshot, broker, self._clock, candles=candles))
 
         evidence = recorder.last_evidence
         if evidence is None:
@@ -851,7 +855,39 @@ class OptionsOSRunner:
         )
         self._governor_result_summary["regime_source"] = "market_thesis"
         self._governor_result_summary["derived_market_regime"] = getattr(thesis, "market_regime", None)
+
+        # D-5: hold the audit record until the provider has mapped the thesis
+        # into the governor's two-string regime vocabulary, so the persisted
+        # record links evidence -> thesis -> regime -> selection end to end.
+        # Completed and written by _persist_thesis() after get_regime().
+        from bujji.shadow_observatory.thesis_artifact import build_thesis_artifact
+        self._pending_thesis_artifact = build_thesis_artifact(
+            thesis=thesis, cycle_record=cycle_record,
+            stability=getattr(self, "_pending_stability", None),
+            cycle=getattr(self, "_pending_cycle", None),
+            recorded_at=self._clock().isoformat(),
+        )
         return MarketThesisRegimeProvider(thesis, volatility_regime)
+
+    def _persist_thesis(self, trend_regime=None, volatility_regime=None) -> None:
+        """Write the pending derivation record, now that we know what the
+        selector was actually handed. Never raises into the session: the
+        recorder swallows its own failures, and a missing audit record must
+        not end a run that may hold an open position."""
+        artifact = getattr(self, "_pending_thesis_artifact", None)
+        if artifact is None:
+            return
+        artifact["regime_handed_to_selector"] = {
+            "trend_regime": trend_regime, "volatility_regime": volatility_regime,
+        }
+        self._recorder.record_market_thesis(artifact)
+        self._pending_thesis_artifact = None
+        verdict = artifact.get("family_verdict") or {}
+        self._logger.info(
+            "THESIS RECORDED -- regime=%s->%s families preferred=%s rejected=%s unknown=%s",
+            artifact.get("thesis", {}).get("market_regime"), trend_regime,
+            len(verdict.get("preferred") or []), len(verdict.get("rejected") or []),
+            len(verdict.get("insufficient_evidence") or []))
 
     def _await_market_open(self) -> None:
         """AUTHORITATIVE, in-process market-hours gate for the ONE unit that
@@ -949,7 +985,8 @@ class OptionsOSRunner:
         # discovering a missing input mid-session. get_trend_regime()/
         # get_volatility_regime() already raise MissingRegimeInputError
         # on their own -- this call surfaces that as early as possible.
-        self._regime_provider.get_regime()
+        _trend, _vol = self._regime_provider.get_regime()
+        self._persist_thesis(_trend, _vol)
 
         try:
             self._market_data_provider.get_option_chain(self._as_of_date)
@@ -1076,9 +1113,16 @@ class OptionsOSRunner:
             if verdict is None or not verdict.is_stable:
                 continue
             try:
+                # D-5: the derivation record carries the cycle number and the
+                # stability verdict that authorised this derivation, so a
+                # day's file reads as the organism's reasoning over time.
+                self._pending_cycle = cycles
+                self._pending_stability = {"is_stable": verdict.is_stable, "reason": verdict.reason,
+                                           "spots_in_window": len(snapshots)}
                 self._regime_provider = self._build_market_thesis_regime_provider(
                     seeded_memory=replay_snapshots(snapshots).memory)
                 trend_regime, volatility_regime = self._regime_provider.get_regime()
+                self._persist_thesis(trend_regime, volatility_regime)
             except Exception as exc:  # noqa: BLE001 -- one failed derivation never ends the day
                 self._logger.warning("continuous cycle %d: regime derivation failed (%s) -- observing on.",
                                      cycles, exc)

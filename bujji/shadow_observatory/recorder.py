@@ -72,6 +72,22 @@ class ShadowObservatoryRecorder:
         except Exception as exc:  # noqa: BLE001
             self.internal_errors.append(f"{type(exc).__name__}: {exc}")
 
+    def record_market_thesis(self, artifact: dict) -> None:
+        """D-5: persist ONE regime derivation -- the understanding-layer
+        record, the thesis it produced (including the full 13-family
+        verdict), and the two-string regime the selector was actually
+        handed. Caller-supplied and already shaped by
+        shadow_observatory.thesis_artifact.build_thesis_artifact; this
+        method reshapes nothing and interprets nothing.
+
+        Same failure contract as every other recorder method: a recorder
+        failure must NEVER reach the runtime. A lost audit record is bad;
+        a killed live session holding an open position is worse."""
+        try:
+            self._store.append("market_thesis.jsonl", artifact)
+        except Exception as exc:  # noqa: BLE001
+            self.internal_errors.append(f"{type(exc).__name__}: {exc}")
+
     def record_heartbeat_snapshot(self, heartbeat) -> None:
         """Heartbeats are not published on the EventBus (F.5's own
         heartbeat() is a pull-based snapshot, not a domain event) --

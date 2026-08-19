@@ -8,6 +8,8 @@ from __future__ import annotations
 import os
 from pathlib import Path
 
+import pathlib
+
 import pytest
 import yaml
 
@@ -58,20 +60,55 @@ class TestTradingUnit:
     def test_service_passes_date_today_not_a_hardcoded_date(self):
         assert "--date-today" in SERVICE.read_text()
 
-    def test_timer_fires_after_market_open_and_after_the_observers(self):
+    def test_timer_fires_close_to_the_open_and_the_runner_gates_the_rest(self):
+        """The invariant is 'Bujji is live WITH the market and never trades a
+        closed book' -- NOT a specific fire time.
+
+        This test used to demand a fire strictly after 09:15, which was the
+        right rule while the timer was the ONLY market-hours protection. The
+        runner now owns an authoritative in-process gate
+        (_await_market_open), so a pre-open fire is correct and desirable:
+        it lets the session begin AT the open instead of minutes into it. A
+        pre-open fire is only legitimate while that gate exists, so the test
+        asserts the pairing rather than either half alone."""
         text = TIMER.read_text()
-        assert "Mon..Fri" in text
+        assert "Mon..Fri" in text and "Asia/Kolkata" in text
         hhmm = next(line for line in text.splitlines()
                     if line.startswith("OnCalendar=")).split()[1]
         hour, minute = (int(part) for part in hhmm.split(":")[:2])
-        assert (hour, minute) > (9, 15), f"fires at {hhmm}, at or before the NSE open"
-        # Deliberately NOT pinned to an exact minute: the value is a phase
-        # offset from the observation units' 5-minute cadence, and pinning
-        # the string made a schedule tweak fail a test about market open.
+
+        runner = (pathlib.Path(__file__).resolve().parent.parent
+                  / "bujji_options_os_runner.py").read_text()
+        gated = "_await_market_open" in runner and "wait_until_open" in runner
+
+        if (hour, minute) <= (9, 15):
+            assert gated, (
+                f"fires at {hhmm}, at or before the NSE open, with NO in-process "
+                "market-hours gate in the runner -- this unit would connect the "
+                "broker and pull a chain against a closed book")
+            # Close enough that the gate WAITS rather than refusing: its
+            # max_wait is 300s, so an earlier fire would simply be refused
+            # every morning and the session would never run at all.
+            assert (hour, minute) >= (9, 10), (
+                f"fires at {hhmm}, more than the gate's 5-minute wait before the "
+                "open -- the gate would refuse and Bujji would never trade")
+
         assert minute % 5 != 0, (
             f"fires at {hhmm}, on the observation units' 5-minute beat -- "
-            "two paced processes would burst against one FYERS account together")
-        assert "Asia/Kolkata" in text
+            "three paced processes would burst against one FYERS account together")
+
+    def test_the_burst_offset_lives_on_the_decision_cadence(self):
+        """The old 09:22:30 fire bought FYERS burst separation by sacrificing
+        the opening minutes. That separation still has to exist somewhere --
+        the pacer is per-interpreter, so schedule separation remains the only
+        cross-process rate control. It now lives on the decision cadence."""
+        cfg = yaml.safe_load(CONFIG.read_text())
+        continuous = cfg["session"].get("continuous") or {}
+        offset = continuous.get("decision_phase_offset_seconds")
+        assert offset, ("no decision_phase_offset_seconds: with a 09:14 fire the "
+                        "decision cycles would land back on the campaign's beat")
+        interval = continuous.get("decision_interval_seconds", 300)
+        assert 0 < offset < interval, "an offset >= one interval is not an offset"
 
     def test_timer_owns_the_install_section(self):
         assert "WantedBy=timers.target" in TIMER.read_text()
