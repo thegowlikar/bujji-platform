@@ -396,3 +396,29 @@ real-money selection set ⊆ DEFINED_RISK_FAMILIES.
 **Still open for real money:** management cadence 300s → 60s for undefined-risk
 positions; websocket (certified, ~2.4 ticks/s, unwired) — either would make
 naked shapes defensible later. Slippage still uncalibrated.
+
+## 2026-08-20 pre-open — management cadence by risk class
+
+Naked positions now revalue every **60s**; defined-risk keeps **300s** (wings
+cap the loss between passes, so the extra calls buy nothing). 60s is the floor
+worth asking for — the tick source polls at 60s. Budget cost ~0.03 calls/s
+against a host-wide 8.3/s.
+
+**The trap avoided:** `max_cycles: 78` meant "6h15m / 5min". At 60s it would
+have ended management after **78 minutes**, leaving a naked position unwatched
+from ~10:45 to the mandatory exit — silently worse than before. The cap is now
+**derived** from the remaining window (`ceil(window/interval)+5`) with the
+configured value as a floor. Zero interval short-circuits (tests use it).
+
+**A real flaw the suite caught, shipped in the first version:** reading
+`undefined_risk_cycle_interval_seconds` outright overrode an explicit
+`cycle_interval_seconds: 0` with its 60s default — regression went 288s →
+600s timeout because tests began really sleeping. Same shape would let a
+config make the naked loop *slower* than the winged one. Now
+`min(base, naked_key)` — **tighter, never wider**, with three tests on it.
+
+Risk classification **fails closed**: unknown/missing family → treated as
+naked → tighter loop.
+
+7,520 green (272s, back to normal). Blind-window exposure for naked shapes cut
+~5×. Genuinely continuous still needs the websocket (certified, unwired).
