@@ -28,6 +28,25 @@ def _all_files():
     return [os.path.join(abs_path, n) for n in os.listdir(abs_path) if n.endswith(".py")]
 
 
+# AUTHORIZED CHANGE (2026-08-19, operator-approved): live-premium fix in
+# bujji/msi_trade_construction/engine.py. The engine read `row.settlement`
+# as the ONLY premium source. The bhavcopy replay provider populates
+# settlement; the LIVE chain provider explicitly does not (settlement=None,
+# traded price in `close`). On live data every strike therefore resolved to
+# premium=None -> iv=None -> delta=None -> ZERO candidates, and every live
+# entry attempt died with REJECT_STRIKE_UNAVAILABLE. Bujji could not
+# construct a trade on live data at all -- a live-only failure invisible to
+# this suite, which drives the bhavcopy path exclusively.
+#
+# The fix is `_premium_for(row)`: settlement FIRST (every bhavcopy decision,
+# replay and test bit-for-bit unchanged -- agreement asserted by
+# tests/test_live_chain_strike_selection.py), then the mid of a real
+# two-sided quote, then the last trade; absence stays absence, and the basis
+# used is recorded on the evidence. Selection logic, target deltas and
+# rejection semantics are untouched.
+_LIVE_PREMIUM_FIX_AUTHORIZED = ("bujji/msi_trade_construction/engine.py",)
+
+
 def test_no_forbidden_imports():
     for path in _all_files():
         with open(path) as f:
@@ -71,6 +90,7 @@ def test_msi_trade_construction_engine_not_modified():
         cwd=_REPO_ROOT, capture_output=True, text=True,
     )
     changed = [l for l in result.stdout.strip().splitlines() if l]
+    changed = [l for l in changed if l not in _LIVE_PREMIUM_FIX_AUTHORIZED]
     assert changed == [], f"msi_trade_construction was modified, expected untouched: {changed}"
 
 

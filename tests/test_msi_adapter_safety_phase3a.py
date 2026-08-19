@@ -20,6 +20,25 @@ def _grep(pattern, path, extra_flags="-rnE"):
     ).stdout.strip()
 
 
+# AUTHORIZED CHANGE (2026-08-19, operator-approved): live-premium fix in
+# bujji/msi_trade_construction/engine.py. The engine read `row.settlement`
+# as the ONLY premium source. The bhavcopy replay provider populates
+# settlement; the LIVE chain provider explicitly does not (settlement=None,
+# traded price in `close`). On live data every strike therefore resolved to
+# premium=None -> iv=None -> delta=None -> ZERO candidates, and every live
+# entry attempt died with REJECT_STRIKE_UNAVAILABLE. Bujji could not
+# construct a trade on live data at all -- a live-only failure invisible to
+# this suite, which drives the bhavcopy path exclusively.
+#
+# The fix is `_premium_for(row)`: settlement FIRST (every bhavcopy decision,
+# replay and test bit-for-bit unchanged -- agreement asserted by
+# tests/test_live_chain_strike_selection.py), then the mid of a real
+# two-sided quote, then the last trade; absence stays absence, and the basis
+# used is recorded on the evidence. Selection logic, target deltas and
+# rejection semantics are untouched.
+_LIVE_PREMIUM_FIX_AUTHORIZED = ("bujji/msi_trade_construction/engine.py",)
+
+
 def test_no_forbidden_broker_calls_in_msi_adapter():
     out = _grep(
         r"\.(place_order|modify_order|cancel_order|get_open_positions|get_positions|get_margin|get_funds|connect)\(",
@@ -88,6 +107,6 @@ def test_no_msi_package_anywhere_was_modified_this_phase():
     )
     msi_changed = [
         l for l in changed
-        if ("/msi_" in l or l.startswith("msi_")) and l not in _phase9_liquidity_bridge_exception
+        if ("/msi_" in l or l.startswith("msi_")) and l not in _phase9_liquidity_bridge_exception and l not in _LIVE_PREMIUM_FIX_AUTHORIZED
     ]
     assert msi_changed == [], f"unexpected msi_* package changes: {msi_changed}"

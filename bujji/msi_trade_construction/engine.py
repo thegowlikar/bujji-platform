@@ -97,15 +97,78 @@ def select_calendar_expiries(
 # ---------------------------------------------------------------------------
 
 class _StrikeEvidence:
-    __slots__ = ("strike", "option_type", "premium", "open_interest", "iv", "delta")
+    __slots__ = ("strike", "option_type", "premium", "premium_basis",
+                 "open_interest", "iv", "delta")
 
-    def __init__(self, strike, option_type, premium, open_interest, iv, delta):
+    def __init__(self, strike, option_type, premium, open_interest, iv, delta,
+                 premium_basis=None):
         self.strike = strike
         self.option_type = option_type
         self.premium = premium
+        # WHICH observed number the IV was inverted from. Recorded because an
+        # IV is only as current as the price behind it: a settlement, a
+        # two-sided mid and a possibly-stale last trade are three different
+        # claims about "the price", and a reader of the reasoning should be
+        # able to tell which one a strike choice rests on.
+        self.premium_basis = premium_basis
         self.open_interest = open_interest
         self.iv = iv
         self.delta = delta
+
+
+# Premium sources, in priority order. Recorded on the evidence.
+PREMIUM_SETTLEMENT = "SETTLEMENT"
+PREMIUM_MID = "MID"
+PREMIUM_LAST_TRADE = "LAST_TRADE"
+
+
+def _premium_for(row):
+    """The real observed premium for one chain row, and where it came from.
+
+    WHY THIS EXISTS (2026-08-19). This engine read `row.settlement` and
+    nothing else. The bhavcopy replay provider populates settlement; the LIVE
+    chain provider explicitly does NOT -- it sets settlement=None and puts the
+    traded price in `close`. So on live data every strike resolved to
+    premium=None, therefore iv=None, therefore delta=None, therefore ZERO
+    candidates, and every live entry attempt died at strike selection with
+    REJECT_STRIKE_UNAVAILABLE.
+
+    Nothing caught it because the entire test suite drives the bhavcopy path.
+    Bujji could not construct a trade on live data at all -- a second, unknown
+    gate sitting behind the regime stability gate.
+
+    ORDER IS DELIBERATE AND NON-REGRESSIVE. Settlement stays FIRST, so every
+    bhavcopy-sourced decision, replay and test is bit-for-bit unchanged. The
+    new sources are reached only where settlement is absent, which is exactly
+    the live case. Mid is preferred over the last trade because a print on a
+    far strike can be minutes old while the book has moved, and a stale price
+    implies a stale volatility.
+
+    Returns (premium, basis), or (None, None) when the row carries no usable
+    price -- absent, never defaulted to zero.
+    """
+    settlement = getattr(row, "settlement", None)
+    try:
+        if settlement is not None and float(settlement) > 0:
+            return float(settlement), PREMIUM_SETTLEMENT
+    except (TypeError, ValueError):
+        pass
+
+    bid, ask = getattr(row, "bid", None), getattr(row, "ask", None)
+    try:
+        if bid is not None and ask is not None and float(bid) > 0 and float(ask) > 0:
+            return (float(bid) + float(ask)) / 2.0, PREMIUM_MID
+    except (TypeError, ValueError):
+        pass
+
+    close = getattr(row, "close", None)
+    try:
+        if close is not None and float(close) > 0:
+            return float(close), PREMIUM_LAST_TRADE
+    except (TypeError, ValueError):
+        pass
+
+    return None, None
 
 
 def _build_strike_evidence(
@@ -116,7 +179,7 @@ def _build_strike_evidence(
     for row in chain:
         if row.expiry != expiry or row.strike is None or row.option_type not in ("CE", "PE"):
             continue
-        premium = row.settlement
+        premium, premium_basis = _premium_for(row)
         iv, delta = None, None
         if premium is not None and premium > 0 and t_years > 0:
             opt = OptionType.CE if row.option_type == "CE" else OptionType.PE
@@ -126,6 +189,7 @@ def _build_strike_evidence(
         evidence[(row.strike, row.option_type)] = _StrikeEvidence(
             strike=row.strike, option_type=row.option_type, premium=premium,
             open_interest=row.open_interest, iv=iv, delta=delta,
+            premium_basis=premium_basis,
         )
     return evidence
 
