@@ -234,3 +234,43 @@ Append-only record of engineering decisions and verified events. Newest last.
 - fill-model collapse (broker_boundary vs PaperBroker)
 - heartbeat staleness watchdog
 - 08-14 value_kind re-normalization
+
+## 2026-08-19 night — L-1..L-5: the price levels & zones layer
+
+Finding that started it: `PriceStructureAssessment` is entirely CATEGORICAL —
+Bujji knew a swing was CONFIRMED and never knew at what price. Positive-
+controlled grep: 186 files mention "volatility", **zero** mentioned any level
+or zone vocabulary. Greenfield, not a refactor.
+
+- **L-1 levels.** Pivot detection + agreement gate across strengths (3,5,8);
+  identity is the pivot BAR INDEX, so no price-tolerance fudge. Real data:
+  31,708 pivots → 12,792 survived (40.3%) over nine years; 297 → 130 over ~20
+  sessions. ~59% are parameter artifacts.
+- **L-2 zones.** Origin bar's own high–low band; impulse measured against the
+  series' MEDIAN true range so it scales with price. Agreement across
+  multiples (1.5/2/3). Lifecycle FRESH/TESTED/BROKEN, broken decided on a
+  CLOSE not a wick. Real data: 93 → 20 survived, **9 live** — far more
+  selective than levels, already decision-grade density.
+- **L-3 context.** Proximity band (not calendar — operator directive; a test
+  asserts NO lookback parameter exists). Funnel published: 130 → 123 in band
+  → 119 tested → 10 published. **No invented relevance score** — two real
+  orderings (proximity, strength) shipped separately.
+- **L-4 refresh.** Daily snapshot from finished bars; dated, never
+  overwritten; "newest on or before" selection so a replay cannot read a
+  future map. Reader REFUSES live point samples and counts them. Live samples
+  TEST structure, never form or break it.
+- **L-5 record.** LevelContext persisted into `market_thesis.jsonl` beside the
+  thesis. Never fatal, never silent: NO_SNAPSHOT/FAILED recorded, age in days
+  published. Observation-only asserted by test (no decision module may import
+  price_levels).
+
+**FINDING FOR THE OPERATOR.** Proximity solves density, NOT significance. At
+spot 24,366 the nearest levels are 6.8 / 9.0 pts away (5-min micro-swings,
+noise at strangle scale); by strength they are 100–236 pts away with 107–165
+touches. Which ordering governs, and what touch count makes a level worth
+respecting, are TRADING judgements — both orderings ship, neither privileged.
+
+**OPEN OPERATOR GATES:** (1) do levels feed strike selection at all;
+(2) proximity vs strength; (3) install the refresh timer and at what time.
+
+7,338 green. Nothing consumes the layer.
