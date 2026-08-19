@@ -480,10 +480,37 @@ class OptionsOSRunner:
         capital_snapshot_provider = _make_capital_snapshot_provider(
             capital_cfg, self._clock)
 
+        # THE READ END OF THE LEARNING LOOP (audit finding, 2026-08-20).
+        #
+        # This was `AdaptiveRiskMemory()` -- a fresh, empty memory every
+        # session, forever. Meanwhile governor_context_builder asks that
+        # memory real questions on every entry decision (all_entries(),
+        # lookup(strategy_type=...)), and nothing anywhere ever called
+        # append_observation. So the risk chain was interrogating a memory
+        # that could not answer, and D-8's durable outcome records -- written
+        # faithfully after every close -- were read by nobody.
+        #
+        # Hydrating it closes the loop. It is INERT until Bujji actually
+        # trades: with no closed positions the store is empty and behaviour is
+        # identical to before. From the first real trade onward, past outcomes
+        # begin informing risk context, which is the point of having written
+        # them down.
+        from bujji.production_runtime.risk_memory_bridge import hydrate_risk_memory
+
+        risk_memory, hydration = hydrate_risk_memory(
+            str(self._outcome_memory_store().path), clock=self._clock)
+        self._governor_result_summary["risk_memory_hydration"] = hydration.as_dict()
+        self._logger.info(
+            "RISK MEMORY -- hydrated %d entr(y|ies) from %d durable outcome record(s) [%s]",
+            hydration.entries_loaded, hydration.records_seen, hydration.status)
+        if hydration.records_skipped:
+            self._logger.warning("RISK MEMORY -- %d record(s) skipped: %s",
+                                 hydration.records_skipped, "; ".join(hydration.skip_reasons))
+
         self._root = build_trading_brain_composition_root(
             broker=self._broker, journal=self._journal,
             margin_provider=_make_margin_provider(providers_cfg),
-            capital_snapshot_provider=capital_snapshot_provider, memory=AdaptiveRiskMemory(),
+            capital_snapshot_provider=capital_snapshot_provider, memory=risk_memory,
             clock=self._clock, underlying=underlying, exchange_lot_size=exchange_lot_size,
             initial_state=RuntimeState.ENTRY_ENABLED,
         )
@@ -1941,8 +1968,33 @@ class OptionsOSRunner:
         if existing is not None:
             return existing
         artifacts_cfg = self._config.get("artifacts", {}) or {}
-        path = REPO_ROOT / artifacts_cfg.get(
-            "outcome_memory_store_path", "data/outcome_memory_events.jsonl")
+        configured = artifacts_cfg.get("outcome_memory_store_path")
+        if configured:
+            path = REPO_ROOT / configured
+        else:
+            # DEFAULT BESIDE THE JOURNAL, not at a fixed production path.
+            #
+            # WHY (found by audit, 2026-08-20): this used to default to
+            # `data/outcome_memory_events.jsonl` under REPO_ROOT regardless of
+            # where the rest of the session's artifacts went. Tests point
+            # `artifacts.journal_path` and `shadow_sessions_root` at a tmp_path
+            # but had no reason to know about this third path, so from the
+            # moment D-8 started writing outcome records, every test that ran a
+            # full session with a closed position wrote into the REAL durable
+            # store. 78 synthetic records (sessions OUTCOME-1/2/6, a
+            # SHORT_STRANGLE family that is not even in SUPPORTED_FAMILIES) had
+            # accumulated there, and they would have been the first thing a
+            # freshly-hydrated risk memory learned from.
+            #
+            # Deriving from the journal's own directory fixes it structurally:
+            # production journal lives in data/, so the production store stays
+            # exactly where it was, while any caller that sandboxes its
+            # artifacts sandboxes this too, automatically and forever.
+            journal_default = "data/options_os_shadow_position_group_journal.db"
+            journal_path = Path(artifacts_cfg.get("journal_path", journal_default))
+            if not journal_path.is_absolute():
+                journal_path = REPO_ROOT / journal_path
+            path = journal_path.parent / "outcome_memory_events.jsonl"
         path.parent.mkdir(parents=True, exist_ok=True)
         self._outcome_store = EventStore(str(path))
         return self._outcome_store
