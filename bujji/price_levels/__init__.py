@@ -1,0 +1,22 @@
+"""Price Levels — where structure sits, numerically.
+
+WHY THIS PACKAGE EXISTS. `msi_price_structure` answers "what SHAPE is price
+in" -- RANGING, TRENDING, swing CONFIRMED -- and every field it publishes is
+categorical. Nothing in Bujji knew, at any price, WHERE that structure was.
+For a premium seller that is the decision-relevant fact: strike selection and
+the whole short-strangle thesis depend on how far price can plausibly travel
+before it meets something, and until now nothing could say.
+
+This package is additive and observation-only. It publishes levels; it does
+not select strikes, size positions, or influence any existing decision. That
+step is an operator gate, not an implementation detail.
+"""
+from .engine import count_touches, detect_levels
+from .models import Bar, LevelSet, PriceLevel, SwingPoint
+from .swings import detect_swings_at_strength, swings_surviving_agreement
+
+__all__ = [
+    "Bar", "LevelSet", "PriceLevel", "SwingPoint",
+    "detect_levels", "count_touches",
+    "detect_swings_at_strength", "swings_surviving_agreement",
+]
