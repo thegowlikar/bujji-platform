@@ -204,3 +204,33 @@ Append-only record of engineering decisions and verified events. Newest last.
 - 08-14 value_kind re-normalization
 - VIX/spot store unification (VIX live rows land in layer0, completeness
   reads SQLite)
+
+## 2026-08-19 night — CP-D.2: VIX/spot store unification
+
+- Measured, not assumed: **168,157 backfilled VIX rows in the normalized
+  store, ZERO live ones.** The market-reality capture wrote only to layer0
+  JSONL; completeness reads SQLite. Every evening's "VIX ✗" was real data
+  sitting on disk, invisible to the only reader that mattered.
+- The certification gate was never the obstacle — all four instrument types
+  are already CERTIFIED_AVAILABLE for `direct_sdk_fyers_broker_py` (checked).
+  The write path simply did not exist.
+- Additive projection: Layer 0 written FIRST and unchanged; normalized row
+  alongside, behind the same certification gate. No migration, no deletion, a
+  projection failure never stops capture. Spot/VIX identities match the
+  backfill exactly → one series, not two. 60s samples recorded as
+  ONE_MINUTE + value_kind=MAPPING (point sample, not a bar), which also
+  avoids natural-key collision with the chain's 5-minute spot rows.
+- **Futures deliberately excluded.** Backfill's series is
+  `NIFTY_FUT_CONTINUOUS` — a ROLLED synthetic contract. A live near-month
+  quote is not that series; writing it there asserts a splice we cannot
+  justify, and a real-contract identity would create a third series nobody
+  reads. Left Layer 0-only, with the reason written in the code.
+  **OPERATOR DECISION OPEN:** how the continuous futures series should be
+  defined against live near-month quotes.
+- 7,233 green. Tomorrow is the first day live VIX should appear in EOD
+  completeness — verify rather than assume.
+
+### CP-D remaining
+- fill-model collapse (broker_boundary vs PaperBroker)
+- heartbeat staleness watchdog
+- 08-14 value_kind re-normalization
