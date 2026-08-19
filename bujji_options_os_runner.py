@@ -1257,6 +1257,11 @@ class OptionsOSRunner:
         chain = self._market_data_provider.get_option_chain(self._as_of_date)
         spot = self._market_data_provider.get_spot()
 
+        # PART 2 (shadow): record what the parity-based IV derivation WOULD
+        # have chosen, beside what the canonical engine actually chooses.
+        # Changes nothing -- see _record_iv_divergence.
+        self._record_iv_divergence(chain, spot)
+
         # D-7: tell the paper broker what the market actually looks like
         # BEFORE any order is placed. Without this, every fill fell back to
         # the leg's own premium -- a short strangle was opened and closed at
@@ -1319,6 +1324,68 @@ class OptionsOSRunner:
         )
 
         return True
+
+    def _record_iv_divergence(self, chain, spot) -> None:
+        """Measure the two IV derivations against each other, at the exact
+        moment strike selection is about to run.
+
+        WHY THIS IS A RECORD AND NOT A SWAP. Strike selection ranks strikes by
+        |delta - target|, and the two derivations produce different deltas:
+        the canonical engine uses spot-based Black-Scholes with an ASSUMED
+        6.5% rate, while bujji.options_analytics recovers the forward from the
+        chain itself by put-call parity and assumes no rate at all. Measured
+        over real captured chains they disagree on the chosen strike in
+        roughly a quarter of comparisons, always in the same direction.
+
+        Swapping them therefore changes WHICH STRIKES GET SOLD -- the
+        canonical strategy authority, and an operator decision. This method
+        accumulates the evidence for that decision on every real entry
+        attempt and influences nothing.
+
+        Never raises: diagnostics must not be able to end a trading session.
+        """
+        try:
+            from bujji.msi_trade_construction import config as _mtc_config
+            from bujji.options_analytics import compare_derivations
+            from bujji.options_analytics.black76 import time_to_expiry_years
+
+            if spot is None or not chain:
+                return
+            now = self._clock().isoformat()
+            expiries = {getattr(row, "expiry", None) for row in chain}
+            expiries.discard(None)
+            if not expiries:
+                return
+            # The nearest expiry -- the one a weekly premium seller trades.
+            expiry = min(expiries)
+            t_years = time_to_expiry_years(now, expiry)
+            if not t_years:
+                return
+
+            rows = [row for row in chain if getattr(row, "expiry", None) == expiry]
+            dicts = [{"strike": getattr(row, "strike", None),
+                      "option_type": getattr(row, "option_type", None),
+                      "ltp": getattr(row, "close", None),
+                      "bid": getattr(row, "bid", None),
+                      "ask": getattr(row, "ask", None)} for row in rows]
+
+            divergence = compare_derivations(
+                rows=rows, chain_dicts=dicts, expiry=expiry, spot=float(spot),
+                t_years=t_years, as_of=now,
+                assumed_rate=_mtc_config.DEFAULT_RISK_FREE_RATE)
+
+            trail = self._governor_result_summary.setdefault("iv_divergence", [])
+            trail.append(divergence.to_dict())
+            self._logger.info(
+                "IV DIVERGENCE -- expiry=%s strikes_agree=%s disagreements=%d "
+                "median|dIV|=%s max|d delta|=%s",
+                expiry, divergence.strikes_agree, divergence.disagreements,
+                None if divergence.median_abs_iv_diff is None
+                else round(divergence.median_abs_iv_diff, 5),
+                None if divergence.max_abs_delta_diff is None
+                else round(divergence.max_abs_delta_diff, 4))
+        except Exception as exc:  # noqa: BLE001 -- diagnostics never end a session
+            self._logger.warning("IV DIVERGENCE record failed (%s) -- session continues.", exc)
 
     def _sync_paper_market(self, chain) -> None:
         """Push the real observed top-of-book, and the real capital, into

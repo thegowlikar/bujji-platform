@@ -20,6 +20,8 @@ consumer can never mistake it for an observation like the LTP beside it.
 from .black76 import Greeks, greeks, intrinsic, norm_cdf, norm_pdf, price, time_to_expiry_years
 from .engine import (BASIS_LTP, BASIS_MID, VALUE_CLASS_DERIVED, ContractAnalytics,
                      ExpiryAnalytics, SkewSummary, analyse_expiry, build_skew)
+from .divergence import (DEFAULT_TARGET_DELTAS, DerivationDivergence, StrikeChoice,
+                         compare_derivations)
 from .forward import ForwardEstimate, estimate_forward
 from .implied import ImpliedVol, implied_volatility
 
@@ -29,4 +31,6 @@ __all__ = [
     "ImpliedVol", "implied_volatility", "ContractAnalytics", "ExpiryAnalytics",
     "SkewSummary", "analyse_expiry", "build_skew",
     "BASIS_MID", "BASIS_LTP", "VALUE_CLASS_DERIVED",
+    "compare_derivations", "DerivationDivergence", "StrikeChoice",
+    "DEFAULT_TARGET_DELTAS",
 ]
