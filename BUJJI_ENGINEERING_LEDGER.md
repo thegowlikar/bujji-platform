@@ -366,3 +366,33 @@ unreachable and an impossible wing becomes the furthest strike. Both are
 OPERATOR DECISIONS.
 
 14 guards authorized by name; baseline not advanced. 7,439 green.
+
+## 2026-08-20 pre-open — biggest-gap answer + defined-risk mode
+
+**The gap, measured not asserted.** Stop-loss, daily loss limit and emergency
+brake all run on ONE 300s heartbeat. Over 168,194 real 5-min NIFTY bars
+(2017–2026): worst intra-bar range **611.8 pts**; ≥100pts 54 bars/yr, ≥200pts
+5/yr, ≥300pts ~1/yr. Against the real 2026-08-19 ATM straddle credit (240.95
+pts, 1 lot): stop fires at ₹15,662 but the worst bar is **₹39,764 inside one
+unchecked interval** — 2.5× the stop, 1.6× the ₹25,000 daily limit (checked on
+the same heartbeat, so it cannot save it). At 1 lot, sizing does not rescue it.
+
+Why this beat "no trades yet" as the biggest gap: **some gaps close by
+waiting; this one only reveals itself, expensively.**
+
+**Resolution (operator decision): defined-risk only for real money.**
+- `VOLATILITY_COMPRESSION → IRON_FLY`, `NEUTRAL_PREMIUM_SELLING → IRON_CONDOR`
+- Twins share short strikes EXACTLY (delta targets 0.50/0.50 and 0.20/0.20) —
+  same view, same strikes, wings added. Trending branches already defined-risk.
+- **Derived, not configured, fail-closed:**
+  `defined_risk_only = config.get("shadow_mode") is not True`. No independent
+  flag — a second switch is a second thing to forget. A test asserts no such
+  key exists in the production config, so its appearance signals a bypass.
+- Paper unchanged: naked shapes still reachable, evidence still accumulating.
+
+7,490 green. Load-bearing test enumerates every regime and asserts the
+real-money selection set ⊆ DEFINED_RISK_FAMILIES.
+
+**Still open for real money:** management cadence 300s → 60s for undefined-risk
+positions; websocket (certified, ~2.4 ticks/s, unwired) — either would make
+naked shapes defensible later. Slippage still uncalibrated.
