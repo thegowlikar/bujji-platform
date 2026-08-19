@@ -274,3 +274,29 @@ respecting, are TRADING judgements — both orderings ship, neither privileged.
 (2) proximity vs strength; (3) install the refresh timer and at what time.
 
 7,338 green. Nothing consumes the layer.
+
+## 2026-08-19 night — options analytics + the live-premium defect
+
+- **New `bujji/options_analytics/`**: IV/Greeks/skew DERIVED from observed
+  prices. Forward + discount factor recovered by put-call parity least
+  squares (no assumed rate/dividend); Black-76 on the forward; bisection IV.
+  Real chain: parity R² ≈ 0.99999 on all three expiries, ATM IV 9.45/9.79/
+  10.03% rising with tenor, negative skew steepening with tenor — textbook.
+  All values carry value_class=DERIVED + model name. NOT wired (operator
+  gate). Caveat recorded: DF noisy at weekly tenor, not readable as a rate.
+- **CRITICAL DEFECT found while preparing the wiring**: construction engine
+  read `row.settlement` as the only premium; live provider sets
+  settlement=None (price in `close`). Live chains produced ZERO strike
+  candidates → every live entry died REJECT_STRIKE_UNAVAILABLE. **Bujji
+  could not construct a trade on live data at all.** Invisible because the
+  whole suite drives the bhavcopy path. There were TWO no-trade gates, not
+  one (stability ~8% was only the first).
+- Fix: `_premium_for()` — settlement first (bhavcopy bit-identical), then
+  two-sided mid, then last trade; absence never zero; basis recorded on the
+  evidence. 12 guards (incl. byte-identical pins) authorized the one file BY
+  NAME; baseline not advanced.
+- **Deferred, operator gate**: replacing the engine's spot-BS (assumed rate)
+  IV with the parity-based derivation — changes which strikes get sold =
+  canonical strategy authority. Record divergence first.
+- Lesson: a green suite proves the paths it drives. The live path was never
+  driven end to end until tonight's probe. 7,380 green.
