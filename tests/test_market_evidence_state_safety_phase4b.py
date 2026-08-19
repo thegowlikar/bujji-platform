@@ -183,7 +183,26 @@ def test_fyers_broker_code_unchanged():
     # _raise_if_error still raises. Coverage:
     # tests/test_fyers_rate_limit_retry.py. The two capability guards remain
     # untouched and enforcing.
-    assert "303" in stat_line or stat_line == "", f"unexpected fyers.py diff: {stat_line}"
+    # Updated 2026-08-19 (CP-D): the pacer at this same _call() choke point
+    # becomes HOST-WIDE. The ceiling is per ACCOUNT and this pacer was per
+    # interpreter, so the four Bujji processes that share one credential --
+    # three of them now waking together at 09:14 -- each paced to ~8.3/s and
+    # together presented the account with up to ~33/s against a documented
+    # 10/s ceiling. That overrun was never visible as a crash; it showed up
+    # as an architectural workaround, the trading unit's fire time carrying a
+    # rate-limit offset because schedule separation was the only
+    # cross-process control that existed.
+    #
+    # The change is ADDITIVE and layered: bujji/broker/rate_budget.py
+    # (flock'd shared slot file) is consulted FIRST, and the existing
+    # in-process pacer remains behind it untouched, so an unreachable budget
+    # degrades to exactly the previous behaviour rather than to none. No
+    # write capability is added; the two capability guards
+    # (test_market_perception_safety, test_phase14b_safety) remain untouched
+    # and enforcing. Dedicated coverage: tests/test_rate_budget.py, including
+    # a REAL two-process test that fails if the budget is not shared.
+    assert ("303" in stat_line or "55" in stat_line or stat_line == ""), \
+        f"unexpected fyers.py diff: {stat_line}"
 
 
 def test_no_protected_lineage_package_modified():

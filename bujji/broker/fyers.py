@@ -27,6 +27,7 @@ from __future__ import annotations
 import asyncio
 import datetime
 import logging
+import os
 import threading
 import time
 from pathlib import Path
@@ -121,18 +122,62 @@ def _futures_symbol(underlying: str, now: Optional[datetime.datetime] = None) ->
 # the runner calls asyncio.run() repeatedly, and a lock bound to one
 # event loop is invalid in the next.
 _MIN_SECONDS_BETWEEN_CALLS = 0.12  # ~8.3/s, under the documented 10/s ceiling.
+from .rate_budget import DEFAULT_BUDGET_PATH
+
 _pacing_lock = threading.Lock()
 _next_call_allowed_at = 0.0
 
 
-def _wait_for_slot() -> None:
-    """Block the CALLING THREAD until this process may issue another call.
+# CP-D: the ceiling is per ACCOUNT, and Bujji now runs FOUR processes against
+# one account (spot/VIX capture, option chain, depth poller, trading session
+# -- three of them waking together at 09:14). Each pacing itself to ~8.3/s
+# presented the account with up to ~33/s. Schedule separation was standing in
+# for a resource budget, which is why the trading unit's fire time carried a
+# rate-limit offset for months. The budget below is HOST-WIDE and applied
+# FIRST; the module-level pacer stays behind it as a second layer, so a
+# budget that cannot be reached degrades to exactly the old behaviour rather
+# than to no pacing at all.
+_rate_budget = None
+_rate_budget_warned = False
 
-    The slot is reserved under the lock and the wait happens outside it, so
-    concurrent threads queue behind one another instead of all waking against
-    the same timestamp and bursting together.
+
+def _host_rate_budget():
+    global _rate_budget
+    if _rate_budget is None:
+        from .rate_budget import CrossProcessRateBudget
+
+        _rate_budget = CrossProcessRateBudget(
+            path=os.environ.get("BUJJI_FYERS_RATE_BUDGET_PATH", DEFAULT_BUDGET_PATH),
+            min_interval_seconds=_MIN_SECONDS_BETWEEN_CALLS,
+        )
+    return _rate_budget
+
+
+def _wait_for_slot() -> None:
+    """Block the CALLING THREAD until this ACCOUNT may issue another call.
+
+    Two layers, in order:
+      1. the host-wide budget -- every Bujji process on this box shares it;
+      2. this interpreter's own pacer -- unchanged, and the fallback when
+         the shared budget is unreachable.
+
+    In both layers the slot is reserved under a lock and the wait happens
+    OUTSIDE it, so concurrent callers queue behind one another instead of
+    all waking against the same timestamp and bursting together.
     """
-    global _next_call_allowed_at
+    global _next_call_allowed_at, _rate_budget_warned
+
+    outcome = _host_rate_budget().reserve()
+    if not outcome.shared and not _rate_budget_warned:
+        # Once per process: a rate ceiling is a throughput protection, not a
+        # safety guard, so this degrades rather than refusing -- but it must
+        # not degrade silently, or the account is over-driven invisibly.
+        _rate_budget_warned = True
+        logging.getLogger(__name__).warning(
+            "FYERS host-wide rate budget unavailable (%s) -- falling back to this process's "
+            "own pacer only. Concurrent Bujji processes can now exceed the account ceiling.",
+            outcome.reason)
+
     with _pacing_lock:
         slot = max(time.monotonic(), _next_call_allowed_at)
         _next_call_allowed_at = slot + _MIN_SECONDS_BETWEEN_CALLS
