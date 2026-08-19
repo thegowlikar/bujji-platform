@@ -45,6 +45,11 @@ FAMILY_DELTA_TARGETS = {
     "COVERED": 0.30,
     "SYNTHETIC": 0.50,
     "CALENDAR": 0.50,
+    # The short leg of each credit spread sits at the same 0.20 delta the
+    # premium-selling families use -- one premium-selling distance policy
+    # across the book, rather than a second number that would drift.
+    "BULL_PUT_SPREAD": 0.20,
+    "BEAR_CALL_SPREAD": 0.20,
 }
 
 # --- Wing width policy (Iron Condor / Iron Fly / Butterfly) ---------------

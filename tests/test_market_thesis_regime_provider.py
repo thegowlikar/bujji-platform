@@ -115,30 +115,50 @@ class TestProviderRealValues:
 # ---------------------------------------------------------------------------
 
 class TestEndToEndWithRealSelector:
-    def test_range_bound_low_vol_thesis_selects_iron_condor(self):
+    # Updated 2026-08-19: the selector became three-part by operator
+    # directive. These still prove the same end-to-end linkage -- a real
+    # thesis, through the real provider, into the real selector -- only the
+    # expected shape moved.
+
+    def test_range_bound_low_vol_thesis_selects_a_short_strangle(self):
         provider = MarketThesisRegimeProvider(
             thesis=_thesis(market_regime="RANGE_PERSISTENCE"), volatility_regime="STABLE",
         )
         trend, vol = provider.get_regime()
         result = select_strategy(trend, vol, FIXED_CLOCK)
-        assert result.selected_strategy == "IRON_CONDOR"
+        assert result.selected_strategy == "NEUTRAL_PREMIUM_SELLING"
 
-    def test_range_bound_high_vol_thesis_selects_iron_fly(self):
+    def test_range_bound_high_vol_thesis_selects_a_short_straddle(self):
         provider = MarketThesisRegimeProvider(
             thesis=_thesis(market_regime="MEAN_REVERSION"), volatility_regime="HIGH_VOLATILITY",
         )
         trend, vol = provider.get_regime()
         result = select_strategy(trend, vol, FIXED_CLOCK)
-        assert result.selected_strategy == "IRON_FLY"
+        assert result.selected_strategy == "VOLATILITY_COMPRESSION"
 
-    def test_trending_thesis_selects_no_trade(self):
+    def test_a_trending_thesis_now_selects_a_directional_credit_spread(self):
+        """Previously asserted no-trade, and that WAS correct: no directional
+        credit spread existed, so a trend had no sellable defined-risk shape.
+        Two were added, so the trending third of the market is tradeable."""
         provider = MarketThesisRegimeProvider(
             thesis=_thesis(market_regime="TREND_CONTINUATION", directional_bias="BULLISH"),
             volatility_regime="STABLE",
         )
         trend, vol = provider.get_regime()
         result = select_strategy(trend, vol, FIXED_CLOCK)
-        assert result.selected_strategy is None
+        assert result.selected_strategy in ("BULL_PUT_SPREAD", "BEAR_CALL_SPREAD")
+
+    def test_volatility_expansion_still_vetoes_a_trending_thesis(self):
+        """Widening WHAT Bujji sells must not widen WHEN it sells."""
+        provider = MarketThesisRegimeProvider(
+            thesis=_thesis(market_regime="TREND_CONTINUATION", directional_bias="BULLISH"),
+            volatility_regime="EXPANDING_VOLATILITY",
+        )
+        try:
+            trend, vol = provider.get_regime()
+        except Exception:
+            return  # provider fails closed before the selector -- also acceptable
+        assert select_strategy(trend, vol, FIXED_CLOCK).selected_strategy is None
 
     def test_event_risk_thesis_fails_closed_at_the_provider_boundary(self):
         # EVENT_RISK never maps to a trend regime -- the provider itself

@@ -392,6 +392,49 @@ def _build_legs(
             _leg(taxonomy.ROLE_WING_LOWER, long_put, "BUY", expiry, 1, why_strikes[-1]),
         ], why_strikes, why_not, dominant, None
 
+    if family in ("BULL_PUT_SPREAD", "BEAR_CALL_SPREAD"):
+        # DIRECTIONAL CREDIT SPREADS (2026-08-19, operator directive).
+        # Structurally one half of an IRON_CONDOR: a short leg at the
+        # premium-selling delta, protected by a long leg one wing-width
+        # further out-of-the-money. Deliberately built from the SAME
+        # helpers the condor uses -- `_nearest_by_delta`, `_wing_width`
+        # (driven by VSB's real expected move when available),
+        # `_nearest_grid` -- so a change to the distance policy moves every
+        # premium-selling shape together instead of leaving these two behind.
+        #
+        # BULL_PUT_SPREAD leans WITH an up-trend: sell the put, buy a lower
+        # put. It profits if price rises, stalls, or falls less than the
+        # short strike. BEAR_CALL_SPREAD is its mirror for a down-trend.
+        # Both collect a credit and both are defined-risk: max loss is
+        # (wing width - credit), capped by the long leg.
+        opt_type = "PE" if family == "BULL_PUT_SPREAD" else "CE"
+        short_leg, short_nbrs = _nearest_by_delta(evidence, opt_type, target_delta)
+        if short_leg is None:
+            return None, why_strikes, why_not, dominant, taxonomy.REJECT_STRIKE_UNAVAILABLE
+        width = _wing_width(expected_move_pct, spot)
+        dominant.append("expected_move" if expected_move_pct is not None else "wing_width_fallback")
+        # The protection sits FURTHER out of the money than the short leg:
+        # below it for a put spread, above it for a call spread.
+        protect_strike = (short_leg.strike - width if family == "BULL_PUT_SPREAD"
+                          else short_leg.strike + width)
+        long_leg = _at_strike(evidence, opt_type,
+                              _nearest_grid(protect_strike, evidence, opt_type))
+        if long_leg is None:
+            return None, why_strikes, why_not, dominant, taxonomy.REJECT_IMPOSSIBLE_WING_WIDTH
+        lean = "up-trend" if family == "BULL_PUT_SPREAD" else "down-trend"
+        why_strikes.append(
+            f"short {opt_type}{int(short_leg.strike)} (target delta {target_delta}) protected by "
+            f"long {opt_type}{int(long_leg.strike)} (width={width} pts, "
+            f"source={'VSB expected move' if expected_move_pct is not None else 'configured fallback'}) "
+            f"-- credit spread leaning with the {lean}, max loss capped by the long leg")
+        not_neighbour_note(short_leg, short_nbrs, opt_type)
+        wing_role = (taxonomy.ROLE_WING_LOWER if family == "BULL_PUT_SPREAD"
+                     else taxonomy.ROLE_WING_UPPER)
+        return [
+            _leg(taxonomy.ROLE_SHORT, short_leg, "SELL", expiry, 1, why_strikes[-1]),
+            _leg(wing_role, long_leg, "BUY", expiry, 1, why_strikes[-1]),
+        ], why_strikes, why_not, dominant, None
+
     if family == "BUTTERFLY":
         body, body_nbrs = _nearest_atm(evidence, "CE", spot)
         if body is None:

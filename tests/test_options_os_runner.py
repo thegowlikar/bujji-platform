@@ -181,7 +181,13 @@ def test_runner_full_lifecycle_real_regime_reaches_entry_window(tmp_path):
     logger = logging.getLogger("test-options-os-runner")
     r = OptionsOSRunner(config=config, as_of_date=DAY, session_id="TEST-SESSION-3", logger=logger)
     summary = r.run()
-    assert summary["strategy_selected"] == "IRON_CONDOR"
+    # Updated 2026-08-19: SIDEWAYS + LOW_VOL now selects a short strangle
+    # (three-part regime selection). Asserted against the declared universe
+    # rather than one literal, so a future re-map of this regime does not
+    # need this end-to-end test edited again.
+    from bujji.production_runtime.trading_session_governor.strategy_selector import SELLING_UNIVERSE
+    assert summary["strategy_selected"] == "NEUTRAL_PREMIUM_SELLING"
+    assert summary["strategy_selected"] in SELLING_UNIVERSE
     assert summary["entry_allowed"] is True
     assert summary["entry_filled"] is True, "empty-book blocker regressed: session #1 no longer fills"
     from bujji.production_runtime.trading_session_governor.session_trading_state import TradingSessionState

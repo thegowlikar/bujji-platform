@@ -58,6 +58,41 @@ def _grep(pattern, path):
 # rejection semantics are untouched.
 _LIVE_PREMIUM_FIX_AUTHORIZED = ("bujji/msi_trade_construction/engine.py",)
 
+# AUTHORIZED CHANGE (2026-08-19, operator directive): three-part regime
+# strategy selection. The previous table had two tradeable outcomes, both
+# neutral (IRON_CONDOR / IRON_FLY), so a TRENDING market always resolved to
+# no-trade -- its own reasoning blamed the absence of "a Gate-B-approved
+# defined-risk SELLING strategy", which was true only because no directional
+# credit spread existed in the construction engine.
+#
+#   bujji/msi_trade_construction/engine.py    + BULL_PUT_SPREAD / BEAR_CALL_SPREAD,
+#     built from the SAME helpers IRON_CONDOR uses (_nearest_by_delta,
+#     _wing_width, _nearest_grid). No existing family's branch is touched.
+#   bujji/msi_trade_construction/taxonomy.py  + the two families in
+#     SUPPORTED_FAMILIES and DEFINED_RISK_FAMILIES (every short leg is paired
+#     with a protective long -- a structural fact, not a P&L claim).
+#   bujji/msi_trade_construction/config.py    + delta targets (0.20, the same
+#     premium-selling distance the other selling families use).
+#   .../trading_session_governor/strategy_selector.py  three-part rewrite.
+#
+# RISK POSTURE CHANGED, with explicit operator approval: the sideways branch
+# now selects short straddle / short strangle, which carry NAKED short legs
+# and appear in taxonomy.UNDEFINED_RISK_FAMILIES. Every previously selectable
+# family was defined-risk. Gate B's real SPAN veto, the capital check,
+# portfolio limits, the daily loss limit, the emergency brake and the
+# mandatory exit all still apply; the SHAPE no longer bounds the loss.
+#
+# Every no-trade path is unchanged: unknown regime, volatility expansion
+# (checked before direction, so a directional branch cannot reach around it)
+# and any unmapped combination still fail closed. Coverage:
+# tests/test_three_part_strategy_selection.py.
+_THREE_PART_SELECTION_AUTHORIZED = (
+    "bujji/msi_trade_construction/engine.py",
+    "bujji/msi_trade_construction/taxonomy.py",
+    "bujji/msi_trade_construction/config.py",
+    "bujji/production_runtime/trading_session_governor/strategy_selector.py",
+)
+
 
 def test_no_forbidden_broker_or_order_calls():
     out = _grep(FORBIDDEN_CALLS, PACKAGE_DIR)
@@ -114,6 +149,7 @@ def test_no_msi_or_protected_package_was_modified_this_phase():
         l for l in changed
         if any(l.startswith(p) for p in protected_prefixes) and "market_state_builder" not in l
         and l not in _phase9_liquidity_bridge_exception and l not in _LIVE_PREMIUM_FIX_AUTHORIZED
+           and l not in _THREE_PART_SELECTION_AUTHORIZED
     ]
     assert violations == [], f"unexpected protected-package changes: {violations}"
 
