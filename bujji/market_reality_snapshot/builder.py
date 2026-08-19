@@ -258,11 +258,29 @@ def _build_spot_snapshot_intraday(
     payload = row.payload
     if row.lineage.certification_ref:
         cert_refs.append(row.lineage.certification_ref)
-    return SpotSnapshot(
-        open=payload["open"], high=payload["high"], low=payload["low"], close=payload["close"],
-        volume=payload.get("volume"), source=SOURCE_HISTORICAL, source_observation_ids=(row.observation_id,),
-        observed_at=row.observation.identity.timestamp,
-    )
+    if "open" in payload:
+        return SpotSnapshot(
+            open=payload["open"], high=payload["high"], low=payload["low"], close=payload["close"],
+            volume=payload.get("volume"), source=SOURCE_HISTORICAL, source_observation_ids=(row.observation_id,),
+            observed_at=row.observation.identity.timestamp,
+        )
+    # POINT-SAMPLE row (2026-08-19): live spot captured from the option-chain
+    # sentinel is a single certified LTP ({"ltp": ...}, value_kind=MAPPING),
+    # not an OHLC bar. The first day such rows existed, this function raised
+    # KeyError: 'open' and the first-ever otherwise-successful daily run was
+    # marked FAILED. Represent the sample as a degenerate bar -- o=h=l=c=ltp
+    # -- which asserts exactly one price at exactly one instant; range
+    # information does not exist for a point sample and is NOT fabricated
+    # beyond that equality.
+    if "ltp" in payload:
+        ltp = payload["ltp"]
+        return SpotSnapshot(
+            open=ltp, high=ltp, low=ltp, close=ltp,
+            volume=payload.get("volume"), source=SOURCE_HISTORICAL,
+            source_observation_ids=(row.observation_id,),
+            observed_at=row.observation.identity.timestamp,
+        )
+    return None  # unknown payload shape: absent beats invented
 
 
 def _build_futures_snapshot_intraday(

@@ -276,6 +276,18 @@ async def _run_cycle(broker, gate, store, tracker, expiry_iso: str, log_raw: boo
 
 async def run(*, cycles: Optional[int]) -> int:
     started = now_ist()
+    # First-sample capture (2026-08-19): a 09:14 pre-open fire WAITS for the
+    # open instant instead of refusing, so the first observation lands within
+    # seconds of the first tick. Offset +0s staggers this process against
+    # its siblings on the shared FYERS 10/s ceiling. A far-from-open start
+    # still refuses below, exactly as before.
+    import time as _time
+
+    from bujji.market_reality.open_wait import wait_until_open
+
+    if wait_until_open(now_fn=now_ist, market_open=MARKET_OPEN,
+                       open_offset_seconds=0, sleep_fn=_time.sleep, logger=LOG):
+        started = now_ist()
     if not within_market_hours(started):
         LOG.warning(
             "Outside market hours (%s IST) -- aborting without opening a "

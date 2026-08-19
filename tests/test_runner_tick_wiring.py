@@ -62,10 +62,34 @@ class TestTickSourceIsActuallyConstructed:
                     tick={"type": "observation_store", "observation_store_path": REAL_DB})
         assert isinstance(r._price_provider, HistoricalTickProvider)
 
-    def test_broker_tick_source_constructs_a_live_provider(self, tmp_path):
+    def test_broker_tick_source_without_a_live_data_broker_fails_closed(self, tmp_path):
+        # 2026-08-19 (Master Plan D-3): type=broker previously handed the
+        # PaperBroker random walk to LiveTickProvider while logging "live
+        # quotes". It now REQUIRES the real FYERS data broker (regime
+        # market_thesis_live); this config has a human-supplied regime and
+        # therefore no real broker, so construction must refuse -- never
+        # silently substitute synthetic prices.
+        with pytest.raises(ConfigurationError, match="paper_synthetic"):
+            _runner(tmp_path, "T-BROKER", tick={"type": "broker"})
+
+    def test_paper_synthetic_is_the_explicit_opt_in_and_warns(self, tmp_path, caplog):
         from bujji.production_runtime.intraday_price_provider import LiveTickProvider
-        r = _runner(tmp_path, "T-BROKER", tick={"type": "broker"})
+        with caplog.at_level(logging.WARNING):
+            r = _runner(tmp_path, "T-SYNTH", tick={"type": "paper_synthetic"})
         assert isinstance(r._price_provider, LiveTickProvider)
+        assert any("PAPER SYNTHETIC" in m for m in caplog.messages)
+
+    def test_production_config_pairs_broker_ticks_with_live_regime_and_warmup(self):
+        # Config-level guard: the production yaml must keep the combination
+        # that makes type=broker constructible AND evidence temporal.
+        import yaml as _yaml
+        cfg = _yaml.safe_load(open("/opt/bujji/app/config/options_os_paper_trading.yaml"))
+        prov = cfg["providers"]
+        assert prov["tick_source"]["type"] == "broker"
+        assert prov["regime"]["type"] == "market_thesis_live"
+        warmup = prov["regime"]["warmup"]
+        assert warmup["polls"] >= 3, "PSI needs >= 3 price deltas"
+        assert warmup["interval_seconds"] > 0
 
     def test_store_tick_source_without_a_path_refuses_to_guess(self, tmp_path):
         with pytest.raises(ConfigurationError, match="observation_store_path is required"):

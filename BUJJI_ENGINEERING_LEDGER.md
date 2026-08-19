@@ -19,3 +19,40 @@ Append-only record of engineering decisions and verified events. Newest last.
 - 09:27:30 paper-intelligence first fire REFUSED by own guard vs daily-intelligence all-day lock — structural deadlock; OPERATOR DECISION pending.
 - 09:42 live incident: capture running 26 min, zero rows. Diagnosed via strace: **EROFS — layer0_data missing from unit ReadWritePaths** (mount sandbox granted logs/data/.env only; layer0 predates data/ convention). Fixed 09:49, proven live (15 QUOTE rows in 75s). Committed. Same class as 08-18 root-owned failures: layer0 outside data/ escapes every data/-scoped fix.
 - **BUJJI_CHIEF_ENGINEER_MASTER_PLAN.md committed** (this ledger's sibling). Roadmap CP-A..CP-F; Gate 3 is the target; execution begins at CP-A remainder + CP-B tick-source fix.
+
+## 2026-08-19 evening — Phase CP-A remainder + CP-B (executed post-close)
+
+- **EOD verdict, first credible full day:** capture 17,043 rows / zero capture
+  errors / intelligence replay_equivalent=True — but final_stage FAILED on
+  `KeyError: 'open'`: the FIRST-ever live SPOT rows (point samples,
+  {"ltp"}) broke the snapshot builder's OHLC assumption. Fixed (degenerate
+  point-sample bar, disclosed in-code; unknown shapes return None — absent
+  beats invented). Re-ran completeness for the day directly: spot ✓ (first
+  ever), options ✓, VIX ✗ — honest: live VIX lands in layer0 while
+  completeness reads SQLite (two-store split, Master Plan item).
+- **CP-B / D-3 tick source:** LiveTickProvider now binds to the
+  execution-neutered live FyersBroker (same instance as the regime path);
+  FAILS CLOSED without it; synthetic requires explicit `paper_synthetic`.
+  The "live quotes" log lie removed.
+- **CP-B / D-4 warm-up:** providers.regime.warmup {polls:16, 30s} enabled in
+  production yaml. E2E harness ran tomorrow's exact _startup() tonight:
+  FyersBroker bound (not PaperBroker, same-instance check True), 16 real
+  polls executed, stability gate HONESTLY REFUSED the closed-market tape
+  (UNSTABLE_ACROSS_SAMPLING). CP-B proven end-to-end.
+- **First-sample capture (operator ask):** capture timers 09:16/09:17 →
+  09:14; scripts wait to the open instant via new
+  bujji/market_reality/open_wait.py (staggered +0/+2/+5s against the shared
+  10/s ceiling; far-from-open starts still refuse). The 09:15:00–09:15:59
+  opening minute — previously never captured — is recorded from tomorrow.
+- **D-10 backup:** bujji-backup.timer 16:30 nightly; first backup taken
+  (1.85GB sqlite online-backup + layer0 + journals, keep 7). ON-BOX only —
+  off-box destination = open operator decision.
+- **D-9 alerts:** OnFailure=bujji-alert@%n on all 7 units → data/ALERTS.jsonl
+  (proven with a forced alarm). File+journal only — push channel = open
+  operator decision.
+- Hygiene: 4 recurring root-owned files re-swept; 0-byte decoy store deleted.
+- Guards evolved with the design: timer-fire test now pins the invariant
+  (post-open OR pre-open+wait); layer0 no-writes guard moved to AST
+  call-analysis after substring-matching false-positived on the identifier
+  `wait_until_open`.
+- Regression: 7,120 passed / 0 failed (run as the service user).

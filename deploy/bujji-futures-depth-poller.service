@@ -1,0 +1,56 @@
+[Unit]
+# =========================================================================
+# BUJJI FUTURES DEPTH POLLER
+#
+# Owns ONE thing: the intraday NIFTY futures order-book depth series --
+# 5 bid + 5 ask levels, open interest, total buy/sell quantity -- polled
+# every 60s from market open to close and written to layer0_data via
+# RawObservationStore (session_id "futures-depth-poller").
+#
+# It is NOT a trading system and NOT an intelligence system: no order, no
+# position, no strategy, no regime derivation. Purely Layer 0 capture.
+#
+# WHY A SEPARATE UNIT: bujji-daily-intelligence.service already owns spot,
+# VIX and the option chain. Depth is a distinct instrument family with its
+# own certification (data_certification/fyers_nifty_future_depth_
+# certification_20260814.json) and its own failure domain -- a depth outage
+# must not mark the option chain capture failed, or vice versa.
+#
+# HISTORY: this ran exactly once, by hand, on 2026-08-14 -- 385 observations,
+# 09:15:13-15:39:51, 5 full ladder levels on every row, inter-poll gap
+# 60.0-60.3s. Best-quality series in the system, and nothing scheduled it, so
+# every trading day since captured none. This unit is that missing schedule.
+#
+# --live is REQUIRED: without it the script runs in DISCOVERY mode and never
+# constructs a store, so it writes nothing. --live is itself gated by
+# FIELD_MAPPING_VERIFIED and by CertificationGate.permits_write(), verified
+# open for ("direct_sdk_fyers_broker_py_depth", "FUTURE") on 2026-08-18.
+# =========================================================================
+Description=Bujji futures depth poller — NIFTY order-book depth capture (no trading)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+# oneshot: a bounded daily job that polls to MARKET_CLOSE (15:40) and exits.
+# Type=oneshot also gives TimeoutStartSec=infinity by default, which a ~6h20m
+# session needs -- never change this to a type with a finite start timeout.
+Type=oneshot
+User=bujji
+Group=bujji
+WorkingDirectory=/opt/bujji/app
+ExecStart=/opt/bujji/.venv/bin/python scripts/run_futures_depth_poller.py --live
+
+# FYERS credentials. The access token must be refreshed by a human before the
+# open every trading day (SEBI-gated; docs/FYERS_TOKEN_LIFECYCLE.md).
+# bujji-token-preflight.timer checks that at 08:45 and fails loudly if not.
+EnvironmentFile=/opt/bujji/.env
+
+TimeoutStopSec=30
+
+# No Restart=. The script exits non-zero for reasons that must NOT be retried
+# blindly: 1 = outside market hours (an NSE holiday fire lands here -- fails
+# visibly rather than fabricating a session), 2 = field mapping unverified,
+# 3 = token invalid, 4 = futures identity unresolved. None of those improve on
+# a same-day retry; the next day's timer fire is the retry.
+[Install]
+WantedBy=multi-user.target

@@ -95,6 +95,9 @@ providers:
   # Live per-leg prices for revaluation. Without this every cycle is
   # BLIND (revalued from entry prices) and the runner says so loudly.
   tick_source:
+    # broker = the execution-neutered live FYERS data broker (the regime
+    # evidence instance). Fails closed unless regime is market_thesis_live --
+    # synthetic ticks must be declared as paper_synthetic, never implied.
     type: broker
 
   # Bujji derives its OWN regime from live market evidence. No human
@@ -102,6 +105,18 @@ providers:
   # declines to trade.
   regime:
     type: market_thesis_live
+    # WARM-UP (enabled 2026-08-19, Master Plan D-4). 16 real spot polls, 30s
+    # apart (~8 min; entry decision lands ~09:31). Without this the thesis
+    # saw exactly ONE snapshot: PSI needs >=3 price deltas, so trend was
+    # structurally UNKNOWN and every session was NO_TRADE regardless of the
+    # market (proven live 2026-08-18 and -19). The stability gate demands
+    # stride-unanimity over these polls (~8% pass rate on real data), so
+    # NO_TRADE remains the EXPECTED majority verdict -- that is the gate
+    # reading the market honestly, not a defect. Do not tune this to force
+    # entries.
+    warmup:
+      polls: 16
+      interval_seconds: 30
 
 artifacts:
   shadow_sessions_root: /opt/bujji/app/shadow_sessions

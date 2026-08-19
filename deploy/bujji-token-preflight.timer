@@ -1,0 +1,20 @@
+[Unit]
+Description=Pre-open trigger for the Bujji FYERS token pre-flight (weekdays only)
+
+[Timer]
+# 08:45 IST: 25 minutes before the earliest bujji fire (09:10) and 31 before
+# the capture session (09:16). Far enough ahead to leave real time to
+# re-authenticate and run promote_fyers_token.py, late enough that a token
+# refreshed early that morning is already in place and does not trip a false
+# alarm. Mon..Fri mirrors the other bujji timers; NSE holidays are NOT
+# excluded (no holiday calendar exists in this codebase -- same disclosed
+# limitation as bujji-daily-intelligence.timer). A holiday fire is harmless:
+# the check reads a file and exits.
+OnCalendar=Mon..Fri 08:45 Asia/Kolkata
+
+# Fire late rather than early, and never skip a missed window silently.
+AccuracySec=30s
+Persistent=false
+
+[Install]
+WantedBy=timers.target

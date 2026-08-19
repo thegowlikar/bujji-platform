@@ -130,7 +130,18 @@ def test_layer0_writes_no_bytes_of_its_own():
             continue  # These compose EventStore; verified separately below.
         with open(path) as fh:
             source = fh.read()
-        assert "open(" not in source, (
+        # Structural check (2026-08-19): the old substring guard ("open(" in
+        # source) false-positived on any identifier ENDING in open -- e.g.
+        # open_wait.wait_until_open(), which writes nothing. Assert on actual
+        # calls to the builtin instead.
+        import ast as _ast
+        calls_open = any(
+            isinstance(node, _ast.Call)
+            and isinstance(node.func, _ast.Name)
+            and node.func.id == "open"
+            for node in _ast.walk(_ast.parse(source))
+        )
+        assert not calls_open, (
             f"{os.path.basename(path)} opens a file directly -- persistence "
             "belongs to EventStore alone"
         )

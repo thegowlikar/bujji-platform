@@ -1,0 +1,42 @@
+[Unit]
+# =========================================================================
+# BUJJI FYERS TOKEN PRE-FLIGHT
+#
+# Owns ONE thing: answering, before the NSE open, whether the FYERS access
+# token in /opt/bujji/.env outlives every bujji timer fire still ahead today.
+# It never refreshes a token, never calls the broker, never touches market
+# data, and never places an order -- it decodes a JWT `exp` claim locally and
+# compares it against systemd's own schedule.
+#
+# WHY: the token dies at a fixed 06:00 IST cutover daily; the capture and
+# trading timers fire 09:10-09:22:30. The refresh is SEBI-gated and must be
+# done by a human (docs/FYERS_TOKEN_LIFECYCLE.md). Nothing verified that the
+# human had actually done it, so a missed morning silently lost that whole
+# trading day's observations -- unrecoverable, since intraday option chain
+# data cannot be backfilled. On 2026-08-18 the 09:16 session failed at
+# 09:16:00 and went unnoticed until 18:00 IST, a full session later.
+#
+# Deliberately a SEPARATE unit from bujji-daily-intelligence.service: that
+# one owns capture + intelligence, this one owns only the go/no-go answer,
+# and it must be able to fail without implying the capture itself is broken.
+# =========================================================================
+Description=Bujji FYERS token pre-flight — will the token survive today's fires?
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=bujji
+Group=bujji
+WorkingDirectory=/opt/bujji/app
+ExecStart=/opt/bujji/.venv/bin/python scripts/preflight_fyers_token.py
+
+# No EnvironmentFile on purpose. The script READS /opt/bujji/.env by path to
+# decode the expiry; it never needs the token in its own environment, so the
+# secret stays out of the process environment and out of `systemctl show`.
+
+# No Restart=. A failure here is a true negative that must persist: the unit
+# staying `failed` IS the alarm, and an auto-retry would clear it. The verdict
+# is also written to data/token_preflight_verdict.json for a one-command check.
+[Install]
+WantedBy=multi-user.target

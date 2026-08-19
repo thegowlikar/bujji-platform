@@ -208,8 +208,27 @@ def test_timer_fires_after_the_market_opens():
     calendar_line = next(line for line in text.splitlines() if line.startswith("OnCalendar="))
     hhmm = calendar_line.split()[1]
     hour, minute = (int(part) for part in hhmm.split(":")[:2])
-    assert (hour, minute) > (9, 15), (
-        f"fires at {hhmm}, at or before the 09:15 NSE open -- capture would abort")
+    # 2026-08-19 (first-sample capture): the invariant is "a fire must never
+    # produce a zero-row day", NOT "fire after 09:15". Two ways to satisfy it:
+    #   (a) fire after the open (the old margin), or
+    #   (b) fire in a SHORT pre-open window AND every capture script waits for
+    #       the open instant itself (bujji/market_reality/open_wait.py) --
+    #       which also records the previously-lost 09:15:00-09:15:59 minute.
+    # A fire at/before 09:10 is still forbidden: outside open_wait's refusal
+    # window it reproduces the 09:00-era zero-row disaster.
+    if (hour, minute) > (9, 15):
+        pass  # post-open margin: always safe
+    else:
+        assert (hour, minute) >= (9, 10), (
+            f"fires at {hhmm}, too far before the 09:15 open -- the scripts "
+            "would refuse rather than wait and the day would capture zero rows")
+        for script in ("scripts/capture_market_reality_session.py",
+                       "scripts/capture_options_reality_session.py",
+                       "scripts/run_futures_depth_poller.py"):
+            src = open(f"/opt/bujji/app/{script}").read()
+            assert "wait_until_open" in src, (
+                f"{script} does not wait for the open -- a {hhmm} fire would "
+                "hit its market-hours gate and abort with zero rows")
     assert (hour, minute) < (15, 30), f"fires at {hhmm}, after the market closes"
     assert "Sat" not in calendar_line
     assert "Sun" not in calendar_line

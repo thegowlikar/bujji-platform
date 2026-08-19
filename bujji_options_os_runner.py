@@ -542,39 +542,6 @@ class OptionsOSRunner:
                 )
             self._market_data_provider = ReplayChainProvider(bhavcopy_path=bhavcopy_path, underlying=underlying)
 
-        # ---- CHANGE 1: the tick source is actually CONSTRUCTED ----
-        # Previously `self._price_provider` was initialised to None and
-        # never assigned anywhere, so the revaluation path built and
-        # tested for it could never run: every session silently revalued
-        # from entry prices. Selecting it here is what turns that dead
-        # branch live.
-        tick_cfg = providers_cfg.get("tick_source", {})
-        tick_type = (tick_cfg.get("type") or "none").lower()
-        if tick_type == "observation_store":
-            from bujji.historical_reality.store import HistoricalObservationStore
-            from bujji.production_runtime.intraday_price_provider import HistoricalTickProvider
-
-            tick_store_path = tick_cfg.get("observation_store_path") or market_data_cfg.get("observation_store_path")
-            if not tick_store_path:
-                raise ConfigurationError(
-                    "providers.tick_source.observation_store_path is required for "
-                    "type=observation_store -- refusing to guess."
-                )
-            self._price_provider = HistoricalTickProvider(HistoricalObservationStore(tick_store_path))
-            self._logger.info("Tick source: observation_store (%s)", tick_store_path)
-        elif tick_type == "broker":
-            import asyncio as _asyncio
-            from bujji.production_runtime.intraday_price_provider import LiveTickProvider
-
-            self._price_provider = LiveTickProvider(self._broker, _asyncio.run)
-            self._logger.info("Tick source: broker (live quotes)")
-        else:
-            self._logger.warning(
-                "Tick source: NONE. Every management cycle will be BLIND -- positions will be "
-                "revalued against their own entry prices, so unrealized P&L is 0 by construction "
-                "and no stop-loss or profit-target can fire. Set providers.tick_source.type."
-            )
-
         regime_cfg = providers_cfg.get("regime", {})
         regime_type = (regime_cfg.get("type") or "human_supplied").lower()
         if regime_type == "market_thesis":
@@ -637,6 +604,69 @@ class OptionsOSRunner:
         else:
             self._regime_provider = HumanSuppliedRegimeProvider(
                 trend_regime=regime_cfg.get("trend_regime"), volatility_regime=regime_cfg.get("volatility_regime"),
+            )
+
+        # ---- Tick source (constructed AFTER the regime block, on purpose). ----
+        # `type: broker` hands the management loop the SAME execution-neutered
+        # live FyersBroker the regime/warmup evidence path builds
+        # (self._intelligence_broker under regime type market_thesis_live) --
+        # never the PaperBroker. The previous wiring (fixed 2026-08-19, Master
+        # Plan D-3) passed self._broker, a PaperBroker whose get_ltp is a
+        # seeded random walk, while logging "live quotes": the first session
+        # to open a position would have fired stops and recorded MFE/MAE
+        # against fabricated prices. Fail closed: when this config has no real
+        # data broker, refuse to start rather than silently substituting
+        # synthetic prices (constitution: no silent live->synthetic fallback).
+        # A test or replay that WANTS the synthetic walk must declare it:
+        # `type: paper_synthetic`.
+        tick_cfg = providers_cfg.get("tick_source", {})
+        tick_type = (tick_cfg.get("type") or "none").lower()
+        if tick_type == "observation_store":
+            from bujji.historical_reality.store import HistoricalObservationStore
+            from bujji.production_runtime.intraday_price_provider import HistoricalTickProvider
+
+            tick_store_path = tick_cfg.get("observation_store_path") or market_data_cfg.get("observation_store_path")
+            if not tick_store_path:
+                raise ConfigurationError(
+                    "providers.tick_source.observation_store_path is required for "
+                    "type=observation_store -- refusing to guess."
+                )
+            self._price_provider = HistoricalTickProvider(HistoricalObservationStore(tick_store_path))
+            self._logger.info("Tick source: observation_store (%s)", tick_store_path)
+        elif tick_type == "broker":
+            import asyncio as _asyncio
+
+            from bujji.production_runtime.intraday_price_provider import LiveTickProvider
+
+            data_broker = getattr(self, "_intelligence_broker", None)
+            if regime_type != "market_thesis_live" or data_broker is None:
+                raise ConfigurationError(
+                    "providers.tick_source.type=broker requires the live FYERS data "
+                    "broker (providers.regime.type=market_thesis_live). Under this "
+                    "config the only broker available is the synthetic PaperBroker -- "
+                    "refusing to price position management off a random walk while "
+                    "calling it live. Declare type=paper_synthetic to opt into "
+                    "synthetic ticks explicitly, or type=observation_store for replay."
+                )
+            self._price_provider = LiveTickProvider(data_broker, _asyncio.run)
+            self._logger.info(
+                "Tick source: FYERS live quotes (execution-neutered data broker; "
+                "same instance as the regime evidence path)")
+        elif tick_type == "paper_synthetic":
+            import asyncio as _asyncio
+
+            from bujji.production_runtime.intraday_price_provider import LiveTickProvider
+
+            self._price_provider = LiveTickProvider(self._broker, _asyncio.run)
+            self._logger.warning(
+                "Tick source: PAPER SYNTHETIC -- the PaperBroker's seeded random "
+                "walk, NOT market data. Every management price is fabricated by "
+                "construction. Test/replay use only; never a live campaign.")
+        else:
+            self._logger.warning(
+                "Tick source: NONE. Every management cycle will be BLIND -- positions will be "
+                "revalued against their own entry prices, so unrealized P&L is 0 by construction "
+                "and no stop-loss or profit-target can fire. Set providers.tick_source.type."
             )
 
         self._session_cfg = session_cfg

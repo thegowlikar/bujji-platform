@@ -47,7 +47,14 @@ Description=Daily trigger for Bujji Daily Intelligence Session (weekdays only)
 #
 # Not moved later than that on purpose -- the opening minutes are the
 # most volatile of the session and are unrecoverable if never captured.
-OnCalendar=Mon..Fri 09:16 Asia/Kolkata
+# FIRST-SAMPLE CAPTURE (2026-08-19): fires PRE-open at 09:14; the scripts
+# now wait for the open instant themselves (bujji/market_reality/open_wait.py,
+# staggered +0/+2/+5s per process), so the 09:15:00-09:15:59 opening minute --
+# previously never captured, unrecoverable -- is recorded from the first
+# sample. The old 09:16/09:17 fire was the margin against the boundary race
+# that made the 09:00-era timer capture zero rows; the wait replaces the
+# margin without racing.
+OnCalendar=Mon..Fri 09:14 Asia/Kolkata
 
 # A missed fire (VPS down at 09:00 IST) still runs once the VPS is back
 # up -- this is exactly "survive VPS reboot appropriately": no trading
