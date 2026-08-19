@@ -60,31 +60,52 @@ BACKUPS_TO_KEEP = 5
 _BACKUP_NAME = re.compile(r"^\.env\.bak-(\d{8}T\d{6})$")
 
 IST = datetime.timezone(datetime.timedelta(hours=5, minutes=30))
-# Bracket of TOKEN-CONSUMING timer fires, verified against the installed
-# units on 2026-08-19 (every service with EnvironmentFile=/opt/bujji/.env or
-# --fyers-env-file):
+# FALLBACK ONLY. The real bracket is DISCOVERED from systemd at runtime --
+# see last_token_fire(). These constants are used only when systemd is
+# unavailable (a laptop, a container, a test run), and when that happens the
+# output says so rather than presenting a guess as a reading.
 #
-#   09:10     bujji-shadow-decision-campaign      <- FIRST_FIRE
-#   09:14     bujji-daily-intelligence
-#   09:14     bujji-futures-depth-poller
-#   09:14     bujji-options-os-trading
-#   09:27:30  bujji-paper-intelligence-campaign   <- LAST_FIRE
-#
-# CORRECTED 2026-08-19. LAST_FIRE said 09:22:30 and named
-# bujji-options-os-trading, which had already moved to a 09:14 pre-open fire
-# (it now waits for the open in-process). Worse, 09:22:30 was EARLIER than
-# the real last consumer at 09:27:30, so this check reported "outlives the
-# fire" while the paper-intelligence campaign could still start on a dead
-# token. No day was lost to it -- the token dies at 06:00, which fails every
-# comparison -- but the claim was narrower than its wording.
-#
-# THESE ARE STILL CONSTANTS AND CONSTANTS DRIFT: this one went stale within a
-# day of the timer moving. scripts/preflight_fyers_token.py deliberately asks
-# systemd for each bujji-*.timer's real next elapse instead, so moving a timer
-# moves that check automatically. Doing the same here is the durable fix and
-# is left as a separate decision rather than folded into a label correction.
-FIRST_FIRE = datetime.time(9, 10)      # bujji-shadow-decision-campaign
-LAST_FIRE = datetime.time(9, 27, 30)   # bujji-paper-intelligence-campaign
+# They existed as the source of truth until 2026-08-19 and went stale within
+# a day of the trading timer moving 09:22:30 -> 09:14: the comment named a
+# unit that had moved, and the value was EARLIER than the real last consumer
+# (bujji-paper-intelligence-campaign, 09:27:30), so the check reported
+# coverage it was not testing. Same failure class as this repo's four
+# disagreeing market-close constants.
+FALLBACK_FIRST_FIRE = datetime.time(9, 10)      # bujji-shadow-decision-campaign
+FALLBACK_LAST_FIRE = datetime.time(9, 27, 30)   # bujji-paper-intelligence-campaign
+
+# This script's own pre-open checker READS the env file but does not need a
+# VALID token -- inspecting an expired one is exactly its job -- so it is
+# excluded from "fires that need the token", mirroring how the preflight
+# excludes itself.
+_SELF_EXCLUDED_TIMERS = ("bujji-token-preflight.timer",)
+
+
+def last_token_fire(now: datetime.datetime):
+    """(when, label, discovered) for the last upcoming fire needing the token.
+
+    Asks systemd which bujji timers actually read the env file and when they
+    next elapse, so moving a timer moves this check with no edit here. Falls
+    back to the constants above -- flagged as such -- when systemd cannot be
+    reached.
+    """
+    try:
+        sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+        from bujji.ops.systemd_timers import token_fire_window
+
+        fires = token_fire_window(env_path=str(TARGET), exclude=_SELF_EXCLUDED_TIMERS)
+    except Exception:  # noqa: BLE001 -- an operator tool must run off-box too
+        fires = []
+
+    if fires:
+        timer, when = fires[-1]
+        return when, timer[: -len(".timer")], True
+
+    fire = datetime.datetime.combine(now.date(), FALLBACK_LAST_FIRE, IST)
+    if fire < now:
+        fire += datetime.timedelta(days=1)
+    return fire, f"{FALLBACK_LAST_FIRE.strftime('%H:%M:%S')} (fallback constant)", False
+
 
 _KEY = re.compile(r"^\s*(?:export\s+)?([A-Z_][A-Z0-9_]*)\s*=")
 
@@ -183,13 +204,12 @@ def report(path: Path, label: str) -> None:
     if exp is None:
         print(f"  {label:<24} token unreadable or absent")
         return
-    fire = datetime.datetime.combine(now.date(), LAST_FIRE, IST)
-    if fire < now:
-        fire += datetime.timedelta(days=1)
+    fire, fire_label, discovered = last_token_fire(now)
     state = "VALID" if exp > now else "EXPIRED"
+    source = "systemd" if discovered else "FALLBACK -- systemd unavailable"
     print(f"  {label:<24} expires {exp.isoformat()}  [{state}]")
-    print(f"  {'':<24} outlives the {LAST_FIRE.strftime('%H:%M:%S')} "
-          f"trading fire: {exp > fire}")
+    print(f"  {'':<24} outlives {fire_label} at "
+          f"{fire.strftime('%H:%M:%S')}: {exp > fire}   [{source}]")
 
 
 def main() -> int:
