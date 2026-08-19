@@ -127,6 +127,31 @@ def parse_args(argv) -> argparse.Namespace:
     return parser.parse_args(argv)
 
 
+def _emergency_brake(*, unrealized_pnl, realized_pnl, daily_loss_limit,
+                     consecutive_blind_cycles, max_consecutive_blind_cycles) -> "Optional[str]":
+    """Pure. The only loss authority BETWEEN scheduled exits (Master Plan D-6:
+    emergency close was MISSING -- nothing watched between 5-minute passes and
+    blind cycles disabled even the per-position stop).
+
+    Two triggers, both fail-safe:
+      1. Session loss breach: realized + unrealized <= -daily_loss_limit.
+      2. Sustained blindness WITH an open position: if we cannot price the
+         book for N consecutive cycles, we cannot know the loss -- get out
+         rather than hold what we cannot see.
+    Returns the reason string, or None to continue."""
+    if (max_consecutive_blind_cycles
+            and consecutive_blind_cycles >= max_consecutive_blind_cycles):
+        return (f"EMERGENCY_BLIND: {consecutive_blind_cycles} consecutive unpriced "
+                f"cycles with an open position -- cannot see, will not hold")
+    if unrealized_pnl is None or not daily_loss_limit:
+        return None
+    total = (realized_pnl or 0.0) + unrealized_pnl
+    if total <= -abs(daily_loss_limit):
+        return (f"EMERGENCY_LOSS: session P&L {total:.0f} breached the daily "
+                f"loss limit -{abs(daily_loss_limit):.0f}")
+    return None
+
+
 def _make_capital_snapshot_provider(capital_cfg: dict, clock, log=None):
     """The capital snapshot the risk context consults (STOP #1).
 
@@ -952,6 +977,7 @@ class OptionsOSRunner:
         prices, priced_from_ticks = self._current_leg_prices(as_of)
         if priced_from_ticks:
             self._priced_from_ticks_cycles += 1
+            self._consecutive_blind_cycles = 0
         else:
             # LOUD, every time. A blind cycle is a cycle where this
             # position was revalued against its own ENTRY prices, so
@@ -960,6 +986,14 @@ class OptionsOSRunner:
             # degraded silently and a fully blind session was
             # indistinguishable from a healthy one in the logs.
             self._blind_cycles += 1
+            # The blind-brake counts only cycles where a tick source EXISTS
+            # and failed to price the book -- that is the dangerous state
+            # (we expected sight and lost it). A session with NO tick source
+            # configured is blind BY DESIGN (replay dates with no captured
+            # ticks -- see _current_leg_prices' own docstring) and keeps the
+            # long-established flagged-not-terminated behaviour.
+            if self._price_provider is not None:
+                self._consecutive_blind_cycles = getattr(self, "_consecutive_blind_cycles", 0) + 1
             self._logger.warning(
                 "%s -- BLIND CYCLE: revalued from ENTRY prices, not market prices. "
                 "Unrealized P&L is 0 by construction; stop-loss/profit-target CANNOT fire "
@@ -983,6 +1017,25 @@ class OptionsOSRunner:
             self._valuation_history.append(getattr(valuation, "total_unrealized_pnl", None))
         if valuation is None:
             self._logger.warning("%s -- no valuation available for %s", stage_label, pg_id)
+            return
+
+        # -- EMERGENCY BRAKE (Master Plan D-6) -- evaluated every pass,
+        # BEFORE the ordinary exit policy, reusing the same mandatory
+        # close-everything sequence _eod_close uses. Nothing new fires an
+        # order; the brake only decides WHEN the existing close sequence runs.
+        brake_reason = _emergency_brake(
+            unrealized_pnl=getattr(valuation, "total_unrealized_pnl", None),
+            realized_pnl=getattr(self._broker, "realized_pnl", 0.0),
+            daily_loss_limit=self._config.get("capital_snapshot", {}).get("daily_loss_limit"),
+            consecutive_blind_cycles=getattr(self, "_consecutive_blind_cycles", 0),
+            max_consecutive_blind_cycles=self._config.get("position_management", {}).get(
+                "max_consecutive_blind_cycles", 3),
+        )
+        if brake_reason is not None:
+            self._logger.critical("%s -- EMERGENCY CLOSE: %s", stage_label, brake_reason)
+            self._governor_result_summary["emergency_close_reason"] = brake_reason
+            self._emergency_closed = True
+            self._trading_brain_runtime.run_market_close_sequence()
             return
 
         # Snapshot the group's open positions BEFORE the exit runs. The
@@ -1114,6 +1167,9 @@ class OptionsOSRunner:
             interval_s, end_time_s, max_cycles,
         )
         while cycles < max_cycles:
+            if getattr(self, "_emergency_closed", False):
+                self._logger.critical("POSITION_MANAGEMENT halted: emergency close executed.")
+                break
             self._run_one_management_pass(f"POSITION_MANAGEMENT[{cycles + 1}]")
             cycles += 1
             if not self._entry_prices:

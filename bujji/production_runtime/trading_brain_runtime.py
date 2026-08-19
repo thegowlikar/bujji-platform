@@ -73,6 +73,11 @@ from bujji.trading_brain.risk_governor.risk_governor_pipeline import (
 )
 from bujji.trading_brain.risk_governor.live_risk_context_provider import ContextUnavailable
 from bujji.trading_brain.risk_governor.msi_entry_bridge import _leg_to_core_contract, _to_core_side
+from bujji.trading_brain.risk_governor.capital_check import assess_capital
+from bujji.trading_brain.risk_governor.whole_book_margin_provider import (
+    MarginLegRequest,
+    margin_snapshot_to_capital_check_input,
+)
 
 from .runtime_state_machine import RuntimeState
 from .trading_brain_composition_root import TradingBrainCompositionRoot
@@ -81,6 +86,8 @@ STAGE_STRATEGY_PROPOSED = "STRATEGY_PROPOSED"
 STAGE_STRATEGY_REJECTED = "STRATEGY_REJECTED"
 STAGE_CONTEXT_UNAVAILABLE = "CONTEXT_UNAVAILABLE"
 STAGE_RISK_DECISION = "RISK_DECISION"
+STAGE_GATE_B_MARGIN_VETO = "GATE_B_MARGIN_VETO"
+STAGE_GATE_B_MARGIN_APPROVED = "GATE_B_MARGIN_APPROVED"
 STAGE_ORDER_SUBMITTED = "ORDER_SUBMITTED"
 STAGE_ORDER_FILLED = "ORDER_FILLED"
 STAGE_POSITION_OPENED = "POSITION_OPENED"
@@ -209,6 +216,92 @@ class TradingBrainRuntime:
                 proposal=proposal, governor_result=None, context_unavailable=context_result, order_results=(),
                 approved_quantity=0, filled=False, blocking_reason=context_result.reason,
             )
+
+        # -- Gate B: margin ALLOW/VETO (wired 2026-08-19, Master Plan D-6). --
+        # capital_check.assess_capital is documented throughout this codebase
+        # as the sole margin veto authority, yet until tonight NOTHING in the
+        # production entry chain invoked it, and the whole-book projection
+        # received empty leg maps -- the certified SPAN provider was asked to
+        # margin nothing. Here the PROPOSAL's own legs are priced through the
+        # certified provider (the projected-book intent build_span_margin_
+        # request's docstring always declared), the EXISTING book's verified
+        # requirement is added (zero when the book is definitionally flat),
+        # and the verdict gates the pipeline. Every failure path VETOES --
+        # never a guess.
+        try:
+            margin_legs = []
+            for leg in proposal.legs:
+                contract = _leg_to_core_contract(leg, root.underlying, root.exchange_lot_size)
+                margin_legs.append(MarginLegRequest(
+                    symbol=contract.symbol,
+                    qty=leg.ratio * root.exchange_lot_size * desired_quantity,
+                    side=-1 if leg.side == "SELL" else 1,
+                    # Live-certified span vocabulary (2026-07-19 evidence +
+                    # 2026-08-18 whole-book discovery): type=2, INTRADAY.
+                    instrument_type=2, product_type="INTRADAY",
+                    limit_price=leg.premium,
+                ))
+            proposal_snapshot = root.margin_provider.get_portfolio_margin(margin_legs, root.clock)
+        except Exception as exc:  # noqa: BLE001 -- an unpriceable proposal must never be approved
+            proposal_snapshot = None
+            gate_b_error = f"{type(exc).__name__}: {exc}"
+        else:
+            gate_b_error = None
+
+        if proposal_snapshot is None:
+            gate_b_reason = f"GATE_B_MARGIN_QUERY_RAISED: {gate_b_error}"
+        else:
+            if contracts_by_client_order_id:
+                existing_snapshot = context_result.margin_snapshot
+                if existing_snapshot is None or not existing_snapshot.margin_verified:
+                    existing_required = None
+                else:
+                    existing_required = existing_snapshot.required_margin
+            else:
+                existing_required = 0.0  # definitionally flat: nothing to margin
+
+            if existing_required is None:
+                gate_b_reason = "GATE_B_EXISTING_BOOK_MARGIN_UNVERIFIED"
+            else:
+                capital = root.capital_snapshot_provider()
+                total_required = (
+                    None if proposal_snapshot.required_margin is None
+                    else proposal_snapshot.required_margin + existing_required
+                )
+                inputs = margin_snapshot_to_capital_check_input(
+                    proposal_snapshot,
+                    available_capital=capital.available_capital,
+                    configured_risk_capital=capital.available_capital,
+                )
+                # The projected total (proposal + existing) is what must fit,
+                # not the proposal alone.
+                inputs = type(inputs)(**{**inputs.__dict__, "required_margin": total_required})
+                verdict = assess_capital(inputs, root.clock)
+                gate_b_reason = (
+                    None if verdict.decision == "ALLOW"
+                    else f"GATE_B_{verdict.blocking_reason}"
+                )
+
+        if gate_b_reason is not None:
+            root.event_bus.publish_nowait(Event(
+                type=EventType.DECISION_MADE,
+                payload={"stage": STAGE_GATE_B_MARGIN_VETO, "assessment_id": proposal.assessment_id,
+                         "reason": gate_b_reason},
+                timestamp=root.clock(),
+            ))
+            return TradingBrainCycleResult(
+                proposal=proposal, governor_result=None, context_unavailable=None, order_results=(),
+                approved_quantity=0, filled=False, blocking_reason=gate_b_reason,
+            )
+        root.event_bus.publish_nowait(Event(
+            type=EventType.DECISION_MADE,
+            payload={"stage": STAGE_GATE_B_MARGIN_APPROVED, "assessment_id": proposal.assessment_id,
+                     "proposal_required_margin": proposal_snapshot.required_margin,
+                     "existing_required_margin": existing_required,
+                     "margin_source": proposal_snapshot.margin_source,
+                     "available_capital": capital.available_capital},
+            timestamp=root.clock(),
+        ))
 
         # -- D.1-D.6 Risk Governor (D.4 Lifecycle Intelligence is the -----
         # -- pipeline's own ADMISSION stage) -------------------------------

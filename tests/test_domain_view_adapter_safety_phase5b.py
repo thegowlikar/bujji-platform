@@ -33,6 +33,18 @@ _LOT_SIZE_AUTHORITATIVE_AUTHORIZED = (
     "bujji/production_runtime/composition_root.py",
 )
 
+# CP-C safety spine (2026-08-19, Master Plan D-6): the ONE further authorized
+# change to the production_runtime lineage since baseline 360c003. Gate B --
+# capital_check.assess_capital, documented as the sole margin veto authority
+# but invoked nowhere -- is now wired into process_entry_cycle with the
+# proposal's real legs priced through the certified SPAN provider. Covered by
+# the GateB tests in tests/test_trading_brain_runtime.py. No strategy,
+# construction, or execution semantics changed; a new VETO gate was added.
+_CPC_SAFETY_SPINE_AUTHORIZED = (
+    "bujji/production_runtime/trading_brain_runtime.py",
+    "bujji/production_runtime/trading_brain_composition_root.py",
+)
+
 
 FILE = "bujji/market_state/domain_view_adapter.py"
 
@@ -108,7 +120,7 @@ def test_no_decision_modules_beyond_consensus_and_synthesis_touched():
         cwd="/opt/bujji/app", capture_output=True, text=True,
     )
     changed = [l for l in result.stdout.strip().splitlines() if l]
-    changed = [l for l in changed if l not in _PAPERBROKER_V2_AUTHORIZED + _LOT_SIZE_AUTHORITATIVE_AUTHORIZED]
+    changed = [l for l in changed if l not in _PAPERBROKER_V2_AUTHORIZED + _LOT_SIZE_AUTHORITATIVE_AUTHORIZED + _CPC_SAFETY_SPINE_AUTHORIZED]
     forbidden_prefixes = (
         "bujji/msi_trade_thesis/", "bujji/msi_trade_intent/",
         "bujji/msi_strategy_eligibility/", "bujji/msi_strategy_selector/",

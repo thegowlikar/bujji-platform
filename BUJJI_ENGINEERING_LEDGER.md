@@ -56,3 +56,14 @@ Append-only record of engineering decisions and verified events. Newest last.
   call-analysis after substring-matching false-positived on the identifier
   `wait_until_open`.
 - Regression: 7,120 passed / 0 failed (run as the service user).
+
+## 2026-08-19 late — CP-C/D-6 (safety spine, part 1)
+
+- Gate B wired: proposal legs priced through the certified SPAN provider;
+  capital_check.assess_capital gates the pipeline (VETO on any unverified or
+  unaffordable margin). Composition root exposes the provider instances.
+- Emergency close added: session-loss hard limit + sustained-blindness brake
+  in every management pass, reusing the EOD close sequence; replay-blind
+  sessions exempt by design.
+- 12 new tests; 7,132 green as service user. Remaining CP-C: D-5 evidence
+  persistence, D-7 broker realism inputs, D-8 outcome durability.

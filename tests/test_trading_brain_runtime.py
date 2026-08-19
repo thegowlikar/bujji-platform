@@ -404,3 +404,85 @@ def test_no_force_override_bypass_parameter():
             assert "force" not in name.lower()
             assert "override" not in name.lower()
             assert "bypass" not in name.lower()
+
+
+class TestGateBMarginVeto:
+    """Gate B (Master Plan D-6): the proposal's own legs are priced through
+    the margin provider and capital_check.assess_capital gates the pipeline.
+    Before 2026-08-19 no production code invoked the documented sole margin
+    veto authority."""
+
+    def test_verified_margin_with_ample_capital_passes_gate_b(self, tmp_path, chain, spot):
+        root, journal = make_root(tmp_path)
+        seed = _seed_position_group(journal)
+        rt = TradingBrainRuntime(root)
+        result = rt.process_entry_cycle(chain=chain, spot=spot, **cycle_kwargs(seed_coid=seed))
+        blocking = result.blocking_reason or ""
+        assert not blocking.startswith("GATE_B_"), blocking
+
+    def test_unverified_margin_vetoes_before_the_pipeline(self, tmp_path, chain, spot):
+        certified_shape = {"s": "ok", "code": 200,
+                           "data": {"span": 1.0, "expo": 1.0, "total": 2.0, "benefit": 0.0}}
+
+        class _Resp:
+            status_code = 200
+            def json(self):
+                return certified_shape
+
+        # The FULL adapter (with the _with_explanation interface the context
+        # builder requires) wrapping the UNCERTIFIED provider -- so the cycle
+        # genuinely reaches Gate B carrying margin_verified=False, rather than
+        # dying upstream on a missing method.
+        from bujji.broker.fyers_span_margin import build_fyers_margin_provider
+        provider = build_fyers_margin_provider(
+            app_id="a", access_token="b", certified=False, post=lambda *a, **k: _Resp())
+        root, journal = make_root(tmp_path, margin_provider=provider)
+        seed = _seed_position_group(journal)
+        rt = TradingBrainRuntime(root)
+        result = rt.process_entry_cycle(chain=chain, spot=spot, **cycle_kwargs(seed_coid=seed))
+        assert result.blocking_reason is not None
+        assert result.blocking_reason.startswith("GATE_B_")
+        # Either honest veto is correct: the seeded book and the proposal use
+        # the same uncertified provider, so whichever unverified margin the
+        # gate meets first blocks the cycle.
+        assert ("MARGIN_NOT_CERTIFIED" in result.blocking_reason
+                or "UNVERIFIED" in result.blocking_reason)
+        assert result.approved_quantity == 0 and result.order_results == ()
+        assert result.governor_result is None, "veto must fire BEFORE the pipeline"
+
+    def test_margin_exceeding_capital_vetoes(self, tmp_path, chain, spot):
+        from bujji.broker.fyers_span_margin import build_fyers_margin_provider
+        huge = {"s": "ok", "code": 200,
+                "data": {"span": 9e9, "expo": 1e9, "total": 1e10, "benefit": 0.0}}
+
+        class _Resp:
+            status_code = 200
+            def json(self):
+                return huge
+
+        provider = build_fyers_margin_provider(
+            app_id="a", access_token="b", certified=True, post=lambda *a, **k: _Resp())
+        root, journal = make_root(tmp_path, margin_provider=provider)
+        seed = _seed_position_group(journal)
+        rt = TradingBrainRuntime(root)
+        result = rt.process_entry_cycle(chain=chain, spot=spot, **cycle_kwargs(seed_coid=seed))
+        assert result.blocking_reason is not None
+        assert "GATE_B_CAPITAL_EXCEEDED" in result.blocking_reason
+        assert result.order_results == ()
+
+    def test_a_raising_margin_provider_vetoes_not_approves(self, tmp_path, chain, spot):
+        class _Boom:
+            def get_portfolio_margin(self, legs, clock):
+                raise ConnectionError("api down")
+            def get_portfolio_margin_with_explanation(self, legs, clock):
+                raise ConnectionError("api down")
+        root, journal = make_root(tmp_path, margin_provider=_Boom())
+        seed = _seed_position_group(journal)
+        rt = TradingBrainRuntime(root)
+        result = rt.process_entry_cycle(chain=chain, spot=spot, **cycle_kwargs(seed_coid=seed))
+        # A raising provider is caught UPSTREAM by the context builder as
+        # ContextUnavailable -- already fail-closed before Gate B. The
+        # contract under test is "never approved", not which gate said no.
+        assert result.blocking_reason is not None
+        assert result.approved_quantity == 0
+        assert result.order_results == ()

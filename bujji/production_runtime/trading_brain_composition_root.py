@@ -58,6 +58,13 @@ class TradingBrainCompositionRoot:
     # + E.1's strategy adapter internally -- reused, never re-implemented).
     live_risk_context_provider: LiveRiskContextProvider
 
+    # Gate B (Master Plan D-6, 2026-08-19): the SAME provider instances the
+    # context builder consumes, exposed on the root so process_entry_cycle can
+    # price the PROPOSAL's own legs and invoke capital_check.assess_capital --
+    # one margin authority, one capital authority, no second construction.
+    margin_provider: Any
+    capital_snapshot_provider: Any
+
     # Governor configuration -- caller-owned, matching D.1-D.4's own
     # "Optional thresholds, illustrative defaults inside each governor"
     # discipline established since Gate D.1.
@@ -113,6 +120,7 @@ def build_trading_brain_composition_root(
     return TradingBrainCompositionRoot(
         broker=broker, event_bus=event_bus, timeline=timeline, runtime_state_machine=runtime_state_machine,
         journal=journal, clock=clock, live_risk_context_provider=live_risk_context_provider,
+        margin_provider=margin_provider, capital_snapshot_provider=capital_snapshot_provider,
         capital_safety_thresholds=capital_safety_thresholds, portfolio_risk_thresholds=portfolio_risk_thresholds,
         risk_policy=risk_policy or RiskPolicy(), position_health_thresholds=position_health_thresholds,
         underlying=underlying, exchange_lot_size=exchange_lot_size, instrument_type=instrument_type,
