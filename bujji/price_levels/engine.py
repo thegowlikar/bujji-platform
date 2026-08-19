@@ -16,8 +16,9 @@ from __future__ import annotations
 from typing import List, Optional, Sequence, Tuple
 
 from . import taxonomy
-from .models import Bar, LevelSet, PriceLevel
+from .models import Bar, LevelSet, PriceLevel, ZoneSet
 from .swings import swings_surviving_agreement
+from .zones import build_zones
 
 
 def _strength_bucket(touch_count: int) -> str:
@@ -111,5 +112,60 @@ def detect_levels(
         status=taxonomy.LEVELS_AVAILABLE, levels=tuple(levels), as_of=as_of,
         bars_considered=len(usable), swings_before_agreement=seen_by_loosest,
         swings_after_agreement=len(survivors), strengths_required=ordered,
+        source_resolution=source_resolution,
+    )
+
+
+def detect_zones(
+    bars: Sequence[Bar],
+    *,
+    multiples: Sequence[float] = taxonomy.DEFAULT_IMPULSE_MULTIPLES,
+    range_lookback: int = taxonomy.DEFAULT_RANGE_LOOKBACK,
+    source_resolution: str = "",
+    as_of: Optional[str] = None,
+) -> ZoneSet:
+    """Published supply/demand zones, or a named reason there are none.
+
+    Same contract as `detect_levels`: the `as_of` cut is applied FIRST, the
+    status distinguishes "none found" from "could not look", and the
+    agreement gate's cost is reported rather than hidden.
+    """
+    ordered = tuple(sorted(set(float(m) for m in multiples)))
+    if not ordered:
+        raise ValueError("at least one impulse multiple is required")
+
+    usable: List[Bar] = [b for b in bars if as_of is None or b.timestamp < as_of]
+
+    # A zone needs bars to measure a typical range against, plus an origin
+    # and the impulse that followed it. Fewer than that is not "no zones" --
+    # it is not enough evidence to have an opinion.
+    minimum = range_lookback + 2
+    if len(usable) < minimum:
+        return ZoneSet(
+            status=taxonomy.LEVELS_INSUFFICIENT_HISTORY, as_of=as_of,
+            bars_considered=len(usable), multiples_required=ordered,
+            source_resolution=source_resolution,
+            reason=(f"{len(usable)} bars available; a zone needs at least {minimum} "
+                    f"({range_lookback} to measure a typical range, plus an origin bar "
+                    f"and its impulse)"),
+        )
+
+    zones, seen_by_loosest = build_zones(usable, ordered, range_lookback, source_resolution)
+
+    if not zones:
+        return ZoneSet(
+            status=taxonomy.LEVELS_NO_AGREEMENT, as_of=as_of,
+            bars_considered=len(usable), zones_before_agreement=seen_by_loosest,
+            zones_after_agreement=0, multiples_required=ordered,
+            source_resolution=source_resolution,
+            reason=(f"{seen_by_loosest} candidate zone(s) at the loosest impulse threshold "
+                    f"{ordered[0]}x, none survived every threshold in {ordered} -- artifacts "
+                    f"of where the threshold was set, not places the market cared about"),
+        )
+
+    return ZoneSet(
+        status=taxonomy.LEVELS_AVAILABLE, zones=tuple(zones), as_of=as_of,
+        bars_considered=len(usable), zones_before_agreement=seen_by_loosest,
+        zones_after_agreement=len(zones), multiples_required=ordered,
         source_resolution=source_resolution,
     )

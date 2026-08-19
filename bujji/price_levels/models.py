@@ -121,3 +121,88 @@ class LevelSet:
             "source_resolution": self.source_resolution,
             "reason": self.reason, "schema_version": self.schema_version,
         }
+
+
+@dataclass(frozen=True)
+class SupplyDemandZone:
+    """A band price left in a hurry, and what became of it.
+
+    `lower`/`upper` are the origin bar's own observed low and high -- a range
+    price really traded in, never a widened or smoothed band.
+    """
+
+    lower: float
+    upper: float
+    kind: str                                  # taxonomy.ALL_ZONE_KINDS
+    formed_at: str
+    formed_bar_index: int
+    impulse_size: float                        # measured move that created it, in points
+    status: str                                # taxonomy.ALL_ZONE_STATUSES
+    test_count: int                            # REAL count of later bars entering the band
+    last_test_at: Optional[str]                # None when never revisited -- not ""
+    broken_at: Optional[str]                   # None unless price CLOSED through
+    detected_at_multiples: Tuple[float, ...]
+    source_resolution: str
+
+    @property
+    def midpoint(self) -> float:
+        return (self.lower + self.upper) / 2.0
+
+    @property
+    def height(self) -> float:
+        return self.upper - self.lower
+
+    def to_dict(self) -> Dict[str, Any]:
+        return {
+            "lower": self.lower, "upper": self.upper, "kind": self.kind,
+            "formed_at": self.formed_at, "formed_bar_index": self.formed_bar_index,
+            "impulse_size": self.impulse_size, "status": self.status,
+            "test_count": self.test_count, "last_test_at": self.last_test_at,
+            "broken_at": self.broken_at,
+            "detected_at_multiples": list(self.detected_at_multiples),
+            "source_resolution": self.source_resolution,
+        }
+
+
+@dataclass(frozen=True)
+class ZoneSet:
+    """The zones, or an honest statement that there are none to give.
+
+    Same contract as LevelSet: `status` is checked FIRST. An empty tuple
+    under AVAILABLE means "we looked and found none"; under
+    INSUFFICIENT_HISTORY it means "we could not look".
+    """
+
+    status: str                                # taxonomy.ALL_LEVELS_STATUSES (shared vocabulary)
+    zones: Tuple[SupplyDemandZone, ...] = ()
+    as_of: Optional[str] = None
+    bars_considered: int = 0
+    zones_before_agreement: int = 0
+    zones_after_agreement: int = 0
+    multiples_required: Tuple[float, ...] = ()
+    source_resolution: str = ""
+    reason: Optional[str] = None
+    schema_version: str = taxonomy.SCHEMA_VERSION
+
+    @property
+    def is_available(self) -> bool:
+        return self.status == taxonomy.LEVELS_AVAILABLE
+
+    @property
+    def live_zones(self) -> Tuple["SupplyDemandZone", ...]:
+        """Zones whose claim has not yet failed. A BROKEN zone is kept in
+        `zones` deliberately -- it is real history, and a reader asking
+        "what has already failed here" is asking a legitimate question."""
+        return tuple(z for z in self.zones if z.status != taxonomy.ZONE_BROKEN)
+
+    def to_dict(self) -> Dict[str, Any]:
+        return {
+            "status": self.status, "as_of": self.as_of,
+            "zones": [z.to_dict() for z in self.zones],
+            "bars_considered": self.bars_considered,
+            "zones_before_agreement": self.zones_before_agreement,
+            "zones_after_agreement": self.zones_after_agreement,
+            "multiples_required": list(self.multiples_required),
+            "source_resolution": self.source_resolution,
+            "reason": self.reason, "schema_version": self.schema_version,
+        }

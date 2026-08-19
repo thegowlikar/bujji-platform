@@ -45,3 +45,34 @@ DEFAULT_SWING_STRENGTHS = (3, 5, 8)
 # an exact float match would count almost nothing. 0.05% of the level price
 # (about 12 points at NIFTY 24,000) is the disclosed default.
 DEFAULT_TOUCH_TOLERANCE_FRACTION = 0.0005
+
+
+# =========================================================================
+# L-2: SUPPLY AND DEMAND ZONES
+# =========================================================================
+# A level is one price. A zone is the RANGE a move originated from -- the
+# band price left behind when it went somewhere in a hurry. For a premium
+# seller the distinction matters: a strike sits inside or outside a band,
+# not exactly on a number.
+
+ZONE_SUPPLY = "SUPPLY"        # origin of an impulse DOWN -- price above may meet sellers
+ZONE_DEMAND = "DEMAND"        # origin of an impulse UP   -- price below may meet buyers
+ALL_ZONE_KINDS = (ZONE_SUPPLY, ZONE_DEMAND)
+
+# A zone's life. FRESH is not "better", it is "untested" -- an untested zone
+# is an untested claim, and saying so is the point of keeping them apart.
+ZONE_FRESH = "FRESH"          # never revisited since it formed
+ZONE_TESTED = "TESTED"        # price returned into the band and did not close through
+ZONE_BROKEN = "BROKEN"        # price CLOSED through the far side -- the claim failed
+ALL_ZONE_STATUSES = (ZONE_FRESH, ZONE_TESTED, ZONE_BROKEN)
+
+# The impulse thresholds a zone must survive, as multiples of the series'
+# own typical bar range. Same gate as swings, different parameter: a zone
+# that exists only because the threshold was set at 1.5x is an artifact of
+# that choice, not a place the market cared about.
+DEFAULT_IMPULSE_MULTIPLES = (1.5, 2.0, 3.0)
+
+# Bars used to measure what a "typical" range is for THIS series, so the
+# threshold scales with the instrument instead of being a hardcoded point
+# value that means one thing at NIFTY 8,000 and another at 24,000.
+DEFAULT_RANGE_LOOKBACK = 20
