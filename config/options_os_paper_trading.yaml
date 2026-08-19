@@ -93,6 +93,13 @@ position_management:
   # prior behaviour) cannot express an excursion, so stop-loss and
   # profit-target were unreachable no matter how they were configured.
   cycle_interval_seconds: 300
+  # NAKED POSITIONS GET A TIGHTER LOOP (operator decision 2026-08-20). The
+  # interval is the width of the window in which an unbounded loss runs
+  # unchecked -- stop-loss, daily loss limit and emergency brake are all
+  # evaluated once per pass. A defined-risk shape keeps 300s: its wings cap
+  # the loss whatever happens between passes. 60s is the floor worth asking
+  # for, because the tick source itself polls at 60s.
+  undefined_risk_cycle_interval_seconds: 60
   monitor_until: "15:15:00"
   max_cycles: 78          # safety cap; the clock normally ends the loop first.
 

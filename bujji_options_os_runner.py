@@ -1648,6 +1648,30 @@ class OptionsOSRunner:
         except Exception as exc:  # noqa: BLE001 -- bookkeeping never kills a live session.
             self._logger.exception("exit-fill capture failed (session continues): %s", exc)
 
+    def _position_is_undefined_risk(self) -> bool:
+        """Does the open position's shape bound its own loss?
+
+        FAIL-CLOSED: an unrecognised or missing family is treated as
+        UNDEFINED risk, so an unknown shape gets the tighter loop rather than
+        the looser one. Being wrong in that direction costs a few extra quote
+        calls; being wrong the other way costs an unwatched naked position.
+        """
+        from bujji.msi_trade_construction import taxonomy as _mtc
+
+        family = self._governor_result_summary.get("strategy_selected")
+        if not family:
+            self._logger.warning(
+                "POSITION_MANAGEMENT -- no strategy family recorded for the open position; "
+                "assuming UNDEFINED risk and using the tighter cadence.")
+            return True
+        if family in _mtc.DEFINED_RISK_FAMILIES:
+            return False
+        if family not in _mtc.UNDEFINED_RISK_FAMILIES:
+            self._logger.warning(
+                "POSITION_MANAGEMENT -- family %r is in neither risk list; assuming "
+                "UNDEFINED risk.", family)
+        return True
+
     def _position_management(self) -> None:
         """Monitor the open position ACROSS the session, not once.
 
@@ -1664,20 +1688,78 @@ class OptionsOSRunner:
         """
         self._stage = RunnerStage.POSITION_MANAGEMENT
         mgmt_cfg = self._config.get("position_management", {})
-        interval_s = int(mgmt_cfg.get("cycle_interval_seconds", 300))
         end_time_s = mgmt_cfg.get("monitor_until", "15:15:00")
-        max_cycles = int(mgmt_cfg.get("max_cycles", 78))  # 6h15m / 5min, one session's worth.
 
         if not self._entry_prices:
             self._logger.info("POSITION_MANAGEMENT -- no open position; nothing to monitor.")
             return
 
+        import datetime as _datetime
+        import math
         import time as _time
+
+        # CADENCE BY RISK CLASS (operator decision, 2026-08-20).
+        #
+        # The stop-loss, the daily loss limit and the emergency brake are all
+        # evaluated once per pass, so the interval IS the width of the window
+        # in which an unbounded loss can run unchecked. Measured over 168,194
+        # real 5-minute NIFTY bars, the worst single 5-minute bar ranged 611.8
+        # points -- ~Rs 39,764 against a real 240.95-point straddle credit, 2.5x
+        # the stop, inside ONE interval. A defined-risk shape does not need the
+        # tighter loop: its wings cap the loss whatever happens between passes.
+        #
+        # 60s is the floor worth asking for -- the tick source itself polls at
+        # 60s, so a faster loop would revalue the same prices. Making it
+        # genuinely continuous needs the websocket (certified, ~2.4 ticks/s,
+        # still unwired).
+        #
+        # Cost against the shared FYERS budget is negligible: a pass quotes one
+        # price per leg, so a 2-leg strangle at 60s is ~0.03 calls/s against a
+        # host-wide ~8.3/s.
+        naked = self._position_is_undefined_risk()
+        base_interval_s = int(mgmt_cfg.get("cycle_interval_seconds", 300))
+        # TIGHTER, NEVER WIDER. min() rather than reading a separate key
+        # outright, for two reasons. A naked position must never be revalued
+        # LESS often than a winged one whatever the two keys say -- the whole
+        # point is a narrower unchecked window. And a caller who deliberately
+        # lowers the base must not have that silently overridden by the other
+        # key's default: a bare .get(..., 60) ignored an explicit
+        # cycle_interval_seconds: 0 and made the suite sleep.
+        interval_s = (min(base_interval_s,
+                          int(mgmt_cfg.get("undefined_risk_cycle_interval_seconds", 60)))
+                      if naked else base_interval_s)
+
         end_t = dt_time.fromisoformat(end_time_s)
+
+        # THE CAP IS DERIVED, NOT A CONSTANT. `max_cycles: 78` was documented
+        # as "6h15m / 5min, one session's worth" -- a number that silently
+        # means something different the moment the interval changes. At 60s it
+        # would have ended management after 78 MINUTES, leaving an open naked
+        # position unwatched until the mandatory exit: strictly worse than the
+        # cadence it was meant to improve. Same failure class as the token
+        # fire-time constant and the four market-close constants.
+        #
+        # The configured value stays a FLOOR, so it still bounds a runaway
+        # loop, but the effective cap always covers the real remaining window.
+        configured_cap = int(mgmt_cfg.get("max_cycles", 78))
+        max_cycles = configured_cap
+        if interval_s > 0:
+            now = self._clock()
+            end_dt = _datetime.datetime.combine(now.date(), end_t, tzinfo=now.tzinfo)
+            window_s = max(0.0, (end_dt - now).total_seconds())
+            needed = math.ceil(window_s / interval_s) + 5   # +5: clock drift and a slow pass
+            max_cycles = max(configured_cap, needed)
+
         cycles = 0
+        self._governor_result_summary["management_cadence"] = {
+            "interval_seconds": interval_s, "undefined_risk": naked,
+            "max_cycles": max_cycles, "configured_max_cycles": configured_cap,
+        }
         self._logger.info(
-            "POSITION_MANAGEMENT -- monitoring every %ds until %s (max %d cycles).",
+            "POSITION_MANAGEMENT -- monitoring every %ds until %s (max %d cycles); "
+            "risk_class=%s.",
             interval_s, end_time_s, max_cycles,
+            "UNDEFINED (naked -- tightened loop)" if naked else "DEFINED (wings cap the loss)",
         )
         while cycles < max_cycles:
             if getattr(self, "_emergency_closed", False):
