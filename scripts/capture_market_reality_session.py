@@ -186,7 +186,108 @@ def build_futures_observation(quote: dict, expiry_iso: str, capture_timestamp: s
     )
 
 
-async def _capture_spot(broker, gate, store, capture_timestamp: str, log_raw: bool) -> None:
+
+# --- CP-D: the second store ------------------------------------------------
+#
+# Bujji keeps observations in TWO places. layer0_data/raw_observations.jsonl
+# is this script's own append-only Layer 0 record; the normalized SQLite
+# store (data/historical_reality/normalized/historical_observations.db) is
+# what the OPTION capture writes and what EOD completeness, backfill and
+# every lookback consumer read.
+#
+# This script wrote only to layer0. The consequence was visible every single
+# evening: completeness reported VIX as MISSING on days when real live VIX
+# rows had been captured and were sitting on disk the whole time. The data
+# was never lost -- it was invisible to the only reader that mattered.
+#
+# The fix is ADDITIVE. Layer 0 remains exactly as it was, written first and
+# unchanged; a normalized row is written ALONGSIDE it. Nothing is migrated,
+# nothing is deleted, and a normalized-write failure never affects the
+# Layer 0 record or stops the capture -- Layer 0 is the source of truth and
+# this is a second, queryable projection of it.
+#
+# IDENTITY, checked against the store rather than assumed. SPOT and VIX use
+# the exact identity strings the backfill already holds --
+# "NSE:NIFTY50-INDEX" (168,194 backfilled rows) and "NSE:INDIAVIX-INDEX"
+# (168,157) -- so live and backfilled rows land on ONE series.
+#
+# FUTURES IS DELIBERATELY EXCLUDED. The backfill's futures series is
+# "NIFTY_FUT_CONTINUOUS": a ROLLED, synthetic continuous contract. A live
+# near-month quote is not that series, and writing it under that name would
+# assert a splice this code cannot justify. Writing it under its real
+# contract identity instead would create a THIRD series no consumer reads.
+# Neither is an improvement on the honest status quo, so live futures stay
+# Layer 0-only until an operator decides how the continuous series should be
+# defined against live near-month quotes. That question is a data-modelling
+# decision, not a bug fix.
+#
+# RESOLUTION. These are 60-second point samples, not bars. They are recorded
+# as ONE_MINUTE with value_kind=MAPPING and a {"ltp": ...} payload -- the
+# same disclosure the option-chain spot row already uses, where the cadence
+# names the resolution and value_kind says "point sample, not OHLC". The
+# distinct resolution also means these rows cannot collide in the store's
+# natural key (instrument, resolution, timestamp, source) with the 5-minute
+# spot rows the chain capture writes for the same instrument.
+_NORMALIZED_IDENTITY = {
+    "spot": ("NSE:NIFTY50-INDEX", "SPOT"),
+    "vix": ("NSE:INDIAVIX-INDEX", "INDEX"),
+}
+
+
+def _write_normalized(store, *, kind: str, identity: str, value, capture_timestamp: str,
+                      cert_status: str, cert_ref) -> bool:
+    """Project one captured value into the normalized store.
+
+    Gated by the SAME certification the Layer 0 write already checked: an
+    uncertified source must not reach the store that decision-making and
+    completeness read from. Never raises -- a projection failure is logged
+    and the Layer 0 record still stands.
+    """
+    if store is None:
+        return False
+    from bujji.historical_reality.capture import build_historical_observation
+    from bujji.historical_reality.store import ConflictingHistoricalObservationError
+    from bujji.market_observation import taxonomy as moc_taxonomy
+    from bujji.market_reality import taxonomy as reality_taxonomy
+
+    if cert_status != reality_taxonomy.CERTIFIED_AVAILABLE:
+        return False
+    if value is None:
+        return False
+
+    _, instrument_type = _NORMALIZED_IDENTITY[kind]
+    try:
+        obs = build_historical_observation(
+            instrument_identity=identity,
+            instrument_type=instrument_type,
+            resolution=moc_taxonomy.RESOLUTION_ONE_MINUTE,
+            timestamp=capture_timestamp,
+            payload={"ltp": float(value)},
+            source=SOURCE,
+            access_method=ACCESS_METHOD,
+            value_kind=moc_taxonomy.VALUE_KIND_MAPPING,
+            source_epoch=int(datetime.datetime.fromisoformat(capture_timestamp).timestamp()),
+            source_symbol=identity,
+            raw_artifact_ref="",
+            ingestion_run_id=f"MARKET-REALITY-{kind.upper()}-{capture_timestamp}",
+            retrieved_at=capture_timestamp,
+            certification_status=cert_status,
+            certification_ref=cert_ref,
+        )
+        store.write(obs)
+        return True
+    except ConflictingHistoricalObservationError as exc:
+        # Same timestamp, same series, DIFFERENT value: a real disagreement,
+        # never silently overwritten.
+        LOG.error("normalized CONFLICT for %s at %s: %s", identity, capture_timestamp, exc)
+        return False
+    except Exception as exc:  # noqa: BLE001 -- Layer 0 is the source of truth; this projection is secondary
+        LOG.warning("normalized write failed for %s (Layer 0 record stands): %s", identity, exc)
+        return False
+
+
+async def _capture_spot(broker, gate, store, capture_timestamp: str, log_raw: bool,
+                        normalized=None) -> None:
     from bujji.market_reality import taxonomy
 
     ltp = await broker.get_spot(UNDERLYING)
@@ -196,9 +297,13 @@ async def _capture_spot(broker, gate, store, capture_timestamp: str, log_raw: bo
     raw = build_spot_observation(ltp, capture_timestamp, cert_status, cert_ref)
     result = store.append(raw, now=capture_timestamp)
     LOG.info("spot append outcome=%s observation_id=%s", result.outcome, result.observation_id)
+    _write_normalized(normalized, kind="spot", identity=_NORMALIZED_IDENTITY["spot"][0],
+                      value=ltp, capture_timestamp=capture_timestamp,
+                      cert_status=cert_status, cert_ref=cert_ref)
 
 
-async def _capture_vix(broker, gate, store, capture_timestamp: str, log_raw: bool) -> None:
+async def _capture_vix(broker, gate, store, capture_timestamp: str, log_raw: bool,
+                       normalized=None) -> None:
     from bujji.market_reality import taxonomy
 
     vix = await broker.get_vix()
@@ -211,6 +316,10 @@ async def _capture_vix(broker, gate, store, capture_timestamp: str, log_raw: boo
     raw = build_vix_observation(vix, capture_timestamp, cert_status, cert_ref)
     result = store.append(raw, now=capture_timestamp)
     LOG.info("vix append outcome=%s observation_id=%s", result.outcome, result.observation_id)
+    # The row EOD completeness has been reporting as MISSING all along.
+    _write_normalized(normalized, kind="vix", identity=_NORMALIZED_IDENTITY["vix"][0],
+                      value=vix.get("level"), capture_timestamp=capture_timestamp,
+                      cert_status=cert_status, cert_ref=cert_ref)
 
 
 async def _capture_futures(broker, gate, store, expiry_iso: str, capture_timestamp: str,
@@ -229,7 +338,8 @@ async def _capture_futures(broker, gate, store, expiry_iso: str, capture_timesta
     LOG.info("futures append outcome=%s observation_id=%s", result.outcome, result.observation_id)
 
 
-async def _run_cycle(broker, gate, store, tracker, expiry_iso: str, log_raw: bool) -> bool:
+async def _run_cycle(broker, gate, store, tracker, expiry_iso: str, log_raw: bool,
+                     normalized=None) -> bool:
     """Runs all three instrument captures for one cycle. Each is isolated:
     a bare miss (None/non-auth exception) is logged and the cycle moves
     on to the next instrument. An AuthenticationError is a connection-
@@ -250,9 +360,12 @@ async def _run_cycle(broker, gate, store, tracker, expiry_iso: str, log_raw: boo
     # created (an eagerly-created-but-never-awaited coroutine triggers a
     # real "coroutine was never awaited" warning).
     for label, make_coro in (
-        ("spot", lambda: _capture_spot(broker, gate, store, capture_timestamp, log_raw)),
-        ("futures", lambda: _capture_futures(broker, gate, store, expiry_iso, capture_timestamp, log_raw)),
-        ("vix", lambda: _capture_vix(broker, gate, store, capture_timestamp, log_raw)),
+        ("spot", lambda: _capture_spot(broker, gate, store, capture_timestamp, log_raw,
+                                       normalized=normalized)),
+        ("futures", lambda: _capture_futures(broker, gate, store, expiry_iso,
+                                             capture_timestamp, log_raw)),
+        ("vix", lambda: _capture_vix(broker, gate, store, capture_timestamp, log_raw,
+                                     normalized=normalized)),
     ):
         try:
             await make_coro()
@@ -327,6 +440,24 @@ async def run(*, cycles: Optional[int]) -> int:
     store = RawObservationStore(str(REPO_ROOT / "layer0_data"), gate, session_id=SESSION_ID)
     tracker = CaptureLifecycleTracker(store=store, source=SOURCE, access_method=ACCESS_METHOD)
 
+    # The second store, opened alongside Layer 0 -- see _write_normalized.
+    # A failure to open it is NOT fatal: capture continues writing Layer 0,
+    # which is the source of truth, and the projection simply does not
+    # happen (and says so) rather than the session refusing to run.
+    normalized = None
+    try:
+        from bujji.historical_reality.store import HistoricalObservationStore
+
+        normalized = HistoricalObservationStore(
+            str(REPO_ROOT / "data" / "historical_reality" / "normalized"
+                / "historical_observations.db"))
+        LOG.info("normalized store open -- live spot and VIX are now queryable by "
+                 "completeness, backfill and lookback consumers (futures stays Layer 0-only; "
+                 "see _write_normalized).")
+    except Exception as exc:  # noqa: BLE001
+        LOG.warning("normalized store unavailable (%s) -- Layer 0 capture continues, but these "
+                    "rows will NOT be visible to completeness/lookback.", exc)
+
     LOG.info(
         "Starting market reality capture session: interval=%ss futures_expiry=%s",
         POLL_INTERVAL_SECONDS, expiry_iso,
@@ -340,6 +471,7 @@ async def run(*, cycles: Optional[int]) -> int:
             break
         keep_going = await _run_cycle(
             broker, gate, store, tracker, expiry_iso, log_raw=(completed == 0),
+            normalized=normalized,
         )
         completed += 1
         if not keep_going:
