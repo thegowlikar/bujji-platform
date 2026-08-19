@@ -81,7 +81,7 @@ NoNewPrivileges=true
 ProtectSystem=strict
 ProtectHome=true
 PrivateTmp=true
-ReadWritePaths=/opt/bujji/app/logs /opt/bujji/app/data /opt/bujji/.env
+ReadWritePaths=/opt/bujji/app/logs /opt/bujji/app/data /opt/bujji/.env /opt/bujji/app/layer0_data
 # ------------------------------------------------------------------------
 
 # Deliberately NO [Install] section at all here (Phase 19.14.1 change,
