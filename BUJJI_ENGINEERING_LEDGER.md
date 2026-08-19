@@ -172,3 +172,35 @@ Append-only record of engineering decisions and verified events. Newest last.
 - Next: CP-D — cross-process FYERS rate budget (would retire the schedule-
   separation hack), fill-model collapse, heartbeat staleness watchdog,
   VIX/spot store unification.
+
+## 2026-08-19 night — CP-D.1: host-wide FYERS rate budget
+
+- The ceiling is per ACCOUNT; the pacer was per interpreter. Four processes
+  share one credential (three now waking together at 09:14), each pacing to
+  ~8.3/s → up to **~33/s against a 10/s ceiling**. Never seen as a crash —
+  retries hid it. It surfaced as the trading unit's fire-time offset, i.e.
+  schedule separation standing in for a resource budget.
+- New `bujji/broker/rate_budget.py`: flock'd shared slot file. Reserve under
+  the lock, sleep outside it. Applied FIRST in `_wait_for_slot()`; the
+  in-process pacer stays behind it, so an unreachable budget degrades to the
+  old behaviour, not to none. Fails OPEN, warns once — a rate ceiling is a
+  throughput protection, not a safety guard.
+- **Cost, stated up front:** throughput is now shared, not multiplied. An
+  82-contract sweep takes ~10s wall clock while siblings interleave. That is
+  the account's real capacity; the previous speed was an overrun.
+- Implausible stored slots (corrupt, pre-reboot) discarded — honouring one
+  would block every process for the last uptime and look like a hang.
+- Guards: fyers.py diff pin advanced in 4 lineage guards with rationale in
+  place, matching this choke point's three prior approved changes.
+- Tests include a REAL two-process test with a real lock file; mocking flock
+  would prove nothing about the fix. 7,221 green.
+- This retires the reason the 09:22:30 offset existed. The offset itself
+  stays for now (it is cheap and the budget is one night old) — revisit
+  `decision_phase_offset_seconds` after observing live coverage.
+
+### CP-D remaining (not started)
+- fill-model collapse (broker_boundary vs PaperBroker)
+- heartbeat staleness watchdog
+- 08-14 value_kind re-normalization
+- VIX/spot store unification (VIX live rows land in layer0, completeness
+  reads SQLite)
