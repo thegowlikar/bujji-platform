@@ -1176,6 +1176,13 @@ class OptionsOSRunner:
         chain = self._market_data_provider.get_option_chain(self._as_of_date)
         spot = self._market_data_provider.get_spot()
 
+        # D-7: tell the paper broker what the market actually looks like
+        # BEFORE any order is placed. Without this, every fill fell back to
+        # the leg's own premium -- a short strangle was opened and closed at
+        # the identical mid, so the bid-ask cost nothing and paper P&L was
+        # optimistic by the full spread on every leg of every trade.
+        self._sync_paper_market(chain)
+
         from bujji.trading_brain.risk_governor.capital_safety_governor import ProposedTradeEffect
         session_cfg = self._session_cfg
         proposed = session_cfg.get("proposed_trade_effect", {})
@@ -1227,6 +1234,50 @@ class OptionsOSRunner:
         )
 
         return True
+
+    def _sync_paper_market(self, chain) -> None:
+        """Push the real observed top-of-book, and the real capital, into
+        the simulated broker.
+
+        Never raises into the session: a sync failure must not kill a run.
+        But it is never SILENT either -- coverage is logged and recorded in
+        the session summary, because "quotes applied" that quietly applied
+        nothing is precisely the failure this phase exists to remove. Zero
+        coverage against a non-empty chain is logged as a WARNING: it means
+        fills are still frictionless and the operator should know."""
+        from bujji.production_runtime.paper_market_sync import sync_capital, sync_quotes_from_chain
+
+        try:
+            report = sync_quotes_from_chain(self._broker, chain, self._root.underlying)
+            capital_applied = False
+            snapshot = None
+            provider = getattr(self._root, "capital_snapshot_provider", None)
+            if provider is not None:
+                try:
+                    snapshot = provider()
+                except Exception as exc:  # noqa: BLE001 -- capital reality is Gate B's authority, not this sync's
+                    self._logger.warning("PAPER_MARKET_SYNC -- capital snapshot unavailable (%s); "
+                                         "broker capital left unchanged.", exc)
+                capital_applied = sync_capital(self._broker, snapshot)
+
+            summary = report.as_dict()
+            summary["capital_applied"] = capital_applied
+            self._governor_result_summary["paper_market_sync"] = summary
+
+            if report.rows_seen and report.quotes_applied == 0:
+                self._logger.warning(
+                    "PAPER_MARKET_SYNC -- 0 of %d chain rows produced a usable two-sided quote "
+                    "(no_bid=%d no_ask=%d bad_key=%d). Fills remain FRICTIONLESS: every leg will "
+                    "fill at its own reference premium.",
+                    report.rows_seen, report.skipped_no_bid, report.skipped_no_ask,
+                    report.skipped_unusable_key)
+            else:
+                self._logger.info(
+                    "PAPER_MARKET_SYNC -- quotes=%d/%d depth=%d capital=%s",
+                    report.quotes_applied, report.rows_seen, report.depth_applied, capital_applied)
+        except Exception as exc:  # noqa: BLE001 -- a simulation-realism sync must never end a session
+            self._logger.warning("PAPER_MARKET_SYNC failed (%s) -- continuing with reference-price fills.", exc)
+            self._governor_result_summary["paper_market_sync"] = {"error": f"{type(exc).__name__}: {exc}"}
 
     def _record_canonical_entry(self, pg_id, cycle_result, spot, trend_regime, selection) -> None:
         """Open the canonical PositionLifecycle for a real, already-filled
