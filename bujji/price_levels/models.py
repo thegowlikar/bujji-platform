@@ -85,6 +85,23 @@ class PriceLevel:
         }
 
 
+def _level_from_dict(d: Dict[str, Any]) -> "PriceLevel":
+    """Rebuild a level from a persisted snapshot.
+
+    Strict on the fields that carry meaning: a snapshot missing a price or a
+    touch count is a corrupt snapshot, and reading it as a level with price
+    zero would put a fabricated support into a decision record.
+    """
+    return PriceLevel(
+        price=float(d["price"]), kind=d["kind"], formed_at=d["formed_at"],
+        formed_bar_index=int(d["formed_bar_index"]), touch_count=int(d["touch_count"]),
+        last_touch_at=d.get("last_touch_at"), strength=d["strength"],
+        detected_at_strengths=tuple(d.get("detected_at_strengths", ())),
+        source_resolution=d.get("source_resolution", ""),
+        touch_tolerance=float(d["touch_tolerance"]),
+    )
+
+
 @dataclass(frozen=True)
 class LevelSet:
     """The answer, or an honest statement that there isn't one.
@@ -109,6 +126,19 @@ class LevelSet:
     @property
     def is_available(self) -> bool:
         return self.status == taxonomy.LEVELS_AVAILABLE
+
+    @staticmethod
+    def from_dict(d: Dict[str, Any]) -> "LevelSet":
+        return LevelSet(
+            status=d["status"],
+            levels=tuple(_level_from_dict(x) for x in d.get("levels", ())),
+            as_of=d.get("as_of"), bars_considered=int(d.get("bars_considered", 0)),
+            swings_before_agreement=int(d.get("swings_before_agreement", 0)),
+            swings_after_agreement=int(d.get("swings_after_agreement", 0)),
+            strengths_required=tuple(d.get("strengths_required", ())),
+            source_resolution=d.get("source_resolution", ""), reason=d.get("reason"),
+            schema_version=d.get("schema_version", taxonomy.SCHEMA_VERSION),
+        )
 
     def to_dict(self) -> Dict[str, Any]:
         return {
@@ -206,3 +236,29 @@ class ZoneSet:
             "source_resolution": self.source_resolution,
             "reason": self.reason, "schema_version": self.schema_version,
         }
+
+
+def _zone_from_dict(d: Dict[str, Any]) -> "SupplyDemandZone":
+    """Rebuild a zone from a persisted snapshot. Strict for the same reason
+    levels are: a band with a missing edge is not a band."""
+    return SupplyDemandZone(
+        lower=float(d["lower"]), upper=float(d["upper"]), kind=d["kind"],
+        formed_at=d["formed_at"], formed_bar_index=int(d["formed_bar_index"]),
+        impulse_size=float(d.get("impulse_size", 0.0)), status=d["status"],
+        test_count=int(d.get("test_count", 0)), last_test_at=d.get("last_test_at"),
+        broken_at=d.get("broken_at"),
+        detected_at_multiples=tuple(d.get("detected_at_multiples", ())),
+        source_resolution=d.get("source_resolution", ""),
+    )
+
+
+def zone_set_from_dict(d: Dict[str, Any]) -> "ZoneSet":
+    return ZoneSet(
+        status=d["status"], zones=tuple(_zone_from_dict(x) for x in d.get("zones", ())),
+        as_of=d.get("as_of"), bars_considered=int(d.get("bars_considered", 0)),
+        zones_before_agreement=int(d.get("zones_before_agreement", 0)),
+        zones_after_agreement=int(d.get("zones_after_agreement", 0)),
+        multiples_required=tuple(d.get("multiples_required", ())),
+        source_resolution=d.get("source_resolution", ""), reason=d.get("reason"),
+        schema_version=d.get("schema_version", taxonomy.SCHEMA_VERSION),
+    )

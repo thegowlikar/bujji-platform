@@ -13,7 +13,8 @@ step is an operator gate, not an implementation detail.
 """
 from .context import LevelContext, build_level_context
 from .daily import (LevelsSnapshot, build_snapshot, latest_snapshot_path,
-                    read_snapshot_raw, snapshot_age_days, snapshot_path, write_snapshot)
+                    load_snapshot, read_snapshot_raw, snapshot_age_days,
+                    snapshot_path, write_snapshot)
 from .live import apply_sample, apply_sample_to_levels, apply_sample_to_zones
 from .store_reader import BarLoadResult, load_bars
 from .engine import count_touches, detect_levels, detect_zones
@@ -25,7 +26,7 @@ __all__ = [
     "Bar", "LevelSet", "PriceLevel", "SwingPoint", "SupplyDemandZone", "ZoneSet",
     "LevelContext", "build_level_context",
     "LevelsSnapshot", "build_snapshot", "write_snapshot", "read_snapshot_raw",
-    "latest_snapshot_path", "snapshot_path", "snapshot_age_days",
+    "latest_snapshot_path", "snapshot_path", "snapshot_age_days", "load_snapshot",
     "apply_sample", "apply_sample_to_levels", "apply_sample_to_zones",
     "BarLoadResult", "load_bars",
     "detect_levels", "detect_zones", "count_touches",

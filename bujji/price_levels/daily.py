@@ -22,7 +22,7 @@ from typing import Any, Dict, Optional
 
 from . import taxonomy
 from .engine import detect_levels, detect_zones
-from .models import LevelSet, ZoneSet
+from .models import LevelSet, ZoneSet, zone_set_from_dict
 from .store_reader import DEFAULT_DB_PATH, BarLoadResult, load_bars
 
 DEFAULT_SNAPSHOT_DIR = "/opt/bujji/app/data/price_levels"
@@ -133,3 +133,22 @@ def snapshot_age_days(snapshot_for: str, today: str) -> int:
     """How stale the map is, in calendar days. Published so a reader can
     decide, rather than discovering staleness by its effects."""
     return (date.fromisoformat(today) - date.fromisoformat(snapshot_for)).days
+
+
+def load_snapshot(path: str) -> LevelsSnapshot:
+    """Rebuild a typed snapshot from disk.
+
+    Deliberately strict: a snapshot that cannot be parsed raises rather than
+    degrading to an empty map. An empty map reads as "the market has no
+    structure", which is a claim; a raised error reads as "we have no map",
+    which is the truth. The caller decides what to do about it.
+    """
+    raw = read_snapshot_raw(path)
+    return LevelsSnapshot(
+        built_for=raw["built_for"], built_at=raw["built_at"], as_of=raw.get("as_of"),
+        instrument=raw.get("instrument", ""), resolution=raw.get("resolution", ""),
+        levels=LevelSet.from_dict(raw["levels"]),
+        zones=zone_set_from_dict(raw["zones"]),
+        load=raw.get("load", {}),
+        schema_version=raw.get("schema_version", taxonomy.SCHEMA_VERSION),
+    )

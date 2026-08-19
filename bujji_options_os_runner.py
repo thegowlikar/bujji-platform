@@ -870,6 +870,7 @@ class OptionsOSRunner:
             stability=getattr(self, "_pending_stability", None),
             cycle=getattr(self, "_pending_cycle", None),
             recorded_at=self._clock().isoformat(),
+            level_context=self._level_context_dict(),
         )
         return MarketThesisRegimeProvider(thesis, volatility_regime)
 
@@ -892,6 +893,78 @@ class OptionsOSRunner:
             artifact.get("thesis", {}).get("market_regime"), trend_regime,
             len(verdict.get("preferred") or []), len(verdict.get("rejected") or []),
             len(verdict.get("insufficient_evidence") or []))
+
+    def _load_price_levels(self) -> None:
+        """Load today's price-levels map, once, at session start.
+
+        NEVER FATAL. A missing or unreadable map means Bujji trades exactly
+        as it did yesterday -- nothing in the decision chain consumes this.
+        The absence is recorded rather than silently tolerated, because "no
+        map on the day of a trade" is a fact the audit trail should carry.
+        """
+        self._levels = None
+        self._zones = None
+        self._levels_snapshot_info = None
+        try:
+            from bujji.price_levels import latest_snapshot_path, load_snapshot, snapshot_age_days
+
+            directory = str(REPO_ROOT / "data" / "price_levels")
+            path = latest_snapshot_path(self._as_of_date, directory)
+            if path is None:
+                self._levels_snapshot_info = {"status": "NO_SNAPSHOT", "directory": directory}
+                self._logger.warning(
+                    "PRICE LEVELS -- no snapshot on or before %s in %s; the session runs "
+                    "without a structure map (observation-only, no decision impact).",
+                    self._as_of_date, directory)
+                return
+            snapshot = load_snapshot(path)
+            self._levels = snapshot.levels
+            self._zones = snapshot.zones
+            age = snapshot_age_days(snapshot.built_for, self._as_of_date)
+            self._levels_snapshot_info = {
+                "status": "LOADED", "path": path, "built_for": snapshot.built_for,
+                "built_at": snapshot.built_at, "age_days": age,
+                "instrument": snapshot.instrument, "resolution": snapshot.resolution,
+                "levels": len(snapshot.levels.levels), "zones": len(snapshot.zones.zones),
+                "live_zones": len(snapshot.zones.live_zones),
+            }
+            self._logger.info(
+                "PRICE LEVELS -- map loaded: %d levels, %d zones (%d live), built for %s "
+                "(%d day(s) old).", len(snapshot.levels.levels), len(snapshot.zones.zones),
+                len(snapshot.zones.live_zones), snapshot.built_for, age)
+        except Exception as exc:  # noqa: BLE001 -- an observation layer must not end a session
+            self._levels_snapshot_info = {"status": f"FAILED:{type(exc).__name__}",
+                                          "error": str(exc)}
+            self._logger.warning("PRICE LEVELS -- map unavailable (%s); session continues "
+                                 "without it.", exc)
+
+    def _level_context_dict(self):
+        """Where price sits relative to structure, right now.
+
+        Live samples update touch counts on the loaded map before the context
+        is built -- they TEST structure, never form or break it (see
+        price_levels.live). Returns None when there is no map, which the
+        thesis record carries as a real absence.
+        """
+        levels = getattr(self, "_levels", None)
+        spot = getattr(self, "_last_spot", None)
+        if levels is None or spot is None:
+            return None
+        try:
+            from bujji.price_levels import apply_sample, build_level_context
+
+            self._levels, self._zones, touched, tested = apply_sample(
+                levels, getattr(self, "_zones", None), float(spot), self._clock().isoformat())
+            context = build_level_context(spot=float(spot), levels=self._levels,
+                                          zones=self._zones)
+            payload = context.to_dict()
+            payload["live_sample"] = {"price": float(spot), "levels_touched": touched,
+                                      "zones_tested": tested}
+            payload["snapshot"] = self._levels_snapshot_info
+            return payload
+        except Exception as exc:  # noqa: BLE001
+            self._logger.warning("PRICE LEVELS -- context build failed (%s).", exc)
+            return {"status": f"FAILED:{type(exc).__name__}", "error": str(exc)}
 
     def _await_market_open(self) -> None:
         """AUTHORITATIVE, in-process market-hours gate for the ONE unit that
@@ -997,6 +1070,7 @@ class OptionsOSRunner:
         except Exception as exc:  # noqa: BLE001 -- re-raise as ConfigurationError, uniform exit code
             raise ConfigurationError(f"market data provider failed pre-market check: {exc}") from exc
 
+        self._load_price_levels()
         self._recorder.record_session_start(started_at=self._clock(), initial_state="ENTRY_ENABLED")
         from bujji.shadow_observatory.models import SessionManifest
         self._recorder.record_session_manifest(SessionManifest(
@@ -1106,6 +1180,9 @@ class OptionsOSRunner:
                 clock=self._clock, plan=plan, logger=self._logger,
             ))
             del snapshots[:-window]
+            if snapshots:
+                self._last_spot = getattr(snapshots[-1], "spot", None) or getattr(
+                    snapshots[-1], "price", None)
             verdict = assess_stability(snapshots, _derive, strides=strides) if len(snapshots) >= window else None
             trail.append({
                 "cycle": cycles, "at": now.isoformat(), "spots": len(snapshots),

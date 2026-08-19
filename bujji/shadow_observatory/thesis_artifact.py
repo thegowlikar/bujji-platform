@@ -68,6 +68,7 @@ def build_thesis_artifact(
     stability: Optional[Dict[str, Any]] = None,
     cycle: Optional[int] = None,
     recorded_at: Optional[str] = None,
+    level_context: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
     """One auditable record of a single regime derivation.
 
@@ -92,6 +93,13 @@ def build_thesis_artifact(
         },
         "thesis": {f: _scalar(thesis, f, absent) for f in _THESIS_SCALARS},
         "stability": stability,
+        # L-5: where price sat relative to reachable structure at this
+        # derivation. OBSERVATION ONLY -- nothing in the decision chain reads
+        # it. Recorded now so that when the operator gate is considered, the
+        # question "would levels have helped?" is answered from a real trail
+        # rather than from argument. None means no map was available, which
+        # is itself worth knowing on the day of a trade.
+        "level_context": level_context,
         # The understanding layer's own honest record for this cycle,
         # persisted verbatim -- this module reshapes nothing.
         "cycle_record": cycle_record,
