@@ -125,3 +125,50 @@ Append-only record of engineering decisions and verified events. Newest last.
 - Next: D-7 (broker realism: set_quote/set_depth/set_capital before
   place_order), then D-8 (durable OutcomeMemoryRecord + real fees into
   close_position).
+
+## 2026-08-19 night — D-7: the paper broker learns what the market looks like
+
+- PaperBroker always modelled a spread (BUY lifts ask, SELL hits bid) and
+  nothing in production ever called `set_quote`. Every fill fell back to the
+  leg's own premium: a flat round trip cost **0.00**. With the sync, the same
+  round trip costs **-0.90** — the full observed spread. Every paper result
+  before tonight was optimistic by the spread on every leg, in and out.
+- New `bujji/production_runtime/paper_market_sync.py`, called before any
+  order. The trap avoided: the chain's symbol is FYERS-encoded while the
+  broker keys on `_leg_to_core_contract`'s format — naive keying would be a
+  SILENT no-op reporting full coverage. Test pins the key against the real
+  bridge.
+- Depth consumed only from real `bid_quantity`/`ask_quantity`; traded
+  `volume` deliberately NOT used. Verified by reading the live provider that
+  it populates neither today, and a test asserts that claim against its
+  source so the disclosure cannot rot.
+- `margin_per_lot` deliberately not set — Gate B owns real margin.
+- 7,192 green.
+
+## 2026-08-19 night — D-8: costs are real, memory is durable (CP-C COMPLETE)
+
+- `close_position()` accepted `fees=`/`slippage=` all along; nobody connected
+  the broker's own reported charges. Every outcome recorded GROSS as net.
+  New `execution_costs.py` sums real charges+slippage across entry AND exit.
+  Absence rule: no report → `None`, never `0.0` (zero fees claims a free
+  trade). Partial coverage flagged `is_complete=False` and logged.
+- `attribute_and_remember()` built a real OutcomeMemoryRecord and dropped it
+  into an in-memory dict — Bujji forgot every trade it ever made. New
+  `outcome_memory_writer.py` appends to the SAME EventStore
+  `outcome_memory.recovery` already replays cross-session. `event_id =
+  memory_id` → retries idempotent, conflicts rejected. Own path
+  (`data/outcome_memory_events.jsonl`), not per-session.
+- Safety guards: three new files under the protected `production_runtime/`
+  prefix authorized BY NAME (`_CPC_EVIDENCE_AND_REALISM_AUTHORIZED`) across
+  all six lineage guards — NOT by advancing the 360c003 baseline, which
+  would blanket-approve every unreviewed diff since then.
+- Tests first drafted with a thin fake record; the real reducer rejected it
+  as malformed — correctly. Rewritten against a genuine OutcomeMemoryRecord,
+  proving the live path's own output round-trips.
+- 7,208 green. **CP-C is complete**: D-5 (evidence), D-6 (Gate B veto +
+  brake), D-7 (fill realism), D-8 (net costs + durable memory).
+- NOT yet proven live: D-5/D-7 need a live broker, D-8 needs an actual
+  closed position. First real proof arrives with the first trade.
+- Next: CP-D — cross-process FYERS rate budget (would retire the schedule-
+  separation hack), fill-model collapse, heartbeat staleness watchdog,
+  VIX/spot store unification.
