@@ -819,3 +819,41 @@ runner-reachable.
 3. `EXPECTED/OBSERVED/RECONCILED/DIVERGED` position states not modelled.
 4. Exit orders are broker-truth-placed but still not journaled as a position
    group (entry is).
+
+## 2026-08-21 — Rule 4/5: the brake that placed no orders (577f8e1, e6100aa)
+
+A **37-agent adversarially-verified audit** (94 findings, 15 confirmed, 14
+refuted) found what four passes of my own auditing had missed.
+
+**The emergency brake placed ZERO orders.** It called
+`run_market_close_sequence()` — four lines, two state transitions — and
+returned, skipping `evaluate_and_enforce_exit`, the only call on that path
+that submits. Its comment claimed it reused "the same mandatory
+close-everything sequence"; it reused only the half that fires nothing. On the
+exact event the daily-loss brake exists for: position OPEN, nothing submitted,
+"EMERGENCY CLOSE" logged. The second firing then raised
+`IllegalRuntimeTransition` from `COMPLETE`, killing `_session_archive`.
+
+Now: forced exit through the canonical broker-truth boundary, then
+`_broker_reports_flat()` — an **unfiltered** `get_open_positions` read, because
+every other read goes through the registry, which intersects with an in-memory
+table of registered symbols. A failed read returns `None`, never `False`.
+
+**Per-leg residual (Rule 15).** The forced exit read `positions[0]["qty"]` and
+applied it to *every* leg. Legs holding 75/25 were both sent 75 — over-reducing
+a short does not stop at zero, it **opens a long 50**.
+
+**Three self-inflicted defects corrected** — all in work I had called
+runtime-proven: the orphan registered under an id the management pass could
+never read (while logging "Management cycles will revalue and exit it"); startup
+recovery writing `RECOVERY_CONFIRMED_NEVER_RECEIVED` from a fresh in-memory
+PaperBroker's amnesia; evidence claimed "every cycle" but written on ~8%.
+
+**The audit also refuted two of my own conclusions.** My ₹1-crore mechanism
+assumed a systemd auto-restart that does not exist (`Type=oneshot`, no
+`Restart=`) and a broker that survives the process (PaperBroker *is* the
+process). The mechanism is real only under a live broker — which is the
+₹1-crore premise — but the trigger I described was wrong.
+
+**Severity, honestly:** `shadow_mode: true`, PaperBroker execution. No rupees
+were at risk. P1 today, P0 the day the broker is real.
