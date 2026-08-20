@@ -70,6 +70,7 @@ def build_thesis_artifact(
     recorded_at: Optional[str] = None,
     level_context: Optional[Dict[str, Any]] = None,
     depth_observation: Optional[Dict[str, Any]] = None,
+    evidence_integrity: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
     """One auditable record of a single regime derivation.
 
@@ -119,6 +120,21 @@ def build_thesis_artifact(
         # baked in here, because choosing one before measuring is the thing
         # this record exists to avoid.
         "depth_observation": depth_observation,
+        # EVIDENCE INTEGRITY, MEASURED (2026-08-21).
+        #
+        # On 2026-08-20 this session's decisions cited 346 distinct
+        # supporting observation ids and not one of them resolved anywhere
+        # on disk -- while the campaign report printed "Explanation
+        # completeness: 100%", because that metric counts POPULATED FIELDS,
+        # not whether what they point at exists.
+        #
+        # This block is the honest counterpart: how many ids this cycle
+        # cited, how many actually resolve in the session's own evidence
+        # store, and the ids that do not. `resolution_rate` is None -- never
+        # 1.0 -- when nothing was cited, because a cycle that cited nothing
+        # has not demonstrated a whole trail, and scoring it perfect is the
+        # exact failure this replaces.
+        "evidence_integrity": evidence_integrity,
         # The understanding layer's own honest record for this cycle,
         # persisted verbatim -- this module reshapes nothing.
         "cycle_record": cycle_record,

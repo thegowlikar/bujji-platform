@@ -969,8 +969,76 @@ class OptionsOSRunner:
             recorded_at=self._clock().isoformat(),
             level_context=self._level_context_dict(),
             depth_observation=self._depth_observation(snapshot, thesis),
+            evidence_integrity=self._persist_cycle_evidence(snapshot, cycle_record),
         )
         return MarketThesisRegimeProvider(thesis, volatility_regime)
+
+    def _evidence_path(self) -> Optional[str]:
+        """Where this session's decision evidence lives.
+
+        Derived from the session store rather than defaulting to a shared
+        path -- the same lesson the outcome-memory store learned the hard
+        way on 2026-08-20, when a default production path let 78 synthetic
+        test records into the real store.
+        """
+        store = getattr(self, "_store", None)
+        session_dir = getattr(store, "session_dir", None)
+        if session_dir is None:
+            return None
+        return str(session_dir / "decision_evidence.jsonl")
+
+    def _persist_cycle_evidence(self, snapshot, cycle_record) -> Optional[Dict[str, Any]]:
+        """Persist the observations this cycle's decision actually used, and
+        measure whether every cited id now resolves.
+
+        WHY THIS EXISTS. The decision path builds its own observations from
+        its own snapshot, cites their ids in `supporting_observation_ids` /
+        `evidence_ids` / `which_observations_support_it`, and dropped them at
+        end of cycle. The ids were honest identifiers for facts nobody wrote
+        down: 346 cited, 0 resolvable, on the first live continuous session.
+
+        WHY REBUILDING IS SOUND. `build_observation()` mints its id as a
+        content hash over identity and value, reading no clock and no random
+        source, so rebuilding from the SAME snapshot reproduces byte-identical
+        ids. The decision path is therefore left completely untouched -- not
+        intercepted, not given a sink -- and this re-derives what it built.
+
+        EVERY CYCLE, not only cycles that produced a thesis. PSI and MSSI
+        cite observations from across the rolling window; persisting only on
+        thesis cycles would leave the earlier ones dangling, which is also
+        why only 6 of 66+ cycles left any record on 2026-08-20.
+
+        Never raises: an audit trail must not be able to end a session that
+        may hold an open position.
+        """
+        path = self._evidence_path()
+        if path is None:
+            return None
+        try:
+            from bujji.shadow_observatory import evidence_store
+
+            written = evidence_store.append_evidence(
+                path, evidence_store.evidence_records_for_snapshot(snapshot))
+            integrity = evidence_store.evidence_integrity(path, cycle_record)
+            integrity["records_written_this_cycle"] = written
+            if integrity["all_cited_ids_resolve"] is False:
+                # Loud, every cycle it happens. A broken evidence trail is
+                # the condition that makes every downstream outcome
+                # unauditable, so it must never be discoverable only by
+                # someone going looking for it.
+                self._logger.warning(
+                    "EVIDENCE TRAIL INCOMPLETE: %d of %d cited observation ids do not "
+                    "resolve in %s -- decisions on this cycle cannot be fully "
+                    "reconstructed. First unresolved: %s",
+                    integrity["unresolved_count"], integrity["cited_count"],
+                    path, integrity["unresolved_ids"][:3],
+                )
+            return integrity
+        except Exception as exc:  # noqa: BLE001 -- audit must not end a session
+            self._logger.warning("evidence persistence failed: %s: %s",
+                                 type(exc).__name__, exc)
+            return {"status": f"FAILED:{type(exc).__name__}", "error": str(exc),
+                    "all_cited_ids_resolve": False}
 
     def _depth_observation(self, snapshot, thesis) -> Optional[Dict[str, Any]]:
         """Order-book pressure, recorded beside the direction it did not inform.
