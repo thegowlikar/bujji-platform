@@ -103,6 +103,23 @@ class FutureSnapshot:
     open_interest: Optional[float]
     basis: Optional[float]
     premium_discount: Optional[float]
+    # Aggregate order-book pressure, added 2026-08-20 (operator directive:
+    # per-cycle get_depth). Placed LAST because they carry defaults and every
+    # field above does not -- a dataclass cannot follow a defaulted field with
+    # a non-defaulted one.
+    #
+    # VERIFIED FIELD NAMES, not guessed: `totalbuyqty` and `totalsellqty` are
+    # recorded in the certified discovery artifact
+    # data_certification/fyers_depth_discovery_20260813.json (real captured
+    # example: 266760 / 318435). get_depth()'s own docstring forbids assuming
+    # a bids/asks shape without confirming against a live response, so only
+    # these two confirmed aggregates are consumed -- the 5-level ladders are
+    # NOT parsed here.
+    #
+    # Default None so every existing construction site keeps working and a
+    # failed depth call reads as "not observed", never as a balanced book.
+    total_buy_qty: Optional[int] = None
+    total_sell_qty: Optional[int] = None
 
 
 @dataclass(frozen=True)

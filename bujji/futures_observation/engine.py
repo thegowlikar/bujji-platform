@@ -164,3 +164,31 @@ def validate_futures_observation(
     if reasons:
         return ValidationResult(is_valid=False, status=moc_taxonomy.VALIDATION_INVALID, reasons=tuple(reasons))
     return ValidationResult(is_valid=True, status=moc_taxonomy.VALIDATION_VALID, reasons=())
+
+
+def compute_depth_imbalance(
+    total_buy_qty: Optional[int], total_sell_qty: Optional[int]
+) -> Optional[float]:
+    """Signed order-book pressure in [-1, +1], or None when unobserved.
+
+        +1  every resting quantity is on the bid
+         0  bids and asks are balanced
+        -1  every resting quantity is on the ask
+
+    Purely arithmetic over two VERIFIED fields -- `totalbuyqty` and
+    `totalsellqty`, recorded in data_certification/
+    fyers_depth_discovery_20260813.json. The 5-level ladders are deliberately
+    not parsed: get_depth()'s docstring is explicit that their shape is
+    unverified, and inventing it would be exactly the fabricated field this
+    codebase's Layer 0 discipline forbids.
+
+    Returns None -- never 0.0 -- when either side is missing or both are zero.
+    A zero imbalance is a MEASUREMENT of a balanced book; absence is not, and
+    collapsing the two would let a failed poll read as a balanced market.
+    """
+    if total_buy_qty is None or total_sell_qty is None:
+        return None
+    total = total_buy_qty + total_sell_qty
+    if total <= 0:
+        return None
+    return (total_buy_qty - total_sell_qty) / total
