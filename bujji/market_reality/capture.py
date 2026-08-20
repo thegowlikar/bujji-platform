@@ -24,6 +24,8 @@ from typing import Any, Mapping, Optional
 from bujji.market_observation import taxonomy as moc_taxonomy
 from bujji.market_observation.engine import build_observation
 
+from .observation_quality import assess_observation_quality
+
 from . import taxonomy
 from .models import Layer0Lineage, RawObservation, derive_confidence
 
@@ -93,6 +95,15 @@ def build_raw_observation(
         kind, moc_taxonomy.RESOLUTION_EVENT
     )
 
+    # Measure BEFORE building, so the observation carries real numbers from
+    # the moment it exists rather than being stamped and corrected later.
+    # Never raises: a quality assessment that could end a capture would cost
+    # the very observation it exists to describe.
+    quality = assess_observation_quality(
+        kind=kind, payload=payload,
+        capture_timestamp=capture_timestamp, event_timestamp=event_timestamp,
+    )
+
     # The MOC identity timestamp is EVENT time when the source published
     # one, falling back to capture time only when it genuinely did not.
     # Both are preserved distinctly on the lineage block regardless, so
@@ -110,11 +121,26 @@ def build_raw_observation(
         schema_version=schema_version,
         value_kind=value_kind,
         payload=payload,
-        completeness=1.0,
-        freshness=0.0,
+        # MEASURED, not asserted (2026-08-21). This block previously read
+        # `completeness=1.0, missing_fields=(), validation_status=UNKNOWN` on
+        # EVERY observation unconditionally -- a record simultaneously
+        # admitting it had never been validated and claiming to be 100%
+        # complete. The number could not change, so it carried no
+        # information, while reading to every consumer like a measurement.
+        #
+        # `quality` below is computed from the payload actually in hand
+        # against a required-field set grounded in the real captured corpus.
+        completeness=quality.completeness,
+        freshness=0.0,  # Staleness is a property of the STREAM, not of one
+                        # record; asserting it here is how a per-record field
+                        # ends up lying about the feed. Left at the model's
+                        # own zero and measured by the stream-level checks.
         confidence=None,  # MOC's source-published confidence: FYERS publishes none.
-        missing_fields=(),
-        validation_status=moc_taxonomy.VALIDATION_UNKNOWN,
+        missing_fields=quality.missing_fields,
+        validation_status=quality.validation_status,
+        # SOURCE quality describes the FEED, not this record. Nothing here
+        # measures the feed, so it stays UNKNOWN rather than being inferred
+        # from a single healthy-looking payload.
         source_quality=moc_taxonomy.SOURCE_QUALITY_UNKNOWN,
         originating_source=source,
         acquisition_timestamp=capture_timestamp,
@@ -142,4 +168,8 @@ def build_raw_observation(
         instrument_type=instrument_type,
         lineage=lineage,
         identity_fields=dict(identity_fields or {}),
+        quality_detail={
+            "anomalies": list(quality.anomalies),
+            "acquisition_latency_seconds": quality.acquisition_latency_seconds,
+        },
     )

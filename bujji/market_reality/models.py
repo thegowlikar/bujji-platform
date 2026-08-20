@@ -115,6 +115,16 @@ class RawObservation:
     instrument_type: str
     lineage: Layer0Lineage
     identity_fields: Dict[str, Any] = field(default_factory=dict)
+    # MEASURED quality detail that the MOC quality block has no slot for:
+    # `anomalies` (impossible field relationships found in this payload) and
+    # `acquisition_latency_seconds` (exchange event time -> Bujji receipt,
+    # None when the source published no event time). The MOC block itself now
+    # carries the measured completeness/missing_fields/validation_status.
+    #
+    # Defaults empty so every existing construction site and every already
+    # persisted record keeps working -- an absent block means "not assessed",
+    # which is exactly what the older records are.
+    quality_detail: Dict[str, Any] = field(default_factory=dict)
 
     @property
     def observation_id(self) -> str:
@@ -135,6 +145,7 @@ class RawObservation:
             "instrument_type": self.instrument_type,
             "lineage": self.lineage.to_dict(),
             "identity_fields": dict(self.identity_fields),
+            "quality_detail": dict(self.quality_detail),
         }
 
     @staticmethod
@@ -145,6 +156,7 @@ class RawObservation:
             instrument_type=d["instrument_type"],
             lineage=Layer0Lineage.from_dict(d["lineage"]),
             identity_fields=dict(d.get("identity_fields") or {}),
+            quality_detail=dict(d.get("quality_detail") or {}),
         )
 
 
