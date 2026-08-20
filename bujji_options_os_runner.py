@@ -402,6 +402,13 @@ class OptionsOSRunner:
         self._regime_provider = None
         self._intelligence_broker = None
         self._regime_as_of = None
+        # No verdict until a cycle assesses one. The entry gate treats None
+        # as "not assessed" and refuses -- never as "fine".
+        self._data_quality = None
+        # Set when the intelligence broker is constructed -- LIVE or REPLAY.
+        # None until then, which the gate reads as undeterminable rather than
+        # as live.
+        self._intelligence_origin = None
 
         self._entry_prices: Dict[str, float] = {}
         self._governor_result_summary: Dict[str, Any] = {}
@@ -700,6 +707,13 @@ class OptionsOSRunner:
             self._intelligence_broker = ReplayMarketBroker(
                 HistoricalObservationStore(store_path), as_of=self._regime_as_of, underlying=underlying,
             )
+            # PROVENANCE FROM REALITY, not from a default. MarketDataAdapter's
+            # `source` defaults to "fyers_live" and describes the ADAPTER, not
+            # the broker behind it -- so a replay broker produced snapshots
+            # labelled live, and the data-quality gate would have read them as
+            # LIVE. The runner is the only place that knows which broker it
+            # built, so it is the only place that can say.
+            self._intelligence_origin = "REPLAY"
             self._regime_provider = self._build_market_thesis_regime_provider()
         elif regime_type == "market_thesis_live":
             # The LIVE equivalent needs no new facade: FyersBroker already
@@ -724,6 +738,7 @@ class OptionsOSRunner:
                     "silently falling back to a weaker regime source."
                 )
             self._regime_as_of = regime_cfg.get("as_of") or self._clock().isoformat()
+            self._intelligence_origin = "LIVE"
             self._intelligence_broker = disable_live_execution(FyersBroker(
                 BrokerConfig(name="fyers", app_id=app_id, access_token=token,
                              app_secret=_os.getenv("FYERS_APP_SECRET"),
@@ -895,7 +910,14 @@ class OptionsOSRunner:
         from bujji.production_runtime.market_thesis_regime_provider import MarketThesisRegimeProvider
 
         broker = self._intelligence_broker
-        adapter = MarketDataAdapter(broker, self._clock, underlying=self._root.underlying)
+        # The adapter is told what the broker ACTUALLY is. Its `source` default
+        # ("fyers_live") describes the adapter, not the data behind it -- so a
+        # replay broker silently produced snapshots labelled live. Origin is
+        # now carried from the construction site that knows the truth.
+        origin = getattr(self, "_intelligence_origin", None)
+        adapter = MarketDataAdapter(
+            broker, self._clock, underlying=self._root.underlying,
+            **({"source": f"fyers_{origin.lower()}"} if origin else {}))
 
         # WARM-UP + STABILITY GATE (opt-in via regime.warmup).
         #
@@ -962,6 +984,7 @@ class OptionsOSRunner:
         # record links evidence -> thesis -> regime -> selection end to end.
         # Completed and written by _persist_thesis() after get_regime().
         from bujji.shadow_observatory.thesis_artifact import build_thesis_artifact
+        evidence_integrity = self._persist_cycle_evidence(snapshot, cycle_record)
         self._pending_thesis_artifact = build_thesis_artifact(
             thesis=thesis, cycle_record=cycle_record,
             stability=getattr(self, "_pending_stability", None),
@@ -969,9 +992,51 @@ class OptionsOSRunner:
             recorded_at=self._clock().isoformat(),
             level_context=self._level_context_dict(),
             depth_observation=self._depth_observation(snapshot, thesis),
-            evidence_integrity=self._persist_cycle_evidence(snapshot, cycle_record),
+            evidence_integrity=evidence_integrity,
+            data_quality=self._assess_data_quality(snapshot, evidence_integrity),
         )
         return MarketThesisRegimeProvider(thesis, volatility_regime)
+
+    def _assess_data_quality(self, snapshot, evidence_integrity) -> Optional[Dict[str, Any]]:
+        """Grade this cycle's market data, and remember the verdict for the
+        entry gate.
+
+        `MarketDataAdapter` has always computed `health_status` and
+        `missing_fields`, and `IntelligenceCycleRecorder` has always recorded
+        the value -- where nothing read it. The signal existed and was wired
+        to a log line. This reads it, and `_entry_window` can now refuse on it.
+
+        Never raises. A FAILED assessment is stored as a verdict that does NOT
+        permit trading: if the gate itself is broken we do not know whether
+        the data is sound, and the entire value of a safety boundary is that
+        it refuses when it does not know.
+        """
+        try:
+            from bujji.production_runtime.market_data_gate import assess_market_data
+
+            gate_cfg = (self._config.get("market_data_gate", {})
+                        if isinstance(getattr(self, "_config", None), dict) else {})
+            verdict = assess_market_data(
+                snapshot, evidence_integrity=evidence_integrity,
+                required_origin=gate_cfg.get("required_origin", "LIVE"),
+                require_whole_evidence_trail=bool(
+                    gate_cfg.get("require_whole_evidence_trail", False)),
+            )
+            self._data_quality = verdict
+            if not verdict.may_trade:
+                self._logger.warning(
+                    "DATA QUALITY %s -- entry will be REFUSED this cycle. reasons=%s",
+                    verdict.quality, list(verdict.reasons))
+            elif verdict.quality != "GOOD":
+                self._logger.info("DATA QUALITY %s -- trading permitted. reasons=%s",
+                                  verdict.quality, list(verdict.reasons))
+            return verdict.to_dict()
+        except Exception as exc:  # noqa: BLE001 -- fail CLOSED, never open
+            self._logger.warning("data-quality gate failed, refusing entry: %s: %s",
+                                 type(exc).__name__, exc)
+            self._data_quality = None
+            return {"quality": "INVALID", "may_trade": False,
+                    "reasons": [f"GATE_FAILED:{type(exc).__name__}"], "error": str(exc)}
 
     def _evidence_path(self) -> Optional[str]:
         """Where this session's decision evidence lives.
@@ -1452,7 +1517,66 @@ class OptionsOSRunner:
         self._stage = RunnerStage.ENTRY_WINDOW
         trend_regime, volatility_regime = self._regime_provider.get_regime()
         self._logger.info("ENTRY_WINDOW -- regime trend=%s volatility=%s", trend_regime, volatility_regime)
+        # THE DATA-QUALITY BOUNDARY. Before this existed, nothing stood
+        # between market data and a trading decision: a forensic trace of
+        # this runner for any quality gate found one string, in one branch,
+        # for one condition. Stale, gapped, degraded and non-LIVE data all
+        # reached strategy selection stamped completeness 1.0.
+        #
+        # A decision is BLOCKED here, not warned about.
+        if not self._data_quality_permits_entry():
+            return
         self._attempt_entry(trend_regime, volatility_regime)
+
+    def _data_quality_permits_entry(self) -> bool:
+        """Fail closed WHERE THE GATE APPLIES, and say so plainly where it
+        does not.
+
+        SCOPE. This gate grades a MarketSnapshot. Only a snapshot-deriving
+        regime provider (`market_thesis` / `market_thesis_live`, which build
+        an intelligence broker and set `_intelligence_origin`) produces one.
+        A config that supplies a fixed regime instead never creates a
+        snapshot, so there is nothing here to grade -- and refusing such a
+        session would not be strictness, it would be this gate answering a
+        question it was never asked.
+
+        Where the gate DOES apply, a missing verdict is a refusal. An
+        intelligence broker was built, a snapshot should have been graded,
+        and its absence means we do not know whether the data was sound.
+        Refusing when we do not know is the entire purpose.
+
+        The not-applicable case is recorded on the summary rather than
+        passing silently: a session trading without a data-quality boundary
+        is a fact an operator must be able to read afterwards.
+        """
+        verdict = getattr(self, "_data_quality", None)
+        if verdict is None:
+            if getattr(self, "_intelligence_origin", None) is None:
+                # No snapshot-deriving regime provider in this config.
+                self._logger.info(
+                    "Data-quality gate NOT APPLICABLE -- this config derives no "
+                    "MarketSnapshot (fixed regime), so there is no market data for "
+                    "it to grade. The session proceeds WITHOUT a data-quality "
+                    "boundary; that is a property of the config, not a clean bill "
+                    "of health.")
+                self._governor_result_summary["data_quality"] = "NOT_APPLICABLE"
+                return True
+            self._logger.warning(
+                "ENTRY REFUSED -- a snapshot-deriving regime provider is configured "
+                "(origin=%s) but no data-quality verdict exists for this cycle. A "
+                "gate that permits when it has not assessed is not a gate.",
+                self._intelligence_origin)
+            self._governor_result_summary["entry_blocked_by"] = "DATA_QUALITY_NOT_ASSESSED"
+            return False
+        if not verdict.may_trade:
+            self._logger.warning(
+                "ENTRY REFUSED -- data quality %s. reasons=%s missing=%s",
+                verdict.quality, list(verdict.reasons), list(verdict.missing_fields))
+            self._governor_result_summary["entry_blocked_by"] = (
+                f"DATA_QUALITY_{verdict.quality}")
+            self._governor_result_summary["data_quality_reasons"] = list(verdict.reasons)
+            return False
+        return True
 
     def _risk_budget(self) -> Dict[str, float]:
         """The rupee figures for THIS position, scaled by the lots taken.

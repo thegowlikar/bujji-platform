@@ -71,6 +71,7 @@ def build_thesis_artifact(
     level_context: Optional[Dict[str, Any]] = None,
     depth_observation: Optional[Dict[str, Any]] = None,
     evidence_integrity: Optional[Dict[str, Any]] = None,
+    data_quality: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
     """One auditable record of a single regime derivation.
 
@@ -135,6 +136,10 @@ def build_thesis_artifact(
         # has not demonstrated a whole trail, and scoring it perfect is the
         # exact failure this replaces.
         "evidence_integrity": evidence_integrity,
+        # The data-quality verdict this cycle's entry decision was subject to
+        # -- recorded so a later reader can see not just what Bujji decided
+        # but what it was allowed to decide, and why.
+        "data_quality": data_quality,
         # The understanding layer's own honest record for this cycle,
         # persisted verbatim -- this module reshapes nothing.
         "cycle_record": cycle_record,
