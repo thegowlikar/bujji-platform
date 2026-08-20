@@ -641,3 +641,63 @@ Does the book agree with structure or fight it? If it agrees, promoting it
 needs one of: accept the LOW ceiling · weight reconciliation by confidence (a
 philosophy change for ALL lenses) · a high abstention bar (threshold would need
 calibrating from this very trail).
+
+## 2026-08-21 — Layer 1/2 forensic audit, and six P0 repairs
+
+Two read-only forensic audits scored acquisition **54/100** and storage/memory
+**41/100**. Their shared conclusion is the important one, and it is not about
+any single defect:
+
+> The architecture is sound. The components are built, tested, and **not
+> connected to the organism that trades.** A reviewer reading this repository
+> would conclude Bujji is production-ready. A reviewer reading its runtime
+> would not.
+
+The worst finding: on 2026-08-20 the live session cited **346 supporting
+observation ids and none of them resolved anywhere on disk**, while the
+campaign report printed "Explanation completeness: 100%" over the same
+session — because that metric counts populated fields, not whether what they
+point at exists.
+
+### Closed (b8bec1a, 1b47af6, 4a5872c, 0db15fa, 4306187 — 7,748 tests)
+
+| # | Defect | Repair |
+|---|---|---|
+| P0-1 | 346/346 evidence ids dangling | persisted every cycle; proven 34/34 through the real pipeline |
+| P0-2 | `completeness=1.0` hardcoded | measured; now takes 0.0 / 0.6 / 1.0 on real payloads |
+| P0-3 | VIX writer wrote ONE_MINUTE, reader queried FIVE_MINUTE | reader reads both honest series; 10 historical snapshots byte-identical |
+| P0-6 | dropped polls left no trace | `REASON_OBSERVATION_MISS` point event |
+| P0-7 | provenance never enforced | non-LIVE origin refused; adapter told the real broker |
+| P0-8 | no data-quality gate | hard, fail-closed boundary before entry |
+
+Landed with it: Bujji's **first real latency measurement**. FYERS publishes
+`last_traded_time` on the depth payload and it was being captured and never
+compared. Exchange 09:15:12 against receipt 09:15:13.560706 = 1.560706s.
+
+### Deliberately NOT closed
+
+**P0-4, futures in the canonical store.** The capture session's own comment
+already argued this correctly: writing a live near-month quote under
+`NIFTY_FUT_CONTINUOUS` asserts a splice the code cannot justify. It is an
+operator data-modelling decision, not a bug. `futures_status: ABSENT` is
+reported honestly rather than filled in.
+
+**P0-5, the four integrity checks** still have zero production callers.
+
+**Evidence-trail enforcement.** A broken trail DEGRADES the verdict but does
+not yet block. It does not make a decision wrong, it makes it unauditable —
+and promoting it to a hard stop before one live session has measured the real
+resolution rate risks a fail-closed gate that silently prevents all trading.
+Promotion criterion: one full live session at a measured 100% rate.
+
+### Two lessons worth keeping
+
+The lineage guards run `git diff` and therefore **only see tracked files**. A
+new file in a protected package passed a clean 7,737-test run, then failed
+seven guards the moment it was committed. `git add` before trusting green.
+
+The `CaptureLifecycleTracker` rejected my first gap implementation with a
+precise error: a miss is a POINT event, not an opening condition. It was
+right — modelling it as a condition would have suppressed the second and
+third miss as "the same condition", when three consecutive dropped polls are
+three distinct holes in the series.
