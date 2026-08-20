@@ -32,4 +32,8 @@ def build_market_direction(
     # Requiring it would make direction unavailable on any cycle with a thin
     # chain, which is strictly worse than the two-lens answer we had before.
     return determine_market_direction(
-        psi, mssi, market_state_assessment.participant_positioning, timestamp=timestamp)
+        psi, mssi, market_state_assessment.participant_positioning,
+        futures_basis=getattr(market_state_assessment, "futures_basis", None),
+        previous_futures_basis=getattr(
+            market_state_assessment, "previous_futures_basis", None),
+        timestamp=timestamp)

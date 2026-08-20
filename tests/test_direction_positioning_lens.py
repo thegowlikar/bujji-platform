@@ -127,9 +127,13 @@ class TestConfidenceIsCappedOnPurpose:
 
 
 class TestItIsWiredEndToEnd:
-    def test_direction_now_combines_three_lenses(self):
+    def test_direction_combines_more_than_the_two_spot_price_lenses(self):
+        """Name-based, not count-based -- the lesson from the MDI tests this
+        change already had to fix. A fourth lens (futures basis) arrived the
+        same day; a hardcoded count would have needed editing again."""
         source = (REPO_ROOT / "bujji" / "msi_market_direction" / "engine.py").read_text()
-        assert "(price_lens, structure_lens, positioning_lens)" in source
+        assert "positioning_lens" in source
+        assert "price_lens, structure_lens, positioning_lens" in source
 
     def test_mppi_is_optional_so_existing_callers_keep_working(self):
         """Requiring it would make direction unavailable on any cycle with a

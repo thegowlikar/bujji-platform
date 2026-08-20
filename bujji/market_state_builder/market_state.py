@@ -76,6 +76,13 @@ class MarketStateBuilder:
 
     def __init__(self, memory: Optional[ObservationMemory] = None) -> None:
         self._memory = memory if memory is not None else ObservationMemory()
+        # Cross-cycle memory for the two comparisons ObservationMemory does not
+        # cover. It tracks the spot Observation for event detection; the option
+        # chain and the futures basis need the same current-vs-previous
+        # treatment and had nowhere to live, which is why MPPI's migration and
+        # expansion lenses were dark and no basis-change signal existed.
+        self._previous_option_observations: Optional[Tuple] = None
+        self._previous_futures_basis: Optional[float] = None
 
     @property
     def memory(self) -> ObservationMemory:
@@ -109,7 +116,27 @@ class MarketStateBuilder:
         # accumulated history for PSI/MSSI's lookups, while `events`
         # (this cycle's delta) is still what's stored on
         # MarketStateAssessment.events, unchanged.
-        return build_market_state_assessment(
+        futures_basis = getattr(getattr(snapshot, "futures", None), "basis", None)
+
+        assessment = build_market_state_assessment(
             episodes, events, option_observations, snapshot.timestamp,
             event_history=self._memory.event_history,
+            previous_option_observations=self._previous_option_observations,
+            futures_basis=futures_basis,
+            previous_futures_basis=self._previous_futures_basis,
         )
+
+        # REMEMBER AFTER THE COMPARISON, never before -- the same ordering
+        # discipline documented above for memory.advance(). Overwriting these
+        # first would compare this cycle against itself and silently report no
+        # change on every cycle.
+        #
+        # Only real values are retained: an empty chain or an absent futures
+        # snapshot leaves the previous value standing, so one failed poll
+        # costs a comparison rather than resetting the baseline to nothing.
+        if option_observations:
+            self._previous_option_observations = option_observations
+        if futures_basis is not None:
+            self._previous_futures_basis = futures_basis
+
+        return assessment

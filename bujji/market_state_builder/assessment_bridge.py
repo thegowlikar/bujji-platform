@@ -64,6 +64,15 @@ class MarketStateAssessment:
     participant_positioning: Optional[MarketParticipantPositioningAssessment]
     events: Tuple[MarketEvent, ...]
     episodes: Tuple[Episode, ...]
+    # Raw observed basis (futures - spot) for this cycle and the previous one.
+    # Carried as NUMBERS, not a classification: PREMIUM/DISCOUNT labelling is
+    # the interpretive layer's job (see futures_observation.compute_basis's own
+    # docstring), and the direction lens that consumes these does the
+    # interpreting. Both None until a futures snapshot is available -- absent,
+    # never defaulted to 0.0, which would read as "no change" rather than
+    # "no data".
+    futures_basis: Optional[float] = None
+    previous_futures_basis: Optional[float] = None
 
 
 def _union_events(events: Tuple[MarketEvent, ...], event_history: Optional[Tuple[MarketEvent, ...]]) -> Tuple[MarketEvent, ...]:
@@ -86,6 +95,9 @@ def build_market_state_assessment(
     episodes: Tuple[Episode, ...], events: Tuple[MarketEvent, ...],
     option_observations: Tuple[OptionObservation, ...], timestamp: str,
     event_history: Optional[Tuple[MarketEvent, ...]] = None,
+    previous_option_observations: Optional[Tuple[OptionObservation, ...]] = None,
+    futures_basis: Optional[float] = None,
+    previous_futures_basis: Optional[float] = None,
 ) -> MarketStateAssessment:
     price_structure = None
     market_structure = None
@@ -98,8 +110,15 @@ def build_market_state_assessment(
         market_structure = assess_market_structure(episodes, lookup_events, timestamp=timestamp)
 
     if option_observations:
+        # PREVIOUS CHAIN NOW SUPPLIED (2026-08-20). It never was, so two of
+        # MPPI's five lenses -- OI migration and OI expansion/contraction --
+        # returned UNKNOWN on every cycle Bujji has ever run. Their own
+        # docstrings explain why: "no intraday OI history exists in this
+        # codebase (Bhavcopy is end-of-day only)". That was true when they
+        # were written and is not true now -- the live chain capture writes
+        # ~199,000 rows a day. Positioning was being decided by 3 of 5 lenses.
         participant_positioning = assess_participant_positioning(
-            option_observations, timestamp=timestamp,
+            option_observations, previous_option_observations, timestamp=timestamp,
         )
 
     return MarketStateAssessment(

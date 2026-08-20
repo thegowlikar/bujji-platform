@@ -101,6 +101,16 @@ _THREE_PART_SELECTION_AUTHORIZED = (
 _DIRECTION_POSITIONING_LENS_AUTHORIZED = (
     "bujji/msi_market_direction/engine.py",
     "bujji/market_state/direction_bridge.py",
+    # Extended 2026-08-20 (same directive): the futures BASIS-CHANGE lens.
+    # Basis level is a calendar artifact -- NIFTY futures carry a premium
+    # that decays to expiry -- so the lens reads the CHANGE, which needs a
+    # previous observation. Plumbing that through also supplied MPPI's
+    # previous chain for the first time, un-darkening its OI-migration and
+    # OI-expansion lenses: positioning had been decided by 3 of 5 lenses
+    # because nothing ever passed a previous snapshot.
+    "bujji/market_state_builder/assessment_bridge.py",
+    "bujji/market_state_builder/market_state.py",
+    "bujji/msi_market_direction/config.py",
 )
 
 

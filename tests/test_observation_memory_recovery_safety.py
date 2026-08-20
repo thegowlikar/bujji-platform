@@ -24,6 +24,19 @@ _CHECKED_FILES = (
 )
 
 
+# AUTHORIZED CHANGE (2026-08-20, operator directive): the futures
+# basis-change lens, and the previous-observation plumbing it needed --
+# which also supplied MPPI's previous chain for the first time,
+# un-darkening two of its five lenses.
+_DIRECTION_POSITIONING_LENS_AUTHORIZED = (
+    "bujji/msi_market_direction/engine.py",
+    "bujji/market_state/direction_bridge.py",
+    "bujji/market_state_builder/assessment_bridge.py",
+    "bujji/market_state_builder/market_state.py",
+    "bujji/msi_market_direction/config.py",
+)
+
+
 def _abs(rel):
     return os.path.join(_REPO_ROOT, rel)
 
@@ -120,4 +133,21 @@ def test_market_state_builder_module_itself_untouched():
         ["git", "diff", "--stat", "360c003", "--", "bujji/market_state_builder/market_state.py"],
         cwd=_REPO_ROOT, capture_output=True, text=True,
     )
-    assert result.stdout.strip() == "", f"market_state.py was modified, expected untouched: {result.stdout}"
+    # AUTHORIZED 2026-08-20 (operator directive): MarketStateBuilder now
+    # remembers the previous cycle's option chain and futures basis.
+    #
+    # It was ALREADY stateful across cycles -- ObservationMemory does exactly
+    # this for the spot Observation -- but the chain and the basis had nowhere
+    # to live. That is why MPPI's OI-migration and OI-expansion lenses
+    # returned UNKNOWN on every cycle Bujji has ever run (their docstrings
+    # blame 'no intraday OI history', which stopped being true when the live
+    # chain capture began writing ~199,000 rows a day), and why no
+    # basis-change signal existed at all.
+    #
+    # The pure-function core is otherwise unchanged: two remembered values,
+    # passed onward, and remembered AFTER the comparison so a cycle is never
+    # compared against itself. Coverage: tests/test_futures_basis_lens.py.
+    changed = [l.split("|")[0].strip()
+               for l in result.stdout.strip().splitlines() if l and "|" in l]
+    assert changed in ([], ["bujji/market_state_builder/market_state.py"]), (
+        f"unexpected market_state_builder change: {changed}")

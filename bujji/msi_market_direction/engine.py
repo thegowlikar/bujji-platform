@@ -248,6 +248,77 @@ def derive_participant_positioning_lens(
     )
 
 
+def derive_futures_basis_lens(
+    basis: Optional[float], previous_basis: Optional[float],
+) -> LensOpinion:
+    """Futures positioning, read from the CHANGE in basis.
+
+    BASIS LEVEL IS NOT DIRECTIONAL, and this is the trap the lens exists to
+    avoid. NIFTY futures normally trade at a premium to spot that decays
+    toward expiry, so a lens keyed on the level would report a bullish market
+    every morning of every cycle and a bearish one every expiry -- an artifact
+    of the calendar wearing the clothes of a market opinion.
+
+    The change is the signal. Premium WIDENING means futures buyers are paying
+    up relative to spot; NARROWING, or flipping toward discount, means the
+    opposite. That is a genuine third source: not spot price (which PSI and
+    MSSI already read) and not options open interest (which MPPI reads).
+
+    Requires two observations, exactly as MPPI's OI-migration lens does. One
+    cycle in, or after a failed futures poll, it honestly abstains rather than
+    reporting a change it cannot see.
+
+    Thresholds are DISCLOSED CONFIGURATION, NOT MEASURED -- see config.py.
+    """
+    if basis is None or previous_basis is None:
+        missing = ("both" if basis is None and previous_basis is None
+                   else "this cycle's" if basis is None else "the previous cycle's")
+        return LensOpinion(
+            lens_name=taxonomy.FUTURES_POSITIONING_DIRECTION,
+            directional_lean=taxonomy.UNKNOWN, confidence=taxonomy.CONFIDENCE_NONE,
+            supporting_evidence_ids=(),
+            reasoning=f"Basis change needs two observations and {missing} basis is "
+                      f"absent -- abstaining rather than reading a level, which is "
+                      f"a calendar artifact and not a direction.",
+        )
+
+    delta = basis - previous_basis
+    magnitude = abs(delta)
+
+    if magnitude < _config.BASIS_CHANGE_MIN_POINTS:
+        return LensOpinion(
+            lens_name=taxonomy.FUTURES_POSITIONING_DIRECTION,
+            directional_lean=taxonomy.NEUTRAL, confidence=taxonomy.CONFIDENCE_LOW,
+            supporting_evidence_ids=(),
+            reasoning=f"Basis moved {delta:+.2f} pts ({previous_basis:.2f} -> {basis:.2f}), "
+                      f"inside the {_config.BASIS_CHANGE_MIN_POINTS} pt noise floor -- "
+                      f"genuine evidence of no change, not absence of evidence.",
+        )
+
+    strong = magnitude >= _config.BASIS_CHANGE_STRONG_POINTS
+    if delta > 0:
+        lean = taxonomy.STRONG_BULLISH if strong else taxonomy.BULLISH
+        direction = "widening (futures buyers paying up relative to spot)"
+    else:
+        lean = taxonomy.STRONG_BEARISH if strong else taxonomy.BEARISH
+        direction = "narrowing toward discount (futures bid fading relative to spot)"
+
+    return LensOpinion(
+        lens_name=taxonomy.FUTURES_POSITIONING_DIRECTION,
+        directional_lean=lean,
+        # MODERATE, never HIGH: a single interval's basis move is a real
+        # observation but a thin one, and basis is noisy near expiry when carry
+        # collapses. HIGH stays reserved for MSSI's structural facts.
+        confidence=taxonomy.CONFIDENCE_MODERATE,
+        supporting_evidence_ids=(),
+        reasoning=f"Basis {direction}: {delta:+.2f} pts "
+                  f"({previous_basis:.2f} -> {basis:.2f})"
+                  + (f", at or beyond the {_config.BASIS_CHANGE_STRONG_POINTS} pt "
+                     f"strong threshold" if strong else "")
+                  + ". Change, never level -- the level is a calendar artifact.",
+    )
+
+
 def reconcile_lenses(lens_opinions: Tuple[LensOpinion, ...]) -> Tuple[str, str, Tuple[str, ...]]:
     opinionated = [lo for lo in lens_opinions if lo.directional_lean != taxonomy.UNKNOWN]
 
@@ -354,6 +425,8 @@ def determine_market_direction(
     mssi: MarketStructureAssessment,
     mppi: Optional[MarketParticipantPositioningAssessment] = None,
     *,
+    futures_basis: Optional[float] = None,
+    previous_futures_basis: Optional[float] = None,
     timestamp: str,
     provenance: str = _config.DEFAULT_PROVENANCE,
     schema_version: str = _config.SCHEMA_VERSION,
@@ -367,7 +440,12 @@ def determine_market_direction(
     # average, so this can produce MORE no-opinion days as well as fewer.
     # Which way it lands is an empirical question the D-5 records now answer.
     positioning_lens = derive_participant_positioning_lens(mppi)
-    lens_opinions: Tuple[LensOpinion, ...] = (price_lens, structure_lens, positioning_lens)
+    # A fourth INDEPENDENT source: not spot price (price/structure lenses) and
+    # not option open interest (positioning lens). Absent basis contributes an
+    # UNKNOWN opinion, which reconcile_lenses already ignores.
+    basis_lens = derive_futures_basis_lens(futures_basis, previous_futures_basis)
+    lens_opinions: Tuple[LensOpinion, ...] = (
+        price_lens, structure_lens, positioning_lens, basis_lens)
 
     overall_direction, overall_confidence, conflicting_lenses = reconcile_lenses(lens_opinions)
 
