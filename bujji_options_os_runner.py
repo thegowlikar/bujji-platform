@@ -604,6 +604,8 @@ class OptionsOSRunner:
         # It wraps the SAME PaperBroker the composition root executes through
         # -- one terminal executor, no second broker instance and no second
         # order path.
+        import asyncio as _asyncio_exec
+
         from bujji.execution.engine import ExecutionEngine as _ExecutionEngine
 
         from bujji.core.config import AppConfig as _AppConfig, BrokerConfig as _BrokerConfig
@@ -645,7 +647,18 @@ class OptionsOSRunner:
         self._registry = PositionRealityRegistry(self._broker)
         self._lifecycle_runtime = PositionLifecycleRuntime(self._registry, self._clock)
         self._portfolio_engine = PortfolioRealityEngine(self._registry, event_bus=self._root.event_bus)
+        # EXITS USE THE SAME MACHINE AS ENTRIES (2026-08-21). The exit path
+        # previously called broker.place_order directly: no journal, no
+        # poll-to-terminal, no cancel-on-timeout. That is strictly more
+        # dangerous than the entry case it mirrored, because an exit failure
+        # happens while a naked position is already live -- a stop-loss that
+        # times out and is read as "rejected" leaves a position Bujji has
+        # stopped watching.
+        from bujji.production_runtime.execution_journal_bridge import broker_truth_place_fn as _btpf
+
+        _exit_place_fn = _btpf(execution_engine, _asyncio_exec.run, self._logger)
         self._executor = TradeLifecycleExecutor(self._broker, self._registry, self._lifecycle_runtime,
+                                                place_fn=_exit_place_fn,
                                                  event_bus=self._root.event_bus)
 
         mandatory_exit_time = None

@@ -49,6 +49,14 @@ STATUS_EXECUTED = "EXECUTED"
 STATUS_PARTIAL = "PARTIAL"
 STATUS_REJECTED = "REJECTED"
 STATUS_FAILED_VALIDATION = "FAILED_VALIDATION"
+# BROKER TRUTH UNKNOWN (2026-08-21). Previously a PENDING or UNKNOWN order
+# status fell through _aggregate_status to STATUS_REJECTED -- silently
+# converting "we do not know yet" into "the exit failed". That is the most
+# dangerous direction for an EXIT: the caller concludes the position is still
+# open and may re-submit (duplicating the exit), or concludes the action was
+# rejected and stops trying, while the exit is actually working at the
+# exchange. UNKNOWN is now its own terminal-for-this-pass state.
+STATUS_UNKNOWN = "BROKER_TRUTH_UNKNOWN"
 
 # NOT part of D.4's own closed action vocabulary (HOLD/MONITOR/REDUCE_SIZE/
 # ADD_HEDGE/EXIT_CONSIDERATION/BLOCK_NEW_RISK) -- D.4 never produces this
@@ -81,12 +89,25 @@ class TradeLifecycleExecutor:
 
     def __init__(
         self, broker, registry: PositionRealityRegistry, lifecycle_runtime: PositionLifecycleRuntime,
-        event_bus=None,
+        event_bus=None, place_fn=None,
     ) -> None:
         self._broker = broker
         self._registry = registry
         self._lifecycle_runtime = lifecycle_runtime
         self._event_bus = event_bus
+        # BROKER-TRUTH EXIT (2026-08-21). When supplied, every exit order goes
+        # through the SAME machine entries use -- ExecutionEngine's idempotent
+        # placement, poll-to-terminal, cancel-on-timeout and post-cancel
+        # reconciliation -- instead of trusting place_order's immediate
+        # response. Optional so every existing construction site keeps its
+        # exact prior behaviour; the production runner supplies it.
+        self._place_fn = place_fn
+
+    async def _place(self, order_request):
+        """One placement, through broker truth where available."""
+        if self._place_fn is not None:
+            return self._place_fn(order_request)
+        return await self._broker.place_order(order_request)
 
     async def execute(
         self, evaluation: LifecycleEvaluationResult, clock: Clock,
@@ -164,11 +185,22 @@ class TradeLifecycleExecutor:
                     status=STATUS_FAILED_VALIDATION, reason=str(exc),
                 )
             self._publish("LIFECYCLE_ORDER_CREATED", pg_id, action, clock)
-            result = await self._broker.place_order(order_request)
+            result = await self._place(order_request)
             order_results.append(result)
-            self._publish("LIFECYCLE_ORDER_FILLED", pg_id, action, clock)
+            # TELEMETRY MUST MATCH REALITY. This published
+            # LIFECYCLE_ORDER_FILLED unconditionally, immediately after
+            # place_order returned, without ever reading result.is_filled --
+            # so a rejected or still-working exit emitted a "FILLED" event.
+            self._publish(
+                "LIFECYCLE_ORDER_FILLED" if result.is_filled else "LIFECYCLE_ORDER_UNFILLED",
+                pg_id, action, clock)
 
         status = self._aggregate_status(order_results)
+        # A group is marked CLOSED only when the broker itself reports no open
+        # leg. Deliberately NOT attempted on STATUS_UNKNOWN: with an
+        # unresolved leg, `is_open == False` may simply mean the exit order
+        # has not settled yet, and marking closed there is exactly the
+        # phantom-flat state this whole layer exists to prevent.
         if status in (STATUS_EXECUTED, STATUS_PARTIAL):
             reality = await self._registry.get_group_reality(pg_id)
             if not reality.is_open:
@@ -203,8 +235,13 @@ class TradeLifecycleExecutor:
             )
 
         self._publish("LIFECYCLE_ORDER_CREATED", pg_id, action, clock)
-        result = await self._broker.place_order(order_request)
-        self._publish("LIFECYCLE_ORDER_FILLED", pg_id, action, clock)
+        # A HEDGE is risk-reducing and gets the same broker-truth treatment as
+        # a reduce: believing an unfilled hedge is filled leaves the position
+        # unhedged while the risk model records protection that does not exist.
+        result = await self._place(order_request)
+        self._publish(
+            "LIFECYCLE_ORDER_FILLED" if result.is_filled else "LIFECYCLE_ORDER_UNFILLED",
+            pg_id, action, clock)
         status = self._aggregate_status([result])
         self._publish("LIFECYCLE_ACTION_COMPLETED" if status != STATUS_REJECTED else "LIFECYCLE_ACTION_FAILED",
                        pg_id, action, clock)
@@ -222,8 +259,15 @@ class TradeLifecycleExecutor:
             return STATUS_EXECUTED
         if OrderStatus.REJECTED in statuses and len(statuses) == 1:
             return STATUS_REJECTED
+        # UNKNOWN/PENDING outranks a partial: if ANY leg's real state could
+        # not be established, the group's state is not established either.
+        # Reporting PARTIAL here would assert that the rest is settled.
+        if OrderStatus.UNKNOWN in statuses or OrderStatus.PENDING in statuses:
+            return STATUS_UNKNOWN
         if OrderStatus.FILLED in statuses or OrderStatus.PARTIAL in statuses:
             return STATUS_PARTIAL
+        # Anything left is genuinely not a fill and not an unknown -- e.g. a
+        # CANCELLED-only set. Rejection is the honest reading.
         return STATUS_REJECTED
 
     def _publish(self, stage: str, position_group_id: str, action: str, clock: Clock) -> None:

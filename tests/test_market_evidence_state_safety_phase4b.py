@@ -274,6 +274,30 @@ _JOURNALED_EXECUTION_AUTHORIZED = (
 )
 
 
+# AUTHORIZED 2026-08-21 (Chief Engineer mandate, bypass audit): exits use the
+# same broker-truth machine as entries.
+#
+# WHY. The bypass audit found the exit path still calling broker.place_order
+# directly -- no journal, no poll-to-terminal, no cancel-on-timeout -- while
+# the entry path had been upgraded. That is strictly MORE dangerous than the
+# entry case, because an exit failure happens while a naked position is
+# already live. Three defects on that live path: PENDING/UNKNOWN was mapped
+# to STATUS_REJECTED (telling the runner an exit FAILED while it was still
+# working), LIFECYCLE_ORDER_FILLED was published unconditionally without
+# reading result.is_filled, and closure could be marked from a broker read
+# taken while an exit order was unsettled.
+#
+# WHAT THIS ADDS. Only routing and honesty: an optional place_fn (default
+# None, so every existing construction site keeps its exact prior behaviour),
+# a STATUS_UNKNOWN that no longer masquerades as rejection, and telemetry
+# that matches the order result. No new strategy, no new risk rule, and the
+# change only ever makes the reported state LESS certain, never more.
+# See tests/test_exit_broker_truth.py.
+_EXIT_BROKER_TRUTH_AUTHORIZED = (
+    "bujji/production_runtime/trade_lifecycle_executor.py",
+)
+
+
 def test_market_evidence_state_has_only_allowed_fields():
     from bujji.market_state.evidence_boundary import MarketEvidenceState
     field_names = set(MarketEvidenceState.__dataclass_fields__.keys())
@@ -402,7 +426,7 @@ def test_no_protected_lineage_package_modified():
         cwd="/opt/bujji/app", capture_output=True, text=True,
     )
     changed = [l for l in result.stdout.strip().splitlines() if l]
-    changed = [l for l in changed if l not in _PAPERBROKER_V2_AUTHORIZED + _LOT_SIZE_AUTHORITATIVE_AUTHORIZED + _CPC_SAFETY_SPINE_AUTHORIZED + _CPC_EVIDENCE_AND_REALISM_AUTHORIZED + _LIVE_PREMIUM_FIX_AUTHORIZED + _THREE_PART_SELECTION_AUTHORIZED + _DEFINED_RISK_MODE_AUTHORIZED + _LEARNING_LOOP_AUTHORIZED + _DIRECTION_POSITIONING_LENS_AUTHORIZED + _DATA_QUALITY_GATE_AUTHORIZED + _WEBSOCKET_TICK_PROVIDER_AUTHORIZED + _JOURNALED_EXECUTION_AUTHORIZED]
+    changed = [l for l in changed if l not in _PAPERBROKER_V2_AUTHORIZED + _LOT_SIZE_AUTHORITATIVE_AUTHORIZED + _CPC_SAFETY_SPINE_AUTHORIZED + _CPC_EVIDENCE_AND_REALISM_AUTHORIZED + _LIVE_PREMIUM_FIX_AUTHORIZED + _THREE_PART_SELECTION_AUTHORIZED + _DEFINED_RISK_MODE_AUTHORIZED + _LEARNING_LOOP_AUTHORIZED + _DIRECTION_POSITIONING_LENS_AUTHORIZED + _DATA_QUALITY_GATE_AUTHORIZED + _WEBSOCKET_TICK_PROVIDER_AUTHORIZED + _JOURNALED_EXECUTION_AUTHORIZED + _EXIT_BROKER_TRUTH_AUTHORIZED]
     protected_prefixes = (
         "bujji/msi_", "bujji/trading_brain/", "bujji/execution_engine/",
         "bujji/risk_governor/", "bujji/msi_shadow_trading/", "bujji/mic_replay/",
