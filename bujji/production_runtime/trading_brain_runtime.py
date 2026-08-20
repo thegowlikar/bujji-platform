@@ -137,8 +137,30 @@ class TradingBrainRuntime:
             machine.transition(target, reason="market_open_sequence")
 
     def run_market_close_sequence(self) -> None:
+        """Advance the runtime to COMPLETE. IDEMPOTENT.
+
+        THIS PLACES NO ORDER, and callers must not treat it as a close. That
+        misreading was a real defect: the emergency brake called this and
+        returned, believing it had flattened. Actual flattening goes through
+        the governor's forced-exit path and the canonical execution boundary.
+
+        IDEMPOTENCE (2026-08-21). Calling this twice used to raise
+        IllegalRuntimeTransition, because COMPLETE has no outgoing
+        transitions. That is exactly what happened when the brake fired and
+        _eod_close then re-ran the same management pass: the second call
+        raised out of _eod_close, and since run() puts only _shutdown() in
+        its finally, _session_archive() was skipped -- losing the session's
+        outcome record and returning EXIT_RUNTIME_ERROR. Already being at
+        COMPLETE is the desired end state, not an error.
+        """
         machine = self._root.runtime_state_machine
         for target in (RuntimeState.POSTMARKET, RuntimeState.COMPLETE):
+            if machine.state is target:
+                continue
+            if not machine.can_transition(target):
+                # Already past this step (or in ERROR). Re-driving the machine
+                # is not what the caller wants; reaching COMPLETE is.
+                continue
             machine.transition(target, reason="market_close_sequence")
 
     def process_entry_cycle(

@@ -2087,9 +2087,24 @@ class OptionsOSRunner:
             return
 
         # -- EMERGENCY BRAKE (Master Plan D-6) -- evaluated every pass,
-        # BEFORE the ordinary exit policy, reusing the same mandatory
-        # close-everything sequence _eod_close uses. Nothing new fires an
-        # order; the brake only decides WHEN the existing close sequence runs.
+        # BEFORE the ordinary exit policy.
+        #
+        # WHAT WAS WRONG (audit, 2026-08-21). This block set a flag, called
+        # `run_market_close_sequence()` and returned. That method is four
+        # lines: transition(POSTMARKET), transition(COMPLETE). It places NO
+        # order. The comment here claimed it "reus[ed] the same mandatory
+        # close-everything sequence _eod_close uses" -- but _eod_close is a
+        # management pass PLUS that transition, and the brake called only the
+        # half that fires nothing. The `return` then skipped
+        # `evaluate_and_enforce_exit` below, which is the ONLY call on this
+        # path that submits. So on the exact event the daily-loss brake
+        # exists for, the position stayed open, nothing was submitted, and
+        # "EMERGENCY CLOSE" was logged.
+        #
+        # It now drives the same forced-exit path a hard limit uses -- the
+        # one that goes through the canonical broker-truth execution boundary
+        # -- and verifies the result against the broker before anything is
+        # allowed to call itself closed.
         brake_reason = _emergency_brake(
             unrealized_pnl=getattr(valuation, "total_unrealized_pnl", None),
             realized_pnl=getattr(self._broker, "realized_pnl", 0.0),
@@ -2102,7 +2117,7 @@ class OptionsOSRunner:
             self._logger.critical("%s -- EMERGENCY CLOSE: %s", stage_label, brake_reason)
             self._governor_result_summary["emergency_close_reason"] = brake_reason
             self._emergency_closed = True
-            self._trading_brain_runtime.run_market_close_sequence()
+            self._execute_emergency_close(brake_reason, valuation, stage_label)
             return
 
         # Snapshot the group's open positions BEFORE the exit runs. The
@@ -2132,6 +2147,87 @@ class OptionsOSRunner:
         })
         self._capture_exit_fills(symbols_before_exit, result)
 
+
+    def _execute_emergency_close(self, brake_reason, valuation, stage_label: str) -> None:
+        """Actually flatten, then prove it against the broker.
+
+        Reuses the governor's own forced-exit path (the hard-limit branch),
+        which submits through the canonical broker-truth execution boundary.
+        Nothing new is built here -- the brake previously called a method that
+        only advanced a state machine.
+
+        The session is NOT allowed to call itself closed unless the broker
+        reports the group flat. If it does not, the summary carries
+        CRITICAL_UNFLATTENED_POSITION and the runtime is deliberately left
+        short of COMPLETE.
+        """
+        import asyncio as _asyncio
+
+        selected = self._governor_result_summary.get("strategy_selected")
+        result = None
+        try:
+            result = _asyncio.run(self._governor.evaluate_and_enforce_exit(
+                valuation, selected, None, None, PositionHealthThresholds(),
+                self._risk_budget()["requested_risk"],
+                force_exit_reason=brake_reason,
+            ))
+        except Exception as exc:  # noqa: BLE001 -- a failed brake must still report, never crash silently
+            self._logger.critical(
+                "%s -- EMERGENCY CLOSE FAILED TO EXECUTE (%s: %s). The position may still "
+                "be OPEN.", stage_label, type(exc).__name__, exc)
+            self._governor_result_summary["emergency_close_execution_error"] = f"{type(exc).__name__}: {exc}"
+
+        execution = getattr(result, "forced_execution", None)
+        status = getattr(execution, "status", None)
+        self._governor_result_summary["emergency_close_status"] = status
+        self._logger.critical("%s -- EMERGENCY CLOSE execution status=%s", stage_label, status)
+
+        flat, detail = self._broker_reports_flat()
+        self._governor_result_summary["emergency_close_broker_flat"] = flat
+        self._governor_result_summary["emergency_close_flat_detail"] = detail
+
+        if flat is True:
+            self._logger.critical("%s -- EMERGENCY CLOSE CONFIRMED FLAT by the broker.", stage_label)
+            try:
+                self._trading_brain_runtime.run_market_close_sequence()
+            except Exception as exc:  # noqa: BLE001 -- already flat; a transition error must not mask that
+                self._logger.warning("close sequence transition failed after a confirmed flat: %s", exc)
+            return
+
+        # flat is False (open legs) or None (could not establish). Both are
+        # refusals to declare the session closed. None is NOT treated as flat.
+        self._governor_result_summary["session_closed"] = False
+        self._governor_result_summary["closure_reason"] = "CRITICAL_UNFLATTENED_POSITION"
+        self._logger.critical(
+            "%s -- CRITICAL_UNFLATTENED_POSITION: broker flat=%s (%s) after an emergency "
+            "close. The session is NOT complete and the position is NOT confirmed closed. "
+            "Operator intervention required.", stage_label, flat, detail)
+
+    def _broker_reports_flat(self):
+        """(True|False|None, detail). None means we could not establish it.
+
+        UNFILTERED. Every other position read on this path goes through
+        PositionRealityRegistry, which intersects broker positions with an
+        in-memory table of registered symbols -- so a position Bujji never
+        registered is invisible to it by construction. This asks the broker
+        what it actually holds.
+
+        A read that fails returns None, never False: "I could not ask" must
+        never become "there is nothing there".
+        """
+        import asyncio as _asyncio
+
+        try:
+            positions = _asyncio.run(self._broker.get_open_positions())
+        except Exception as exc:  # noqa: BLE001
+            return None, f"position read failed: {type(exc).__name__}: {exc}"
+        if positions is None:
+            return None, "broker returned no position list"
+        open_legs = [p for p in positions if int(p.get("qty", 0) or 0) > 0]
+        if not open_legs:
+            return True, "broker reports no open legs"
+        return False, "open legs: " + ", ".join(
+            f"{p.get('symbol')}x{p.get('qty')}" for p in open_legs)
 
     def _current_leg_prices(self, as_of: str):
         """Live per-leg prices for this cycle, and whether they are real

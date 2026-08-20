@@ -117,9 +117,14 @@ class TestTheRunnerUsesOneSource:
         policy's initial_risk come from the same computation. Two call sites
         reading the raw config independently is how they drifted."""
         source = (REPO_ROOT / "bujji_options_os_runner.py").read_text()
-        # Exactly two call sites: the entry sizing and the exit policy's
-        # initial_risk. Both must read the helper, never the raw config.
-        assert source.count("self._risk_budget()") == 2
+        # Exactly THREE call sites: the entry sizing, the exit policy's
+        # initial_risk, and (2026-08-21) the emergency brake's forced exit.
+        # All must read the helper, never the raw config.
+        #
+        # The exact count is deliberate -- it forces a conscious decision
+        # whenever a new site appears, rather than letting one read the raw
+        # config unnoticed, which is exactly how these drifted apart before.
+        assert source.count("self._risk_budget()") == 3
         # The raw flat reads that caused the defect must be gone.
         assert 'session_cfg.get("requested_risk"' not in source
         assert 'self._session_cfg.get("requested_risk"' not in source

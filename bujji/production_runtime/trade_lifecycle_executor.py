@@ -113,6 +113,7 @@ class TradeLifecycleExecutor:
         self, evaluation: LifecycleEvaluationResult, clock: Clock,
         reduce_quantity: Optional[int] = None, hedge_instruction: Optional[dict] = None,
         reference_prices: Optional[Dict[str, float]] = None,
+        quantity_by_symbol: Optional[Dict[str, int]] = None,
     ) -> LifecycleExecutionResult:
         """`reference_prices`: optional {symbol: current_market_price},
         e.g. straight from F.3's own Portfolio Reality valuation.
@@ -134,7 +135,8 @@ class TradeLifecycleExecutor:
             )
 
         if action in (ACTION_REDUCE_SIZE, ACTION_MANDATORY_EXIT):
-            return await self._execute_reduce(pg_id, action, reduce_quantity, clock, reference_prices)
+            return await self._execute_reduce(pg_id, action, reduce_quantity, clock,
+                                              reference_prices, quantity_by_symbol)
 
         if action == ACTION_ADD_HEDGE:
             return await self._execute_hedge(pg_id, action, hedge_instruction, clock)
@@ -151,6 +153,7 @@ class TradeLifecycleExecutor:
     async def _execute_reduce(
         self, pg_id: str, action: str, reduce_quantity: Optional[int], clock: Clock,
         reference_prices: Optional[Dict[str, float]] = None,
+        quantity_by_symbol: Optional[Dict[str, int]] = None,
     ) -> LifecycleExecutionResult:
         if reduce_quantity is None or reduce_quantity <= 0:
             self._publish("LIFECYCLE_ACTION_FAILED", pg_id, action, clock)
@@ -174,9 +177,23 @@ class TradeLifecycleExecutor:
             contract = self._registry.contract_for_symbol(pg_id, symbol)
             client_order_id = f"{pg_id}-REDUCE-{clock().isoformat()}-{index}"
             leg_reference_price = reference_prices.get(symbol) if reference_prices else None
+            # PER-LEG BROKER RESIDUAL (2026-08-21). One `reduce_quantity` was
+            # applied to EVERY leg. Over-reducing a short does not stop at
+            # zero -- it OPENS AN OPPOSITE POSITION. When the caller supplies
+            # each leg's own broker-reported quantity, that is used, capped by
+            # the requested reduction so a reduce never exceeds its mandate.
+            leg_quantity = reduce_quantity
+            if quantity_by_symbol and symbol in quantity_by_symbol:
+                leg_quantity = min(int(quantity_by_symbol[symbol]), int(reduce_quantity))
+            if leg_quantity <= 0:
+                # Nothing of this leg remains at the broker. Skipping is the
+                # only safe action: sending the requested figure would open
+                # the opposite side.
+                self._publish("LIFECYCLE_LEG_ALREADY_FLAT", pg_id, action, clock)
+                continue
             try:
                 order_request = build_reduce_order(
-                    position, contract, reduce_quantity, client_order_id, reference_price=leg_reference_price,
+                    position, contract, leg_quantity, client_order_id, reference_price=leg_reference_price,
                 )
             except IllegalLifecycleOrderError as exc:
                 self._publish("LIFECYCLE_ACTION_FAILED", pg_id, action, clock)

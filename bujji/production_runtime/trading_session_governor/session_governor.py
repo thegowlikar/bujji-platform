@@ -137,7 +137,7 @@ class TradingSessionGovernor:
     async def evaluate_and_enforce_exit(
         self, valuation: PortfolioValuation, strategy_type: str, capital_status: Optional[str],
         portfolio_status: Optional[str], position_health_thresholds: Optional[PositionHealthThresholds],
-        initial_risk: Optional[float],
+        initial_risk: Optional[float], force_exit_reason: Optional[str] = None,
     ) -> ExitEnforcementResult:
         """Components 5 + 6 (per-tick portion). D.4's own evaluation is
         called exactly once, unmodified, via F.3's existing
@@ -145,7 +145,17 @@ class TradingSessionGovernor:
         alongside it. A hard limit is enforced immediately by this
         module, through F.4's own unmodified execute(); D.4's own
         advisory action is left for the caller to act on via F.4
-        directly, exactly as already established."""
+        directly, exactly as already established.
+
+        `force_exit_reason` (2026-08-21): drives the SAME hard-limit branch
+        below regardless of what the exit policy decided. Added for the
+        emergency brake, which previously called
+        `TradingBrainRuntime.run_market_close_sequence()` -- four lines that
+        transition POSTMARKET then COMPLETE and place NO order. Its in-code
+        comment claimed it "reus[ed] the same mandatory close-everything
+        sequence _eod_close uses"; that sequence fires nothing. The brake now
+        reuses THIS path, which is the only one that actually submits.
+        """
         if self._position_group_id is None:
             raise RuntimeError("evaluate_and_enforce_exit() called before any position was entered")
         if self._state_tracker.state == TradingSessionState.POSITION_ACTIVE:
@@ -162,13 +172,27 @@ class TradingSessionGovernor:
         })
 
         forced_execution = None
-        if policy_decision.is_hard_limit:
+        if policy_decision.is_hard_limit or force_exit_reason is not None:
             positions = await self._registry.positions_for_group(self._position_group_id)
-            full_quantity = positions[0]["qty"] if positions else 0
+            # BROKER RESIDUAL, PER LEG. This read `positions[0]["qty"]` and
+            # applied that single figure to EVERY leg. For a strangle whose
+            # legs carry equal lots it happens to be right; the moment they
+            # differ -- a partial fill, a partial prior reduce, an adjusted
+            # leg -- it over-reduces the smaller leg, and over-reducing a
+            # short OPENS AN OPPOSITE POSITION. The quantity now comes from
+            # each leg's own broker-reported qty.
+            quantity_by_symbol = {
+                p["symbol"]: int(p["qty"]) for p in positions if int(p.get("qty", 0)) > 0
+            }
+            full_quantity = max(quantity_by_symbol.values()) if quantity_by_symbol else 0
+            _trigger = (f"EMERGENCY_BRAKE:{force_exit_reason}" if force_exit_reason is not None
+                        else f"EXIT_POLICY:{policy_decision.decision}")
             forced_recommendation = RiskActionRecommendation(
                 action=ACTION_MANDATORY_EXIT, health_status=evaluation.recommendation.health_status,
-                reasons=(f"EXIT_POLICY:{policy_decision.decision}",),
-                explanation=f"Exit Policy (Session Governor) override -- NOT a D.4 recommendation: {policy_decision.reasoning}",
+                reasons=(_trigger,),
+                explanation=(f"Emergency brake override -- NOT a D.4 recommendation: {force_exit_reason}"
+                             if force_exit_reason is not None
+                             else f"Exit Policy (Session Governor) override -- NOT a D.4 recommendation: {policy_decision.reasoning}"),
                 evaluated_at=self._clock(),
             )
             forced_evaluation = LifecycleEvaluationResult(
@@ -186,9 +210,36 @@ class TradingSessionGovernor:
             }
             if full_quantity > 0:
                 forced_execution = await self._executor.execute(
-                    forced_evaluation, self._clock, reduce_quantity=full_quantity, reference_prices=reference_prices,
+                    forced_evaluation, self._clock,
+                    reduce_quantity=full_quantity, reference_prices=reference_prices,
+                    quantity_by_symbol=quantity_by_symbol,
                 )
-                self._state_tracker.transition(TradingSessionState.EXITED, reason=f"exit_policy:{policy_decision.decision}")
+                # EXITED ONLY ON A CONFIRMED EXIT. This transitioned on the
+                # mere RETURN of execute(), whether the orders filled, were
+                # rejected, or timed out to BROKER_TRUTH_UNKNOWN -- so
+                # end_session() then reported the session resolved after a
+                # failed flatten. The status is now read.
+                from bujji.production_runtime.trade_lifecycle_executor import STATUS_EXECUTED
+
+                if getattr(forced_execution, "status", None) == STATUS_EXECUTED:
+                    self._state_tracker.transition(
+                        TradingSessionState.EXITED, reason=f"exit_confirmed:{_trigger}")
+                else:
+                    # Deliberately left in MANAGING: the position is still
+                    # live as far as anything can prove, and end_session()'s
+                    # own "unresolved" reporting depends on this state.
+                    self._publish("EXIT_NOT_CONFIRMED", {
+                        "position_group_id": self._position_group_id,
+                        "status": getattr(forced_execution, "status", None),
+                        "trigger": _trigger,
+                    })
+            elif force_exit_reason is not None:
+                # An emergency brake that found NO broker position to reduce.
+                # Recorded rather than silently passing: either the position
+                # genuinely closed already, or the registry could not see it.
+                self._publish("EMERGENCY_EXIT_NO_POSITION_FOUND", {
+                    "position_group_id": self._position_group_id, "trigger": _trigger,
+                })
 
         return ExitEnforcementResult(lifecycle_evaluation=evaluation, policy_decision=policy_decision, forced_execution=forced_execution)
 
