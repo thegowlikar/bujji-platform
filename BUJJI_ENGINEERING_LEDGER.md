@@ -751,3 +751,39 @@ fails → orphan named; crash after INTENT → recovered from broker truth
 `is_filled` is still believed synchronously rather than polled to terminal
 state; no cancel-on-timeout; no periodic in-session reconciliation against the
 broker book; exits (`trade_lifecycle_executor`) still place unjournaled.
+
+## 2026-08-21 — P0-1/2/3: broker-truth order lifecycle (57de87a)
+
+**OMS: C3 (failure-injection verified). Broker Truth: C3. NOT CERTIFIED.**
+
+The class audit (§4) — not a hunch — found the third instance this week of
+*built, tested, never wired*: `ExecutionEngine.submit_and_confirm` already had
+idempotent placement, poll-to-terminal and cancel-on-timeout, with **zero
+production callers**. Every reference elsewhere was a comment saying another
+module "reuses the CONCEPT of" it — a parallel reimplementation of the idea
+while the real engine sat unused.
+
+Closed: fills now come from polling broker state, not from `place_order`'s
+immediate response. `UNKNOWN` is a first-class state that never becomes flat —
+a timed-out leg stays `SUBMIT_PENDING_UNKNOWN` and the runtime **blocks**
+rather than containing, because unwinding a position that may not exist opens
+an opposite one.
+
+Genuine gap found *in* the engine and fixed: `_await_fill` returned the
+pre-cancel poll, so a fill landing while the cancel was in flight was
+invisible. Now re-queries after cancel and keeps the **larger** fill —
+monotonic-in-fill, matching the journal's `NonMonotonicFillReport` discipline.
+
+Failure-injected: fills-on-3rd-poll → OPEN; never-fills → cancel + UNKNOWN +
+pending; cancel loses the race → **75 @ 121.75 recorded instead of a phantom
+flat**; confirmed rejection → SUBMIT_FAILURE; unreachable broker → UNKNOWN.
+A flawed test double also surfaced that the engine correctly *adopts* an order
+the broker already holds rather than double-placing — now tested as
+duplicate-order prevention.
+
+**Still open (next by uncontrolled-loss potential):** no *continuous*
+in-session reconciliation — broker truth is consulted at placement and at
+startup, so an intra-session divergence (a fill that arrives after we moved
+on, a manual/broker-side action) is invisible until the next restart. Exits
+still bypass the journal entirely. `EXPECTED/OBSERVED/RECONCILED/DIVERGED`
+position states are not yet modelled.
