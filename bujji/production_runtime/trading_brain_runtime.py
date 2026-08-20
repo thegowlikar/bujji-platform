@@ -228,12 +228,47 @@ class TradingBrainRuntime:
         # requirement is added (zero when the book is definitionally flat),
         # and the verdict gates the pipeline. Every failure path VETOES --
         # never a guess.
+        # THE BROKER'S OWN SYMBOL, NOT THE INTERNAL ONE (fixed 2026-08-20,
+        # found in the first live session that ever reached this gate).
+        #
+        # This used to send `contract.symbol` from `_leg_to_core_contract`,
+        # which builds "NIFTY2026-08-2524500CE" -- an INTERNAL identity, not a
+        # tradable one. FYERS could not resolve it, the margin call came back
+        # unusable, and the resulting unverified snapshot vetoed with
+        # MARGIN_NOT_CERTIFIED. Measured live on 2026-08-20:
+        #
+        #   'NIFTY2026-08-2524500CE'  -> verified=False  total_margin=None
+        #   'NSE:NIFTY26AUG22700PE'   -> verified=True   total_margin=98915.87
+        #
+        # The API was never broken. Every entry was blocked by a symbol format.
+        # This is the SAME trap D-7 fixed for the quote sync -- the chain
+        # speaks broker symbols, the internal contract does not -- and it was
+        # here too, unnoticed, because nothing had ever reached this gate.
+        #
+        # The chain row that produced each leg carries the real symbol, so it
+        # is looked up rather than rebuilt: a second string-builder would be a
+        # second thing to drift.
+        symbol_by_leg = {}
+        for row in chain:
+            row_strike = getattr(row, "strike", None)
+            row_type = getattr(row, "option_type", None)
+            row_symbol = getattr(row, "instrument_symbol", None)
+            if row_strike is not None and row_type and row_symbol:
+                symbol_by_leg[(float(row_strike), row_type)] = row_symbol
+
         try:
             margin_legs = []
+            unresolved = []
             for leg in proposal.legs:
-                contract = _leg_to_core_contract(leg, root.underlying, root.exchange_lot_size)
+                broker_symbol = symbol_by_leg.get((float(leg.strike), leg.option_type))
+                if not broker_symbol:
+                    # FAIL CLOSED AND LOUDLY. Falling back to the internal
+                    # symbol is exactly the defect above, and it would be
+                    # invisible: the call simply returns nothing usable.
+                    unresolved.append(f"{leg.option_type}{int(leg.strike)}")
+                    continue
                 margin_legs.append(MarginLegRequest(
-                    symbol=contract.symbol,
+                    symbol=broker_symbol,
                     qty=leg.ratio * root.exchange_lot_size * desired_quantity,
                     side=-1 if leg.side == "SELL" else 1,
                     # Live-certified span vocabulary (2026-07-19 evidence +
@@ -241,6 +276,9 @@ class TradingBrainRuntime:
                     instrument_type=2, product_type="INTRADAY",
                     limit_price=leg.premium,
                 ))
+            if unresolved:
+                raise LookupError(
+                    "no broker symbol in the chain for leg(s) " + ", ".join(unresolved))
             proposal_snapshot = root.margin_provider.get_portfolio_margin(margin_legs, root.clock)
         except Exception as exc:  # noqa: BLE001 -- an unpriceable proposal must never be approved
             proposal_snapshot = None

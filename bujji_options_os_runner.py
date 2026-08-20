@@ -131,6 +131,33 @@ def parse_args(argv) -> argparse.Namespace:
     return parser.parse_args(argv)
 
 
+def _entry_failure_reason(cycle_result) -> str:
+    """Why an entry did not fill -- the stage that ACTUALLY blocked it.
+
+    This used to read only `governor_result.blocking_stage` and fall back to
+    "not constructed" whenever `governor_result` was None -- which is exactly
+    what a Gate B veto produces. On 2026-08-20, the first live session ever to
+    reach that gate, the log said "not constructed" while the session
+    artifacts showed STRATEGY_PROPOSED followed immediately by
+    GATE_B_MARGIN_VETO: construction had SUCCEEDED and the margin gate
+    refused. A report that misstates the stage sends the next investigation
+    to the wrong module, and cost an hour here.
+
+    Order matters: `blocking_reason` is the most specific thing the runtime
+    can say, so it wins whenever it is populated.
+    """
+    if cycle_result is None:
+        return "no cycle result"
+    if getattr(cycle_result, "blocking_reason", None):
+        return cycle_result.blocking_reason
+    governor_result = getattr(cycle_result, "governor_result", None)
+    if governor_result is not None:
+        return governor_result.blocking_stage
+    if not getattr(cycle_result, "proposal", None):
+        return "not constructed"
+    return "constructed but not filled (no blocking reason reported)"
+
+
 def _emergency_brake(*, unrealized_pnl, realized_pnl, daily_loss_limit,
                      consecutive_blind_cycles, max_consecutive_blind_cycles) -> "Optional[str]":
     """Pure. The only loss authority BETWEEN scheduled exits (Master Plan D-6:
@@ -1251,8 +1278,14 @@ class OptionsOSRunner:
             ))
             del snapshots[:-window]
             if snapshots:
-                self._last_spot = getattr(snapshots[-1], "spot", None) or getattr(
-                    snapshots[-1], "price", None)
+                # MarketSnapshot.spot is a SpotSnapshot OBJECT; the number is
+                # its .ltp. Passing the object through made every level-context
+                # build fail all day on 2026-08-20 with "float() argument must
+                # be a string or a real number, not 'SpotSnapshot'" -- non-fatal
+                # and observation-only, so it degraded silently and L-5
+                # recorded nothing for the whole session.
+                spot_snapshot = getattr(snapshots[-1], "spot", None)
+                self._last_spot = getattr(spot_snapshot, "ltp", None)
             verdict = assess_stability(snapshots, _derive, strides=strides) if len(snapshots) >= window else None
             trail.append({
                 "cycle": cycles, "at": now.isoformat(), "spots": len(snapshots),
@@ -1421,7 +1454,7 @@ class OptionsOSRunner:
         self._governor_result_summary["entry_filled"] = cycle_result.filled if cycle_result else False
 
         if not cycle_result or not cycle_result.filled:
-            reason = cycle_result.governor_result.blocking_stage if cycle_result and cycle_result.governor_result else "not constructed"
+            reason = _entry_failure_reason(cycle_result)
             self._logger.info("Entry did not fill (reason=%s).", reason)
             return False
 
