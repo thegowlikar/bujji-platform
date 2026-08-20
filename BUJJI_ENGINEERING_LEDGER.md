@@ -552,3 +552,54 @@ reachable.**
 - `journalctl --since "today 09:14"` fails to parse; `--since today` works.
 - Long-lived SSH watchers get reset (255). Use short-lived connections in a
   local loop.
+
+## 2026-08-20 evening — direction gets three more sources
+
+Audit finding: `determine_market_direction(psi, mssi)` used **two lenses, both
+reading NIFTY spot price** at 30s polls. One instrument, one field. Disagreement
+→ UNKNOWN, which is what the first live session reported most of the day.
+
+**Now four lenses:**
+- price structure (spot) · market structure (spot)
+- **options positioning** (MPPI, ~199k option rows/day) — the slot
+  `OPTIONS_POSITIONING_DIRECTION` had been in KNOWN_LENS_NAMES **unfilled**
+- **futures basis change** — `FUTURES_POSITIONING_DIRECTION`, also unfilled
+
+**No inversion** on MPPI: bias is already normalised to PRICE direction
+(verified — call writers dominant → BEARISH_POSITIONING). **Confidence capped
+at MODERATE** on both new lenses: positioning is intent, basis is one thin
+interval; HIGH stays reserved for MSSI's structural breakout/breakdown.
+**MIXED → UNKNOWN, never NEUTRAL.**
+
+**Basis reads CHANGE, never level.** NIFTY futures carry a premium that decays
+to expiry, so a level-keyed lens reports bullish every morning and bearish every
+expiry. A basis deep in premium but *falling* is bearish; in discount but
+*rising* is bullish — level logic gets both backwards.
+
+### MPPI was running on 3 of 5 lenses and nobody knew
+Plumbing "previous observation" for basis revealed
+`assess_participant_positioning(chain, timestamp=...)` **never received a
+previous chain** — so OI migration and OI expansion/contraction returned UNKNOWN
+on **every cycle Bujji has ever run**. Their docstrings blame *"no intraday OI
+history exists (Bhavcopy is end-of-day only)"* — true when written, false since
+the live chain capture began. **One argument fixed it.**
+
+### DEPTH IMBALANCE: deliberately NOT built
+Requested, but the data does not exist in the decision path — `LiquidityReading`
+has no quantities (its docstring says depth "is NOT assumed available"),
+`get_depth()` has **zero consumers**, and the depth poller writes to layer0 which
+the live cycle never reads. Building it would mean inventing the input.
+**OPERATOR DECISION:** which data path — per-cycle `get_depth()` (+1 API call
+against the shared budget) or reading layer0 mid-session (crosses a write-only
+store boundary).
+
+### My own error, recorded
+A generic regex patch aimed at authorization guards **neutered an unrelated
+safety test** (`assert True or ...`, always passes) guarding `broker/guard.py` —
+files this work never touched. Restored; a grep for always-true assertions across
+tests/ now returns none. **Lesson: never regex-patch assertions generically.**
+
+Also: a lens-count assertion went stale **twice in one day** (2→3→4). All such
+assertions are now name-based.
+
+7,612 green.
