@@ -787,3 +787,35 @@ startup, so an intra-session divergence (a fill that arrives after we moved
 on, a manual/broker-side action) is invisible until the next restart. Exits
 still bypass the journal entirely. `EXPECTED/OBSERVED/RECONCILED/DIVERGED`
 position states are not yet modelled.
+
+## 2026-08-21 — Bypass audit + exit broker truth (be6e0c6)
+
+Rule-1 bypass audit across **every** `place_order` / `cancel_order` /
+`get_order` / `get_positions` call site. One production BYPASS remained:
+`TradeLifecycleExecutor`, reached on every stop-loss, target, reduce, hedge
+and EOD pass, still calling `broker.place_order` directly.
+
+Three defects on that live path, now fixed: `PENDING`/`UNKNOWN` → `REJECTED`
+(an exit reported as failed while still working); `LIFECYCLE_ORDER_FILLED`
+published unconditionally without reading `is_filled`; closure markable from a
+broker read taken while an exit was unsettled.
+
+**Classification of remaining call sites:** `execution/engine.py`,
+`execution_journal_bridge.py`, `position_group_recovery.py`,
+`position_reality_registry.py` (read model) = CANONICAL. `msi_entry_bridge.
+dispatch_via_paper_broker` = DUPLICATE_IMPLEMENTATION, unwired.
+`shadow_lifecycle/orchestrator.py`, `position_lifecycle/paper_bridge.py`,
+`state_persistence/paper_broker.py`, `run_live_shadow.py` = LEGACY, not
+runner-reachable.
+
+**Still open, highest risk first:**
+1. **No continuous in-session reconciliation.** Broker truth is consulted at
+   placement, at startup, and via the registry's position read — never on a
+   periodic loop. An intra-session divergence is invisible.
+2. **EOD is not a state machine** (Rule 13). `run_market_close_sequence()` is
+   only a POSTMARKET→COMPLETE transition: no position discovery, no exit
+   intents, no final broker-truth flat check. The session can declare COMPLETE
+   without ever confirming it is flat.
+3. `EXPECTED/OBSERVED/RECONCILED/DIVERGED` position states not modelled.
+4. Exit orders are broker-truth-placed but still not journaled as a position
+   group (entry is).
