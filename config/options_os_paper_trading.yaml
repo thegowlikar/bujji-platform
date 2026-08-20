@@ -143,10 +143,23 @@ providers:
   # Live per-leg prices for revaluation. Without this every cycle is
   # BLIND (revalued from entry prices) and the runner says so loudly.
   tick_source:
-    # broker = the execution-neutered live FYERS data broker (the regime
-    # evidence instance). Fails closed unless regime is market_thesis_live --
-    # synthetic ticks must be declared as paper_synthetic, never implied.
-    type: broker
+    # websocket = FyersTickFeed (certified live ~2.4 ticks/s, silence
+    # watchdog, generation-safe reconnect) with per-symbol REST fallback via
+    # the execution-neutered live data broker. Same fail-closed guard as
+    # type=broker: requires regime market_thesis_live, or refuses to start.
+    #
+    # WHY (2026-08-21, Layer 1/2 audit): the management pass evaluates the
+    # stop-loss once per interval, so the tick source's freshness bounds the
+    # window an unbounded loss can run unchecked. 60-second REST polling left
+    # a measured worst case of ~Rs 39,764 inside one interval on a real
+    # straddle credit. The websocket closes most of that window; the REST
+    # fallback keeps every leg priceable when the socket is quiet.
+    type: websocket
+    # A tick older than this is treated as NO tick for that leg (REST covers
+    # it). Tighter than the 120s feed-silence threshold, so a single quiet
+    # symbol falls back before the whole feed is declared silent.
+    max_tick_age_seconds: 90
+    silence_threshold_seconds: 120
 
   # Bujji derives its OWN regime from live market evidence. No human
   # types a regime; if the evidence is too thin, the session honestly

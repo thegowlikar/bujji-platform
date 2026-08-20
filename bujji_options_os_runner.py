@@ -437,6 +437,7 @@ class OptionsOSRunner:
         # Optional intraday tick source. When absent the runner falls
         # back to entry prices and says so -- see _current_leg_prices().
         self._price_provider = None
+        self._tick_feed = None  # set only by tick_source.type=websocket
         self._priced_from_ticks_cycles = 0
         self._blind_cycles = 0
 
@@ -800,6 +801,55 @@ class OptionsOSRunner:
             self._logger.info(
                 "Tick source: FYERS live quotes (execution-neutered data broker; "
                 "same instance as the regime evidence path)")
+        elif tick_type == "websocket":
+            import asyncio as _asyncio
+            import os as _os
+
+            from bujji.broker.fyers_ws import FyersTickFeed, TickSilenceWatchdog
+            from bujji.production_runtime.intraday_price_provider import (
+                LiveTickProvider, WebsocketTickProvider)
+
+            data_broker = getattr(self, "_intelligence_broker", None)
+            if regime_type != "market_thesis_live" or data_broker is None:
+                # The identical fail-closed guard type=broker carries, for the
+                # identical reason: without the live FYERS data broker the only
+                # fallback available would be the synthetic PaperBroker, and a
+                # websocket feed backed by a random-walk fallback would price
+                # real position management off fabricated numbers whenever the
+                # socket went quiet -- silently, which is the worst way.
+                raise ConfigurationError(
+                    "providers.tick_source.type=websocket requires the live FYERS data "
+                    "broker (providers.regime.type=market_thesis_live) as its REST "
+                    "fallback. Declare type=paper_synthetic to opt into synthetic "
+                    "ticks explicitly, or type=observation_store for replay."
+                )
+            app_id, token = _os.getenv("FYERS_APP_ID"), _os.getenv("FYERS_ACCESS_TOKEN")
+            if not app_id or not token:
+                raise ConfigurationError(
+                    "FYERS_APP_ID / FYERS_ACCESS_TOKEN must be set for "
+                    "tick_source.type=websocket -- the same credentials the live "
+                    "regime path already requires."
+                )
+            # Verified live (fyers_ws module docstring): the websocket token
+            # format is "{app_id}:{access_token}".
+            self._tick_feed = FyersTickFeed(
+                app_id, f"{app_id}:{token}", self._logger,
+                log_path=str(REPO_ROOT / "logs"))
+            self._tick_feed.start()
+            watchdog = TickSilenceWatchdog(
+                silence_threshold_seconds=float(tick_cfg.get("silence_threshold_seconds", 120.0)),
+                logger=self._logger)
+            self._price_provider = WebsocketTickProvider(
+                self._tick_feed, watchdog,
+                LiveTickProvider(data_broker, _asyncio.run),
+                max_tick_age_seconds=float(tick_cfg.get("max_tick_age_seconds", 90.0)),
+            )
+            self._logger.info(
+                "Tick source: FYERS WEBSOCKET (certified ~2.4 ticks/s) with "
+                "per-symbol REST fallback via the execution-neutered data broker. "
+                "max_tick_age=%ss silence_threshold=%ss",
+                tick_cfg.get("max_tick_age_seconds", 90.0),
+                tick_cfg.get("silence_threshold_seconds", 120.0))
         elif tick_type == "paper_synthetic":
             import asyncio as _asyncio
 
@@ -2360,6 +2410,18 @@ class OptionsOSRunner:
     def _shutdown(self) -> None:
         self._stage = RunnerStage.SHUTDOWN
         self._logger.info("SHUTDOWN -- stage_reached=%s", self._stage)
+        # The tick feed owns a background OS thread and a real socket; a
+        # session must not leave either running behind it. stop() is
+        # idempotent and refuses restarts, so this is safe whatever state
+        # the feed reached.
+        feed = getattr(self, "_tick_feed", None)
+        if feed is not None:
+            try:
+                feed.stop()
+                self._logger.info("Tick feed stopped (connect_count=%s).",
+                                  getattr(feed, "connect_count", None))
+            except Exception as exc:  # noqa: BLE001 -- teardown must not mask the session result
+                self._logger.warning("tick feed stop failed: %s", exc)
         # No auto-resume, no retry, no hidden recovery: this method only
         # logs and releases whatever was constructed in _startup(). A
         # future invocation of this runner always begins a brand new

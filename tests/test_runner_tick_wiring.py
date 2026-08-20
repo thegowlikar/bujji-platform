@@ -79,13 +79,22 @@ class TestTickSourceIsActuallyConstructed:
         assert isinstance(r._price_provider, LiveTickProvider)
         assert any("PAPER SYNTHETIC" in m for m in caplog.messages)
 
-    def test_production_config_pairs_broker_ticks_with_live_regime_and_warmup(self):
+    def test_production_config_pairs_websocket_ticks_with_live_regime_and_warmup(self):
         # Config-level guard: the production yaml must keep the combination
-        # that makes type=broker constructible AND evidence temporal.
+        # that makes the tick source constructible AND evidence temporal.
+        # Updated 2026-08-21 (operator directive): broker -> websocket. The
+        # websocket branch carries the identical market_thesis_live guard,
+        # because its REST fallback IS the live data broker -- without it the
+        # only fallback would be the synthetic PaperBroker.
         import yaml as _yaml
         cfg = _yaml.safe_load(open("/opt/bujji/app/config/options_os_paper_trading.yaml"))
         prov = cfg["providers"]
-        assert prov["tick_source"]["type"] == "broker"
+        assert prov["tick_source"]["type"] == "websocket"
+        # Staleness bound must stay tighter than the feed-silence threshold,
+        # so a single quiet symbol falls back to REST BEFORE the whole feed
+        # is declared silent.
+        assert (prov["tick_source"]["max_tick_age_seconds"]
+                < prov["tick_source"]["silence_threshold_seconds"])
         assert prov["regime"]["type"] == "market_thesis_live"
         warmup = prov["regime"]["warmup"]
         assert warmup["polls"] >= 3, "PSI needs >= 3 price deltas"

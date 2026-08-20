@@ -198,6 +198,19 @@ _DATA_QUALITY_GATE_AUTHORIZED = (
 )
 
 
+# AUTHORIZED 2026-08-21 (operator directive: "wire the websocket into the
+# trading runner"). WebsocketTickProvider joins the existing provider family
+# in intraday_price_provider.py -- the same seam Historical/LiveTickProvider
+# already occupy, so the runner swaps an implementation instead of growing a
+# data path. Read-only market data: the provider imports no order path and
+# the feed it wraps cannot place, modify or cancel anything. Existing
+# providers in the file are unmodified. See
+# tests/test_websocket_tick_provider.py.
+_WEBSOCKET_TICK_PROVIDER_AUTHORIZED = (
+    "bujji/production_runtime/intraday_price_provider.py",
+)
+
+
 def test_no_forbidden_module_imports():
     out = _grep(FORBIDDEN_IMPORTS, RECORDER_FILE)
     assert out == "", f"forbidden import found: {out}"
@@ -295,7 +308,7 @@ def test_no_protected_execution_lineage_touched():
         cwd="/opt/bujji/app", capture_output=True, text=True,
     )
     changed = [l for l in result.stdout.strip().splitlines() if l]
-    changed = [l for l in changed if l not in _PAPERBROKER_V2_AUTHORIZED + _LOT_SIZE_AUTHORITATIVE_AUTHORIZED + _CPC_SAFETY_SPINE_AUTHORIZED + _CPC_EVIDENCE_AND_REALISM_AUTHORIZED + _LIVE_PREMIUM_FIX_AUTHORIZED + _THREE_PART_SELECTION_AUTHORIZED + _DEFINED_RISK_MODE_AUTHORIZED + _LEARNING_LOOP_AUTHORIZED + _DATA_QUALITY_GATE_AUTHORIZED]
+    changed = [l for l in changed if l not in _PAPERBROKER_V2_AUTHORIZED + _LOT_SIZE_AUTHORITATIVE_AUTHORIZED + _CPC_SAFETY_SPINE_AUTHORIZED + _CPC_EVIDENCE_AND_REALISM_AUTHORIZED + _LIVE_PREMIUM_FIX_AUTHORIZED + _THREE_PART_SELECTION_AUTHORIZED + _DEFINED_RISK_MODE_AUTHORIZED + _LEARNING_LOOP_AUTHORIZED + _DATA_QUALITY_GATE_AUTHORIZED + _WEBSOCKET_TICK_PROVIDER_AUTHORIZED]
     forbidden_prefixes = (
         "bujji/msi_trade_construction/", "bujji/risk_governor/", "bujji/execution_engine/",
         "bujji/trading_brain/", "bujji/msi_shadow_trading/", "bujji/mic_replay/",

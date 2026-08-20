@@ -136,6 +136,139 @@ class HistoricalTickProvider(IntradayPriceProvider):
         return None
 
 
+class WebsocketTickProvider(IntradayPriceProvider):
+    """Live per-leg prices from the FYERS websocket, REST as fallback.
+
+    WHY THIS EXISTS (the largest uncontrolled-loss path, Layer 1/2 audit,
+    2026-08-21). The stop-loss, the daily loss limit and the emergency brake
+    are evaluated once per management pass, so the polling interval IS the
+    width of the window in which an unbounded loss runs unchecked. Measured
+    over 168,194 real 5-minute NIFTY bars, the worst single bar ranged 611.8
+    points -- ~Rs 39,764 against a real 240.95-point straddle credit, 2.5x
+    the stop, inside ONE 60-second REST interval. FyersTickFeed (certified
+    live at ~2.4 ticks/s, with its own silence watchdog and generation-safe
+    reconnect) existed the whole time and was referenced by the trading
+    runner only inside a comment. This wires it.
+
+    DESIGN. The feed is PRIMARY; the broker's REST get_ltp is a PER-SYMBOL
+    fallback, not an either/or switch. Each call:
+
+      1. subscribes any not-yet-subscribed leg symbols (FyersTickFeed's own
+         `_pending_symbols` makes this idempotent, and its on_connect closure
+         deterministically restores subscriptions across reconnects -- the
+         installed SDK does not, which that class documents and works around);
+      2. drives one TickSilenceWatchdog check off this call's own cadence --
+         the management loop is the heartbeat, no extra thread is added;
+      3. answers each symbol from the freshest source available:
+         a live tick no older than `max_tick_age_seconds`, else REST for
+         THAT symbol only, else None.
+
+    None propagates -- never the entry price, never a stale tick relabelled
+    fresh. `revalue()` already refuses a partially priced group, and
+    substituting anything here would silently reintroduce the exact
+    flat-P&L defect this provider family exists to remove.
+
+    STALENESS BOUND. `max_tick_age_seconds` defaults to 90: three missed
+    ~30s index broadcast intervals, and tighter than the watchdog's own
+    120s silence threshold so a symbol goes to REST fallback BEFORE the
+    feed as a whole is declared silent. A stale tick is treated as no tick
+    -- age is measured per symbol from the feed's own receipt clock.
+
+    READ-ONLY. Ticks and quotes only; this class never imports an order
+    path and never places, modifies, or cancels anything.
+    """
+
+    def __init__(self, feed, watchdog, fallback: "LiveTickProvider",
+                 *, max_tick_age_seconds: float = 90.0,
+                 market_hours_fn=None, monotonic=None, logger=None) -> None:
+        import logging as _logging
+        import time as _time
+
+        self._feed = feed
+        self._watchdog = watchdog
+        self._fallback = fallback
+        self._max_tick_age_seconds = max_tick_age_seconds
+        # Injected for tests; real callers take the defaults.
+        self._market_hours_fn = market_hours_fn or (lambda: True)
+        self._monotonic = monotonic or _time.monotonic
+        self._log = logger or _logging.getLogger("bujji.websocket_tick_provider")
+        self._subscribed: set = set()
+
+    def get_prices(self, contracts_by_symbol, as_of):
+        symbols = list(contracts_by_symbol)
+        self._ensure_subscribed(symbols)
+        self._drive_watchdog(symbols)
+
+        prices: Dict[str, Optional[float]] = {}
+        rest_needed = {}
+        for symbol, contract in contracts_by_symbol.items():
+            tick = self._fresh_tick(symbol)
+            if tick is not None:
+                prices[symbol] = tick
+            else:
+                rest_needed[symbol] = contract
+
+        if rest_needed:
+            # Fallback is per symbol: legs with a fresh tick keep it, and
+            # only the unpriced remainder costs REST calls against the
+            # shared host-wide FYERS budget.
+            self._log.info(
+                "websocket priced %d/%d legs; falling back to REST for %s",
+                len(prices), len(symbols), sorted(rest_needed))
+            prices.update(self._fallback.get_prices(rest_needed, as_of))
+        return prices
+
+    # ------------------------------------------------------------------ #
+    def _ensure_subscribed(self, symbols) -> None:
+        fresh = [s for s in symbols if s not in self._subscribed]
+        if not fresh:
+            return
+        try:
+            self._feed.subscribe(fresh)
+            self._subscribed.update(fresh)
+        except Exception as exc:  # noqa: BLE001 -- a failed subscribe leaves REST fallback intact
+            self._log.warning("websocket subscribe failed (%s); REST fallback covers "
+                              "these legs this cycle", exc)
+
+    def _drive_watchdog(self, symbols) -> None:
+        """One watchdog check per get_prices call -- the management loop's
+        own cadence is the heartbeat. tick_age is the age of the FRESHEST
+        subscribed symbol: the watchdog guards the FEED (connected but
+        wholly silent), while per-symbol staleness is `_fresh_tick`'s job.
+        A wholly-unticked feed yields tick_age None, which the watchdog
+        treats as not-silent -- correct at session start, before the first
+        tick has ever arrived; the REST fallback prices every leg then.
+        """
+        if self._watchdog is None:
+            return
+        try:
+            ages = [age for age in (self._feed.tick_age_seconds(s) for s in symbols)
+                    if age is not None]
+            self._watchdog.check(
+                tick_age=min(ages) if ages else None,
+                is_connected=self._feed.is_connected,
+                market_hours=self._market_hours_fn(),
+                now_monotonic=self._monotonic(),
+                force_reconnect_fn=self._feed.force_reconnect,
+            )
+        except Exception as exc:  # noqa: BLE001 -- the watchdog must never cost a valuation
+            self._log.warning("tick watchdog check failed: %s", exc)
+
+    def _fresh_tick(self, symbol) -> Optional[float]:
+        try:
+            price = self._feed.latest(symbol)
+            if price is None or not price > 0:
+                return None
+            age = self._feed.tick_age_seconds(symbol)
+            if age is None or age > self._max_tick_age_seconds:
+                # A stale tick is no tick. Relabelling it fresh would price
+                # a moving position off a stopped clock.
+                return None
+            return float(price)
+        except Exception:  # noqa: BLE001 -- an unreadable feed is unknown, never a price
+            return None
+
+
 class LiveTickProvider(IntradayPriceProvider):
     """Reads live prices from a broker's own read-only quote call."""
 
