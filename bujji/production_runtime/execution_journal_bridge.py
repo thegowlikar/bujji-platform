@@ -46,6 +46,62 @@ from bujji.trading_brain.risk_governor.position_group_mint import mint_position_
 from bujji.trading_brain.risk_governor.position_group_recovery import recover_group
 
 
+def broker_truth_place_fn(execution_engine, run_async, logger):
+    """A `place_fn` that returns BROKER TRUTH instead of a synchronous belief.
+
+    WHAT THIS REPLACES. `journaled_entry` was handed
+    `lambda o: _await(broker.place_order(o))` and read `is_filled` off the
+    immediate response. That is true of PaperBroker and FALSE of any real
+    broker, where an order is ACKNOWLEDGED first and fills asynchronously.
+    Against FYERS the previous path would read PENDING as "not filled",
+    conclude the leg never happened, and leave Bujji short while believing it
+    was flat -- the same invisible-position failure as an uncontained partial,
+    arriving through the asynchronous door.
+
+    `ExecutionEngine.submit_and_confirm` already solved this and had ZERO
+    production callers: idempotent placement (lookup-before-place, and
+    verify-don't-re-place on error), poll-to-terminal against a deadline,
+    cancel-on-timeout, and -- as of 2026-08-21 -- post-cancel reconciliation
+    for a late fill. This adapts it to the sync `place_fn` shape.
+
+    UNKNOWN IS NOT "NOT FILLED". A timeout means Bujji does not yet know. The
+    returned OrderResult keeps status UNKNOWN with filled_quantity 0, and the
+    CALLER must treat that as unresolved truth -- never as flat. Converting
+    the engine's ExecutionError into a synthetic REJECTED here would destroy
+    exactly that distinction, so a zero-fill raise is only translated to
+    REJECTED when the engine actually confirmed a rejection.
+    """
+    from bujji.execution.engine import ExecutionError
+
+    def place(request):
+        try:
+            return run_async(execution_engine.submit_and_confirm(request))
+        except ExecutionError as exc:
+            message = str(exc)
+            # "Order rejected: ..." is the engine's own CONFIRMED-rejection
+            # path. Anything else (not filled / not confirmed) is ambiguous
+            # and must stay UNKNOWN.
+            if message.startswith("Order rejected:"):
+                logger.warning("broker CONFIRMED rejection for %s: %s",
+                               request.client_order_id, message)
+                return OrderResult(request.client_order_id, OrderStatus.REJECTED,
+                                   message=message)
+            logger.critical(
+                "BROKER TRUTH UNKNOWN for %s: %s -- this order may or may not "
+                "have filled. Treating as UNKNOWN, never as flat.",
+                request.client_order_id, message)
+            return OrderResult(request.client_order_id, OrderStatus.UNKNOWN,
+                               message=message)
+        except Exception as exc:  # noqa: BLE001 -- ambiguity is UNKNOWN, not failure
+            logger.critical(
+                "BROKER TRUTH UNKNOWN for %s (%s: %s) -- treating as UNKNOWN.",
+                request.client_order_id, type(exc).__name__, exc)
+            return OrderResult(request.client_order_id, OrderStatus.UNKNOWN,
+                               message=f"{type(exc).__name__}: {exc}")
+
+    return place
+
+
 @dataclass(frozen=True)
 class JournaledEntryOutcome:
     position_group_id: Optional[str]
@@ -55,6 +111,14 @@ class JournaledEntryOutcome:
     unfilled: Tuple[Tuple[OrderRequest, OrderResult], ...]
     journal_failures: Tuple[str, ...] = ()
     blocked_reason: Optional[str] = None
+    # Legs whose real broker state could not be established. NOT "unfilled":
+    # each of these may or may not be a live position, and the only safe
+    # reading is that position truth is unknown until reconciled.
+    truth_unknown: Tuple[str, ...] = ()
+
+    @property
+    def position_truth_known(self) -> bool:
+        return not self.truth_unknown
 
 
 @dataclass(frozen=True)
@@ -115,6 +179,7 @@ def journaled_entry(
     filled_pairs: List[Tuple[OrderRequest, OrderResult]] = []
     unfilled_pairs: List[Tuple[OrderRequest, OrderResult]] = []
     journal_failures: List[str] = []
+    truth_unknown: List[str] = []
 
     for request in order_requests:
         coid = request.client_order_id
@@ -137,7 +202,13 @@ def journaled_entry(
         # -- Record what the broker said. Post-placement journal failures
         #    are CRITICAL but never raise: the fill already happened. ------
         try:
-            if result.status is OrderStatus.REJECTED:
+            if result.status is OrderStatus.UNKNOWN:
+                # No ACK, no FAILURE: both would assert knowledge we do not
+                # have. The leg stays SUBMIT_PENDING_UNKNOWN, which is the
+                # journal's own word for exactly this condition and is what
+                # recovery scans for.
+                pass
+            elif result.status is OrderStatus.REJECTED:
                 journal.append_event(
                     pg_id, "SUBMIT_FAILURE", f"{pg_id}:SUBMIT_FAILURE:{coid}",
                     {"client_order_id": coid,
@@ -174,13 +245,26 @@ def journaled_entry(
                 "will re-derive this leg from broker truth via its SUBMIT_INTENT.",
                 coid, exc)
 
-        (filled_pairs if result.is_filled else unfilled_pairs).append((request, result))
+        if result.status is OrderStatus.UNKNOWN:
+            # NEITHER filled nor unfilled. Deliberately kept out of both
+            # buckets: putting it in `unfilled` would let containment try to
+            # unwind a position that may not exist (creating an opposite one),
+            # and putting it in `filled` would claim a position that may not
+            # exist. The leg also stays SUBMIT_PENDING_UNKNOWN in the journal,
+            # so the next startup recovery pass resolves it from broker truth.
+            truth_unknown.append(coid)
+        else:
+            (filled_pairs if result.is_filled else unfilled_pairs).append((request, result))
 
     return JournaledEntryOutcome(
         position_group_id=pg_id, order_results=tuple(results),
-        all_filled=bool(results) and not unfilled_pairs and bool(filled_pairs),
+        # An UNKNOWN leg can never make an entry "all filled" -- the whole
+        # point is that we do not know what happened to it.
+        all_filled=(bool(results) and not unfilled_pairs and not truth_unknown
+                    and bool(filled_pairs)),
         filled=tuple(filled_pairs), unfilled=tuple(unfilled_pairs),
-        journal_failures=tuple(journal_failures))
+        journal_failures=tuple(journal_failures),
+        truth_unknown=tuple(truth_unknown))
 
 
 def contain_partial_entry(

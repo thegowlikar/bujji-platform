@@ -80,6 +80,19 @@ class TradingBrainCompositionRoot:
     exchange_lot_size: int
     instrument_type: str
     product_type: str
+    # Broker-truth execution (2026-08-21). ExecutionEngine.submit_and_confirm
+    # -- idempotent placement, poll-to-terminal, cancel-on-timeout,
+    # post-cancel reconciliation.
+    #
+    # Placed LAST because it carries a default and every field above does not
+    # -- a dataclass cannot follow a defaulted field with a non-defaulted one.
+    # (Same trap as FutureSnapshot.total_buy_qty on 2026-08-20.)
+    #
+    # Optional so every existing construction site keeps working: when absent,
+    # process_entry_cycle falls back to the direct broker call, which is
+    # correct for PaperBroker-only test configs and is logged rather than
+    # silently assumed equivalent.
+    execution_engine: Any = None
 
 
 def build_trading_brain_composition_root(
@@ -93,6 +106,7 @@ def build_trading_brain_composition_root(
     exchange_lot_size: int,
     instrument_type: str = "OPTIDX",
     product_type: str = "MARGIN",
+    execution_engine=None,
     market_regime_provider: Optional[Callable[[], Optional[str]]] = None,
     calibration_store: Optional[MarginCalibrationStore] = None,
     cache_ttl_seconds: Optional[float] = None,
@@ -124,5 +138,5 @@ def build_trading_brain_composition_root(
         capital_safety_thresholds=capital_safety_thresholds, portfolio_risk_thresholds=portfolio_risk_thresholds,
         risk_policy=risk_policy or RiskPolicy(), position_health_thresholds=position_health_thresholds,
         underlying=underlying, exchange_lot_size=exchange_lot_size, instrument_type=instrument_type,
-        product_type=product_type,
+        product_type=product_type, execution_engine=execution_engine,
     )

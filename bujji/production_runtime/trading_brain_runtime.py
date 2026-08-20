@@ -383,12 +383,28 @@ class TradingBrainRuntime:
         # one-legged short left standing was the exact uncontrolled-loss
         # mechanism this closes -- and before this, it was also invisible.
         from bujji.production_runtime.execution_journal_bridge import (
-            contain_partial_entry, journaled_entry)
+            broker_truth_place_fn, contain_partial_entry, journaled_entry)
 
         import logging as _logging
         _exec_log = _logging.getLogger("bujji.trading_brain_runtime.execution")
+
+        # BROKER TRUTH, not a synchronous belief (2026-08-21). Previously this
+        # read is_filled off place_order's immediate response -- true of
+        # PaperBroker, false of any real broker, where an order is
+        # ACKNOWLEDGED first and fills asynchronously. `execution_engine` is
+        # ExecutionEngine.submit_and_confirm: idempotent placement,
+        # poll-to-terminal against a deadline, cancel-on-timeout, post-cancel
+        # reconciliation. When the root does not carry one, the direct call is
+        # used -- correct for PaperBroker-only test configs, and disclosed
+        # rather than silently equivalent.
+        engine = getattr(root, "execution_engine", None)
+        if engine is not None:
+            place_fn = broker_truth_place_fn(engine, _await, _exec_log)
+        else:
+            place_fn = lambda order: _await(root.broker.place_order(order))
+
         entry_outcome = journaled_entry(
-            root.journal, lambda order: _await(root.broker.place_order(order)),
+            root.journal, place_fn,
             order_requests, plan_id=proposal.assessment_id,
             strategy_id=proposal.strategy_family, underlying=root.underlying,
             clock=root.clock, logger=_exec_log,
@@ -402,10 +418,32 @@ class TradingBrainRuntime:
         order_results = entry_outcome.order_results
         all_filled = entry_outcome.all_filled
 
+        # POSITION TRUTH UNKNOWN -> DO NOT GUESS, DO NOT UNWIND.
+        #
+        # A leg whose broker state could not be established may or may not be
+        # a live position. Containment here would be a guess in the most
+        # expensive direction: unwinding a position that does not exist opens
+        # an OPPOSITE one. So nothing is placed, the leg stays
+        # SUBMIT_PENDING_UNKNOWN in the journal (which is what the next
+        # startup recovery pass scans for), and the caller is told position
+        # truth is unresolved so it can stop taking new risk.
+        if entry_outcome.truth_unknown:
+            _exec_log.critical(
+                "POSITION TRUTH UNKNOWN for leg(s) %s -- these orders may or may "
+                "not be live positions. NOT unwinding (that would be a guess), "
+                "NOT claiming flat. Reconcile against the broker before any "
+                "further risk.", list(entry_outcome.truth_unknown))
+            return TradingBrainCycleResult(
+                proposal=proposal, governor_result=governor_result, context_unavailable=None,
+                order_results=entry_outcome.order_results,
+                approved_quantity=governor_result.final_quantity, filled=False,
+                blocking_reason="BROKER_TRUTH_UNKNOWN:" + ",".join(entry_outcome.truth_unknown),
+            )
+
         containment = None
         if entry_outcome.filled and not all_filled:
             containment = contain_partial_entry(
-                root.journal, lambda order: _await(root.broker.place_order(order)),
+                root.journal, place_fn,
                 entry_outcome, underlying=root.underlying,
                 strategy_id=proposal.strategy_family, clock=root.clock, logger=_exec_log,
             )

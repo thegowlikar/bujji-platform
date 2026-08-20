@@ -593,8 +593,48 @@ class OptionsOSRunner:
             self._logger.warning("RISK MEMORY -- %d record(s) skipped: %s",
                                  hydration.records_skipped, "; ".join(hydration.skip_reasons))
 
+        # BROKER-TRUTH EXECUTION (2026-08-21). ExecutionEngine already
+        # implemented idempotent placement, poll-to-terminal against a
+        # deadline, cancel-on-timeout and (as of today) post-cancel
+        # reconciliation -- and had ZERO production callers. Every reference
+        # to it elsewhere was a comment in msi_execution_planning saying it
+        # "reuses the CONCEPT of" it. This is the first time the real engine
+        # runs.
+        #
+        # It wraps the SAME PaperBroker the composition root executes through
+        # -- one terminal executor, no second broker instance and no second
+        # order path.
+        from bujji.execution.engine import ExecutionEngine as _ExecutionEngine
+
+        from bujji.core.config import AppConfig as _AppConfig, BrokerConfig as _BrokerConfig
+
+        # ExecutionEngine reads only `config.broker`'s four execution knobs.
+        # Built from the session config so an operator can tune them, with the
+        # BrokerConfig defaults (3 attempts / 1.5s backoff / 1s poll / 15s
+        # timeout) when unset. No credentials are placed here: this engine
+        # executes against the PaperBroker instance handed to it, and the
+        # live data broker is a separate, execution-neutered instance.
+        _exec_cfg = (self._config.get("execution", {})
+                     if isinstance(self._config, dict) else {})
+        execution_engine = _ExecutionEngine(
+            self._broker,
+            _AppConfig(broker=_BrokerConfig(
+                name="paper",
+                retry_attempts=int(_exec_cfg.get("retry_attempts", 3)),
+                retry_backoff_seconds=float(_exec_cfg.get("retry_backoff_seconds", 1.5)),
+                poll_interval_seconds=float(_exec_cfg.get("poll_interval_seconds", 1.0)),
+                order_timeout_seconds=float(_exec_cfg.get("order_timeout_seconds", 15.0)),
+            )),
+            self._logger)
+        self._logger.info(
+            "EXECUTION: broker-truth lifecycle ENABLED -- poll-to-terminal "
+            "(interval=%ss timeout=%ss), cancel-on-timeout, post-cancel "
+            "reconciliation. A timeout means UNKNOWN, never 'not filled'.",
+            _exec_cfg.get("poll_interval_seconds", 1.0),
+            _exec_cfg.get("order_timeout_seconds", 15.0))
         self._root = build_trading_brain_composition_root(
             broker=self._broker, journal=self._journal,
+            execution_engine=execution_engine,
             margin_provider=_make_margin_provider(providers_cfg),
             capital_snapshot_provider=capital_snapshot_provider, memory=risk_memory,
             clock=self._clock, underlying=underlying, exchange_lot_size=exchange_lot_size,

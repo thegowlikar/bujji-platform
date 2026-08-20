@@ -161,6 +161,32 @@ class ExecutionEngine:
                   cid=client_order_id, filled=last.filled_quantity,
                   requested=requested_qty)
         await self._safe_cancel(client_order_id)
+
+        # POST-CANCEL RECONCILIATION (2026-08-21). Returning `last` alone was a
+        # real gap: it is the result of the poll BEFORE the cancel, so a fill
+        # that landed in the window between that poll and the broker acting on
+        # the cancel was invisible -- and the caller would size off a stale
+        # filled_quantity while the exchange held more. A cancel is also not
+        # guaranteed to win the race against a resting order.
+        #
+        # Re-query after cancelling and keep whichever view reports MORE fill.
+        # Never less: a broker that transiently reports a smaller cumulative
+        # figure is anomalous, and taking the smaller number would silently
+        # shrink a position that really exists. Monotonic-in-fill is the safe
+        # direction, and it matches the journal's own NonMonotonicFillReport
+        # discipline on the same quantity.
+        after_cancel = await self._lookup(client_order_id)
+        if after_cancel.filled_quantity > last.filled_quantity:
+            log_event(self._log, "late_fill_observed_after_cancel",
+                      cid=client_order_id, before=last.filled_quantity,
+                      after=after_cancel.filled_quantity)
+            return after_cancel
+        # A post-cancel lookup that FAILED (UNKNOWN, message=lookup_failed) must
+        # not be mistaken for "nothing more filled" -- but `last` already
+        # carries the most recent successful observation, so returning it is
+        # the honest answer either way. The caller distinguishes "confirmed
+        # terminal" from "we do not know" by reading `status`, never by
+        # assuming this returned value is complete.
         return last
 
     async def _safe_cancel(self, client_order_id: str) -> None:
