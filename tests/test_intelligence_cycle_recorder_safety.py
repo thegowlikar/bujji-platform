@@ -160,6 +160,27 @@ _DEFINED_RISK_MODE_AUTHORIZED = (
     "bujji/production_runtime/trading_session_governor/session_governor.py",
 )
 
+# AUTHORIZED CHANGE (2026-08-20, audit finding): close the learning loop.
+# D-8 made every closed position durable, and governor_context_builder asks
+# the AdaptiveRiskMemory real questions on every entry decision -- but the
+# runner passed AdaptiveRiskMemory(), fresh and empty, every session, and
+# append_observation had ZERO callers anywhere. The risk chain was
+# interrogating a memory that could not answer.
+#
+#   bujji/production_runtime/risk_memory_bridge.py  NEW, additive: translates
+#     durable OutcomeMemoryRecords into RiskMemoryEntries and hydrates the
+#     memory at startup. Invents nothing -- volatility_regime is UNKNOWN and
+#     named rather than back-filled from today's regime; mfe/mae stay None
+#     rather than derived from realized_pnl. An unreadable store degrades to
+#     exactly the empty memory Bujji had before, so it can never end a session.
+#
+# No existing module's behaviour changes, and with no closed positions the
+# store is empty and the hydration is a no-op. Coverage:
+# tests/test_learning_loop.py.
+_LEARNING_LOOP_AUTHORIZED = (
+    "bujji/production_runtime/risk_memory_bridge.py",
+)
+
 
 def test_no_forbidden_module_imports_in_recorder():
     out = _grep(FORBIDDEN_IMPORTS, RECORDER_FILE)
@@ -220,7 +241,7 @@ def test_no_protected_lineage_package_touched():
         cwd="/opt/bujji/app", capture_output=True, text=True,
     )
     changed = [l for l in result.stdout.strip().splitlines() if l]
-    changed = [l for l in changed if l not in _PAPERBROKER_V2_AUTHORIZED + _LOT_SIZE_AUTHORITATIVE_AUTHORIZED + _CPC_SAFETY_SPINE_AUTHORIZED + _CPC_EVIDENCE_AND_REALISM_AUTHORIZED + _LIVE_PREMIUM_FIX_AUTHORIZED + _THREE_PART_SELECTION_AUTHORIZED + _DEFINED_RISK_MODE_AUTHORIZED]
+    changed = [l for l in changed if l not in _PAPERBROKER_V2_AUTHORIZED + _LOT_SIZE_AUTHORITATIVE_AUTHORIZED + _CPC_SAFETY_SPINE_AUTHORIZED + _CPC_EVIDENCE_AND_REALISM_AUTHORIZED + _LIVE_PREMIUM_FIX_AUTHORIZED + _THREE_PART_SELECTION_AUTHORIZED + _DEFINED_RISK_MODE_AUTHORIZED + _LEARNING_LOOP_AUTHORIZED]
     forbidden_prefixes = (
         "bujji/msi_strategy_selector/", "bujji/msi_trade_intent/", "bujji/msi_trade_construction/",
         "bujji/risk_governor/", "bujji/execution_engine/", "bujji/trading_brain/",

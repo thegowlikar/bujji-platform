@@ -1284,6 +1284,60 @@ class OptionsOSRunner:
         self._logger.info("ENTRY_WINDOW -- regime trend=%s volatility=%s", trend_regime, volatility_regime)
         self._attempt_entry(trend_regime, volatility_regime)
 
+    def _risk_budget(self) -> Dict[str, float]:
+        """The rupee figures for THIS position, scaled by the lots taken.
+
+        WHY THIS EXISTS (audit finding, 2026-08-20). Three rupee amounts were
+        configured as flat per-POSITION totals while the size was configured
+        separately:
+
+            desired_quantity: 1
+            requested_risk: 5000.0                    -> initial_risk (the stop)
+            proposed_trade_effect.additional_margin   -> capital check
+            proposed_trade_effect.additional_max_loss -> risk budget governor
+
+        `strategy_risk_adapter` takes desired_quantity and requested_risk side
+        by side and never relates them, so the caller is the only place that
+        can. Nothing did. Raise desired_quantity to 5 and the position's real
+        risk quintuples while the stop stays at Rs 5,000 -- it would fire on
+        noise, and the risk-budget and capital checks would be sized for a
+        position one fifth the size of the one actually taken.
+
+        The three figures are now read as PER LOT and multiplied by the lots.
+        At the current desired_quantity: 1 every value is identical to before,
+        so this changes no behaviour today; it makes the numbers correct the
+        moment anyone changes the size, which is exactly when a silent
+        mis-scaling would be most expensive.
+        """
+        cfg = self._session_cfg
+        lots = max(1, int(cfg.get("desired_quantity", 1)))
+        per_lot_risk = float(cfg.get("requested_risk", 5000.0))
+        effect = cfg.get("proposed_trade_effect", {}) or {}
+        per_lot_margin = float(effect.get("additional_margin", 10000.0))
+        per_lot_max_loss = float(effect.get("additional_max_loss", 5000.0))
+
+        budget = {
+            "lots": lots,
+            "requested_risk": per_lot_risk * lots,
+            "additional_margin": per_lot_margin * lots,
+            "additional_max_loss": per_lot_max_loss * lots,
+            "per_lot_requested_risk": per_lot_risk,
+        }
+
+        # A single trade whose stop is wider than the whole day's loss limit is
+        # incoherent: the daily limit would halt the session before the
+        # position's own stop could ever fire. Reachable only by raising the
+        # size, which is precisely the case this scaling exists for.
+        daily_limit = (self._config.get("capital_snapshot", {}) or {}).get("daily_loss_limit")
+        if daily_limit and budget["requested_risk"] > float(daily_limit):
+            self._logger.warning(
+                "RISK BUDGET -- this trade's stop (Rs %.0f = %d lot(s) x Rs %.0f) exceeds the "
+                "daily loss limit (Rs %.0f). The daily limit would halt the session before the "
+                "position's own stop could fire.",
+                budget["requested_risk"], lots, per_lot_risk, float(daily_limit))
+
+        return budget
+
     def _attempt_entry(self, trend_regime, volatility_regime) -> bool:
         """One complete entry attempt: selection -> Gate B'd risk pipeline ->
         fills -> registry -> canonical lifecycle. Returns True only when a
@@ -1315,13 +1369,21 @@ class OptionsOSRunner:
         session_cfg = self._session_cfg
         proposed = session_cfg.get("proposed_trade_effect", {})
 
+        budget = self._risk_budget()
+        self._governor_result_summary["risk_budget"] = dict(budget)
+        self._logger.info(
+            "RISK BUDGET -- %d lot(s): requested_risk=Rs %.0f margin=Rs %.0f max_loss=Rs %.0f "
+            "(per lot Rs %.0f)",
+            budget["lots"], budget["requested_risk"], budget["additional_margin"],
+            budget["additional_max_loss"], budget["per_lot_requested_risk"])
+
         cycle_result, entry_decision = self._governor.attempt_entry(
             chain=chain, spot=spot, as_of_date=self._as_of_date, timestamp=self._clock().isoformat(),
-            desired_quantity=int(session_cfg.get("desired_quantity", 1)),
-            requested_risk=float(session_cfg.get("requested_risk", 5000.0)),
+            desired_quantity=budget["lots"],
+            requested_risk=budget["requested_risk"],
             proposed_trade_effect=ProposedTradeEffect(
-                additional_margin=proposed.get("additional_margin", 10000.0),
-                additional_max_loss=proposed.get("additional_max_loss", 5000.0),
+                additional_margin=budget["additional_margin"],
+                additional_max_loss=budget["additional_max_loss"],
             ),
             contracts_by_client_order_id={}, sides_by_client_order_id={},
             reference_prices_by_client_order_id={}, risk_by_position_group_id={},
@@ -1350,7 +1412,7 @@ class OptionsOSRunner:
         pg_id = self._governor._position_group_id
         self._registry.register_entry(
             pg_id, cycle_result.proposal.strategy_family, list(contracts.keys()),
-            float(session_cfg.get("requested_risk", 5000.0)), self._clock, contracts=contracts,
+            budget["requested_risk"], self._clock, contracts=contracts,
         )
         self._lifecycle_runtime.mark_open(pg_id)
         self._entry_prices = entry_prices
@@ -1586,7 +1648,9 @@ class OptionsOSRunner:
         selected = self._governor_result_summary.get("strategy_selected")
         result = asyncio.run(self._governor.evaluate_and_enforce_exit(
             valuation, selected, None, None, PositionHealthThresholds(),
-            float(self._session_cfg.get("requested_risk", 5000.0)),
+            # initial_risk for the exit policy: the SAME scaled figure the entry
+            # was sized against, so the stop stays proportional to the position.
+            self._risk_budget()["requested_risk"],
         ))
         self._logger.info(
             "%s -- D.4 action=%s exit_policy=%s forced_execution=%s",
