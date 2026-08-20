@@ -469,6 +469,36 @@ def recover_unresolved_at_startup(
         summary["errors"].append(f"enumeration failed: {exc}")
         return summary
 
+    # DO NOT MANUFACTURE CERTAINTY FROM A BROKER THAT FORGETS (2026-08-21).
+    #
+    # recover_group resolves a pending leg by calling broker.get_order(coid),
+    # and writes SUBMIT_FAILURE with resolution_basis
+    # RECOVERY_CONFIRMED_NEVER_RECEIVED when the broker reports not-found.
+    # That is sound against an exchange-backed book. It is FALSE against a
+    # broker whose order book is in-process memory: the journal survives a
+    # crash, PaperBroker's `_orders` dict does not, and _production_paper_broker
+    # builds a fresh empty one every session. Every crash-left leg would
+    # therefore look "never received" and be durably recorded as such -- an
+    # authoritative-looking claim about the exchange derived from this
+    # process's amnesia.
+    #
+    # When the broker cannot vouch for pre-restart orders, the legs stay
+    # UNRESOLVED. The caller already fails closed on that, which is the
+    # correct outcome: we genuinely do not know.
+    if not getattr(broker, "order_book_survives_restart", False):
+        summary["unresolved_after"] = list(pending)
+        summary["skipped_reason"] = (
+            f"{type(broker).__name__} does not persist its order book across a "
+            "restart, so a not-found from it is this process's amnesia, not "
+            "evidence about the exchange. Legs left UNRESOLVED rather than "
+            "recorded as never-received.")
+        if pending:
+            logger.critical(
+                "STARTUP RECOVERY SKIPPED -- %s cannot vouch for pre-restart orders. "
+                "%d group(s) remain UNRESOLVED: %s. This is UNKNOWN, not clean.",
+                type(broker).__name__, len(pending), pending)
+        return summary
+
     lookup = _SyncBrokerOrderLookup(broker, run_async)
     for pg_id in pending:
         summary["groups_checked"] += 1

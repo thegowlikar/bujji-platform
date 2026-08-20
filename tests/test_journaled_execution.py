@@ -202,6 +202,10 @@ class TestCrashRecovery:
         j, path = self._crash_after_intent(tmp_path)
 
         class _Broker:
+            # Models an EXCHANGE-backed book: a not-found from it is real
+            # evidence about the order, so recovery may act on it.
+            order_book_survives_restart = True
+
             async def get_order(self, coid):
                 return _filled(coid)
 
@@ -217,12 +221,50 @@ class TestCrashRecovery:
         j, path = self._crash_after_intent(tmp_path)
 
         class _NotFound:
+            order_book_survives_restart = True
+
             async def get_order(self, coid):
                 return OrderResult(coid, OrderStatus.UNKNOWN, message="not_found")
 
         summary = recover_unresolved_at_startup(j, path, _NotFound(), asyncio.run, LOG, CLK)
         assert summary["legs_resolved"] == 1
         assert summary["unresolved_after"] == []
+
+    def test_a_forgetful_broker_cannot_resolve_anything(self, tmp_path):
+        """THE self-inflicted defect (audit, 2026-08-21). recover_group writes
+        SUBMIT_FAILURE / RECOVERY_CONFIRMED_NEVER_RECEIVED when the broker
+        reports not-found. Sound against an exchange. FALSE against a broker
+        whose order book is in-process memory: the journal survives a crash,
+        PaperBroker's `_orders` dict does not, and a fresh empty one is built
+        every session -- so EVERY crash-left leg looked 'never received' and
+        was durably recorded as such. An authoritative-looking claim about the
+        exchange, derived from this process's amnesia.
+        """
+        j, path = self._crash_after_intent(tmp_path)
+
+        class _Forgetful:
+            order_book_survives_restart = False
+
+            async def get_order(self, coid):
+                return OrderResult(coid, OrderStatus.UNKNOWN, message="not_found")
+
+        summary = recover_unresolved_at_startup(j, path, _Forgetful(), asyncio.run, LOG, CLK)
+        assert summary["legs_resolved"] == 0, "a forgetful broker resolved a leg"
+        assert summary["unresolved_after"], "the leg must stay UNRESOLVED, not be closed out"
+        assert "skipped_reason" in summary
+        # And nothing was written claiming the exchange never received it.
+        pg = _all_groups(path)[0]
+        types = [e.event_type for e in j.read_events(pg)]
+        assert "SUBMIT_FAILURE" not in types
+
+    def test_the_real_paper_broker_is_declared_forgetful(self):
+        """The marker must match reality, or the guard protects nothing."""
+        from bujji.broker.paper import PaperBroker
+        assert PaperBroker.order_book_survives_restart is False
+
+    def test_the_real_fyers_broker_is_declared_persistent(self):
+        from bujji.broker.fyers import FyersBroker
+        assert FyersBroker.order_book_survives_restart is True
 
     def test_a_clean_journal_needs_no_recovery(self, tmp_path):
         j, path = _journal(tmp_path)

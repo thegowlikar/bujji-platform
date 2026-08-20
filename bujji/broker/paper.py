@@ -70,6 +70,15 @@ def _resulting_avg_price(prev_net: int, prev_avg: Optional[float], delta: int,
 class PaperBroker(Broker):
     name = "paper"
 
+    # THIS BROKER FORGETS. `_orders` and `_positions` are plain dicts rebuilt
+    # empty on construction, and _production_paper_broker() builds a fresh
+    # instance every session. So "the broker has no record of this order" here
+    # means "this process has no memory of it" -- NOT "the exchange never
+    # received it". Startup recovery must not read a not-found from this
+    # broker as authoritative evidence of non-receipt; see
+    # execution_journal_bridge.recover_unresolved_at_startup.
+    order_book_survives_restart = False
+
     def __init__(
         self,
         seed: int = 42,

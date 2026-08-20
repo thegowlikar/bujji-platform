@@ -409,6 +409,8 @@ class OptionsOSRunner:
         # None until then, which the gate reads as undeterminable rather than
         # as live.
         self._intelligence_origin = None
+        # Set only when a partial entry leaves filled-but-unwound legs live.
+        self._orphan_position_live = False
 
         self._entry_prices: Dict[str, float] = {}
         self._governor_result_summary: Dict[str, Any] = {}
@@ -1178,6 +1180,37 @@ class OptionsOSRunner:
             return None
         return str(session_dir / "decision_evidence.jsonl")
 
+    def _persist_polled_evidence(self, snapshots) -> int:
+        """Persist evidence for observations as they are POLLED, not only when
+        they produce a thesis.
+
+        The rolling window is what PSI/MSSI cite from. Writing evidence only
+        on stable cycles left the window's own observations unpersisted, so
+        cited ids from earlier cycles dangled. Returns how many NEW records
+        were written (append_evidence dedupes by content hash, so re-polling
+        the same fact costs nothing).
+
+        Never raises: an audit trail must not be able to end a session.
+        """
+        if not snapshots:
+            return 0
+        path = self._evidence_path()
+        if path is None:
+            return 0
+        try:
+            from bujji.shadow_observatory import evidence_store
+
+            written = 0
+            for snapshot in snapshots:
+                written += evidence_store.append_evidence(
+                    path, evidence_store.evidence_records_for_snapshot(snapshot))
+            self._evidence_records_written = getattr(self, "_evidence_records_written", 0) + written
+            return written
+        except Exception as exc:  # noqa: BLE001 -- audit never ends a session
+            self._logger.warning("polled evidence persistence failed: %s: %s",
+                                 type(exc).__name__, exc)
+            return 0
+
     def _persist_cycle_evidence(self, snapshot, cycle_record) -> Optional[Dict[str, Any]]:
         """Persist the observations this cycle's decision actually used, and
         measure whether every cited id now resolves.
@@ -1194,10 +1227,12 @@ class OptionsOSRunner:
         ids. The decision path is therefore left completely untouched -- not
         intercepted, not given a sink -- and this re-derives what it built.
 
-        EVERY CYCLE, not only cycles that produced a thesis. PSI and MSSI
-        cite observations from across the rolling window; persisting only on
-        thesis cycles would leave the earlier ones dangling, which is also
-        why only 6 of 66+ cycles left any record on 2026-08-20.
+        THIS method runs only on cycles that derive a regime -- the stability
+        gate makes that ~8% of them. The rolling window's own observations are
+        persisted separately by `_persist_polled_evidence`, at the poll, every
+        cycle, which is what makes the ids PSI/MSSI cite from earlier cycles
+        resolvable. An earlier version of this docstring claimed THIS call
+        covered every cycle. It never did.
 
         Never raises: an audit trail must not be able to end a session that
         may hold an open position.
@@ -1572,10 +1607,28 @@ class OptionsOSRunner:
             plan = WarmupPlan(
                 polls=polls_per_cycle + (first_cycle_extra_polls if cycles == 1 else 0),
                 interval_seconds=poll_interval, strides=(1,))
-            snapshots.extend(poll_spot_series(
+            _fresh = poll_spot_series(
                 fetch_spot=lambda: asyncio.run(broker.get_spot(self._root.underlying)),
                 clock=self._clock, plan=plan, logger=self._logger,
-            ))
+            )
+            snapshots.extend(_fresh)
+            # EVIDENCE FOR EVERY POLLED OBSERVATION (audit, 2026-08-21).
+            #
+            # My own commit claimed evidence was "written every cycle, not
+            # only cycles that produced a thesis". It was not:
+            # _persist_cycle_evidence has exactly one call site, inside
+            # _build_market_thesis_regime_provider, reached only after the
+            # stability gate -- historically ~8% of cycles.
+            #
+            # That defeated the fix's own purpose. PSI and MSSI cite
+            # observations from across this rolling window, so on a stable
+            # cycle they cite observations polled during the ~92% of cycles
+            # whose evidence was never written -- and those ids dangle, which
+            # is the exact defect the evidence store exists to remove.
+            #
+            # Persisting at the poll makes the claim true: every observation
+            # that can later be cited is on disk before it can be cited.
+            self._persist_polled_evidence(_fresh)
             del snapshots[:-window]
             if snapshots:
                 # MarketSnapshot.spot is a SpotSnapshot OBJECT; the number is
@@ -1617,7 +1670,11 @@ class OptionsOSRunner:
                 entered = True
                 break
 
-        if entered:
+        # An ORPHANED partial entry is a live position even though
+        # _attempt_entry returned False. Without this it was never managed at
+        # all: the loop simply moved on to post-cutoff observation while a
+        # naked leg sat at the broker.
+        if entered or getattr(self, "_orphan_position_live", False):
             self._position_management()
 
         # Post-trade / post-cutoff observation: the position may be closed;
@@ -1630,10 +1687,28 @@ class OptionsOSRunner:
                 break
             cycles += 1
             plan = WarmupPlan(polls=polls_per_cycle, interval_seconds=poll_interval, strides=(1,))
-            snapshots.extend(poll_spot_series(
+            _fresh = poll_spot_series(
                 fetch_spot=lambda: asyncio.run(broker.get_spot(self._root.underlying)),
                 clock=self._clock, plan=plan, logger=self._logger,
-            ))
+            )
+            snapshots.extend(_fresh)
+            # EVIDENCE FOR EVERY POLLED OBSERVATION (audit, 2026-08-21).
+            #
+            # My own commit claimed evidence was "written every cycle, not
+            # only cycles that produced a thesis". It was not:
+            # _persist_cycle_evidence has exactly one call site, inside
+            # _build_market_thesis_regime_provider, reached only after the
+            # stability gate -- historically ~8% of cycles.
+            #
+            # That defeated the fix's own purpose. PSI and MSSI cite
+            # observations from across this rolling window, so on a stable
+            # cycle they cite observations polled during the ~92% of cycles
+            # whose evidence was never written -- and those ids dangle, which
+            # is the exact defect the evidence store exists to remove.
+            #
+            # Persisting at the poll makes the claim true: every observation
+            # that can later be cited is on disk before it can be cited.
+            self._persist_polled_evidence(_fresh)
             del snapshots[:-window]
             trail.append({"cycle": cycles, "at": now.isoformat(), "phase": phase,
                           "spots": len(snapshots)})
@@ -1885,6 +1960,25 @@ class OptionsOSRunner:
                 pg_id, cycle_result.proposal.strategy_family, list(contracts.keys()),
                 0.0, self._clock, contracts=contracts)
             self._lifecycle_runtime.mark_open(pg_id)
+            # THE ORPHAN NEEDS A MANAGEMENT IDENTITY (audit, 2026-08-21).
+            #
+            # An orphan only occurs when filled=False, so the governor never
+            # set its own _position_group_id -- it stayed None. The management
+            # pass reads `pg_id = self._governor._position_group_id` and then
+            # `valuations.get(None)`, which is always None, so every pass hit
+            # "no valuation available for None" and returned. The leg this
+            # runner had just logged as "LIVE ... Management cycles will
+            # revalue and exit it" was therefore never valued and never
+            # exited. That log line was false telemetry I wrote.
+            #
+            # Pointing the governor at the orphan group is what makes the
+            # claim true. Same private attribute the entry path and the
+            # management pass already read.
+            self._governor._position_group_id = pg_id
+            # Continuous mode only starts management when _attempt_entry
+            # returns True, and an orphan returns False. This flag is what
+            # tells it a live position exists regardless.
+            self._orphan_position_live = True
             self._entry_prices = entry_prices
             self._contracts_by_symbol = contracts
             self._logger.critical(

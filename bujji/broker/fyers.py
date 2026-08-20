@@ -241,6 +241,11 @@ def _paced(method):
 
 
 class FyersBroker(Broker):
+    # The EXCHANGE holds the order book, not this process. A not-found from
+    # here is real evidence about the order's fate, so startup recovery may
+    # treat it as authoritative.
+    order_book_survives_restart = True
+
     name = "fyers"
 
     def __init__(self, config: BrokerConfig, logger: logging.Logger) -> None:
