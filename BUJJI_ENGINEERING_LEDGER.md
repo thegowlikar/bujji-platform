@@ -496,3 +496,59 @@ pattern has appeared; authorize by name, never advance the baseline.
   The coupling is fixed; adaptive sizing is a separate build.
 - Holiday calendar unverified · `_wing_width` unit trap · `_nearest_grid`
   clamping · websocket unwired · slippage uncalibrated · futures identity.
+
+## 2026-08-20 — FIRST LIVE CONTINUOUS SESSION
+
+Everything upstream of the margin gate worked, in production, for the first
+time:
+
+- capture from the first tick: **09:15:00.866**, and **live VIX in the
+  normalized store for the first time ever** (CP-D.2 proven)
+- stability gate passed on cycles **6, 31, 46, 66** — the ~8% gate clearing
+  repeatedly on a continuous day
+- thesis + full 13-family verdict recorded on every derivation (D-5 live)
+- three-part selector: SIDEWAYS+CONTRACTION → **short strangle**
+- **strike selection CONSTRUCTED a real proposal on a live chain** — the
+  live-premium fix proven in production (was 0/30 candidates two days ago)
+- **PAPER_MARKET_SYNC quotes=82/82, 100% coverage**, depth=0 as disclosed
+- **IV DIVERGENCE first live data:** strikes_agree=False, 5 disagreements,
+  median |ΔIV| 0.0088, max |Δdelta| 0.119
+- RISK BUDGET: 1 lot, ₹5,000 (per lot ₹5,000)
+
+Then `GATE_B_MARGIN_VETO / MARGIN_NOT_CERTIFIED`.
+
+### The blocker: a symbol format
+
+Gate B sent `symbol=contract.symbol` — an INTERNAL identity. Measured live:
+
+    'NIFTY2026-08-2524500CE'  (internal)  → verified=False  total=None
+    'NSE:NIFTY26AUG22700PE'   (broker)    → verified=True   total=98,915.87
+
+**The margin API was never broken. Every entry in Bujji's history was blocked
+by a symbol format** — invisibly, because the failure path is an unusable
+snapshot, not an error. Same trap D-7 fixed for the quote sync; it was here
+too, unnoticed, because nothing had ever reached this gate.
+
+Fixed by looking the symbol up from the chain row that produced each leg;
+fail-closed on an unresolvable leg. **Verified live: the same strangle now
+gives margin_verified=True, required ₹188,165.94 vs ₹500,000 → GATE B ALLOW.**
+
+### Two more defects the same session exposed
+- `PRICE LEVELS -- context build failed`: `MarketSnapshot.spot` is a
+  SpotSnapshot OBJECT, the number is `.ltp`. L-5 passed the object, so every
+  level-context build failed all day — silently, being observation-only.
+- `"Entry did not fill (reason=not constructed)"` **when construction
+  succeeded**. Reason read only `governor_result.blocking_stage`, which is
+  None on a Gate B veto. Extracted to `_entry_failure_reason()`;
+  `blocking_reason` now wins. A report that misstates the stage sends the next
+  investigation to the wrong module — it cost an hour here.
+
+7,570 green. **Tomorrow is the first session where an entry is actually
+reachable.**
+
+### Tooling lessons (mine, not Bujji's)
+- `systemctl is-active` returns non-zero for `activating` — a long-running
+  oneshot looks "dead" to a naive check. Compare `ActiveState` instead.
+- `journalctl --since "today 09:14"` fails to parse; `--since today` works.
+- Long-lived SSH watchers get reset (255). Use short-lived connections in a
+  local loop.
