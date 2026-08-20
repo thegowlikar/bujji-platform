@@ -67,6 +67,12 @@ VIX_SYMBOL = "NSE:INDIAVIX-INDEX"
 FUTURES_CONTINUOUS_IDENTITY = "NIFTY_FUT_CONTINUOUS"  # Phase 17H.6's stored identity -- never a request symbol.
 OPTIONS_UNDERLYING = "NIFTY"  # PHASE_17I10's identity prefix: "NIFTY|<expiry>|<strike>|<type>".
 IST = datetime.timezone(datetime.timedelta(hours=5, minutes=30))
+# The store's own name for a 60-second point sample. NOT added to
+# ALL_RESOLUTIONS below: ONE_MINUTE is a resolution rows are STORED at, never
+# a mode `build_market_reality_snapshot()` can be CALLED with -- the intraday
+# path reads it, no caller selects it.
+RESOLUTION_ONE_MINUTE = moc_taxonomy.RESOLUTION_ONE_MINUTE
+
 ALL_RESOLUTIONS = (RESOLUTION_DAILY, RESOLUTION_FIVE_MINUTE)
 
 
@@ -247,12 +253,53 @@ def _latest_at_or_before(rows: List, as_of_time: str):
     return rows[-1] if rows else None
 
 
+def _latest_intraday_row(historical_store, identity: str, day_start: str, as_of_time: str):
+    """Most recent row at or before `as_of_time` across BOTH intraday series.
+
+    THE DEFECT THIS CLOSES -- found 2026-08-20, the first live continuous
+    session. Two writers produce intraday rows for the same instruments at
+    two honest, deliberately DIFFERENT resolutions:
+
+      * the option-chain capture writes FIVE_MINUTE bars;
+      * `capture_market_reality_session.py` writes ONE_MINUTE point samples
+        (`{"ltp": ...}`, value_kind=MAPPING).
+
+    That difference is CORRECT and must not be flattened. The capture
+    session's own comment is explicit: 60-second samples "are not bars",
+    labelling them FIVE_MINUTE would assert a bar nobody observed, and the
+    distinct resolution is what keeps them from colliding with the 5-minute
+    rows in the store's natural key (instrument, resolution, timestamp,
+    source). The writer is right.
+
+    The READER was wrong. Every intraday builder here queried FIVE_MINUTE
+    alone. Spot survived only because the chain capture happens to write a
+    5-minute spot sentinel. VIX has no sentinel -- so on 2026-08-20 its 383
+    certified observations were invisible to this module,
+    `validate_end_of_day_completeness()` reported `missing=['vix']`, and a
+    fully successful 6h25m session exited 1.
+
+    Reading BOTH series is the honest repair: nothing is relabelled, no bar
+    is invented, no row moves. When only FIVE_MINUTE rows exist -- every
+    historical day already in the store -- this returns exactly what the
+    previous FIVE_MINUTE-only query returned, so prior behaviour is
+    unchanged rather than merely similar.
+    """
+    rows = list(historical_store.range(identity, RESOLUTION_FIVE_MINUTE, day_start, as_of_time))
+    rows += list(historical_store.range(identity, RESOLUTION_ONE_MINUTE, day_start, as_of_time))
+    if not rows:
+        return None
+    # Ascending by timestamp; on an exact tie the FIVE_MINUTE bar wins,
+    # because it carries range information a point sample does not have.
+    rows.sort(key=lambda r: (r.observation.identity.timestamp,
+                             r.observation.identity.resolution == RESOLUTION_FIVE_MINUTE))
+    return rows[-1]
+
+
 def _build_spot_snapshot_intraday(
     date: str, as_of_time: str, historical_store: HistoricalObservationStore, cert_refs: List[str],
 ) -> Optional[SpotSnapshot]:
     day_start, _ = _day_bounds(date)
-    rows = historical_store.range(SPOT_SYMBOL, RESOLUTION_FIVE_MINUTE, day_start, as_of_time)
-    row = _latest_at_or_before(rows, as_of_time)
+    row = _latest_intraday_row(historical_store, SPOT_SYMBOL, day_start, as_of_time)
     if row is None:
         return None
     payload = row.payload
@@ -287,13 +334,28 @@ def _build_futures_snapshot_intraday(
     date: str, as_of_time: str, historical_store: HistoricalObservationStore, cert_refs: List[str],
 ) -> Optional[FuturesSnapshot]:
     day_start, _ = _day_bounds(date)
-    rows = historical_store.range(FUTURES_CONTINUOUS_IDENTITY, RESOLUTION_FIVE_MINUTE, day_start, as_of_time)
-    row = _latest_at_or_before(rows, as_of_time)
+    row = _latest_intraday_row(historical_store, FUTURES_CONTINUOUS_IDENTITY, day_start, as_of_time)
     if row is None:
         return None
     payload = row.payload
     if row.lineage.certification_ref:
         cert_refs.append(row.lineage.certification_ref)
+    if "close" not in payload:
+        # POINT-SAMPLE row: a single certified LTP, not an OHLC bar.
+        # Degenerate bar -- o=h=l=c=ltp -- asserts exactly one price at
+        # exactly one instant and fabricates no range beyond that equality.
+        # Same treatment _build_spot_snapshot_intraday has given point
+        # samples since 2026-08-19.
+        ltp = payload.get("ltp")
+        if ltp is None:
+            return None  # unknown payload shape: absent beats invented
+        return FuturesSnapshot(
+            instrument=FUTURES_CONTINUOUS_IDENTITY,
+            close=ltp, open=ltp, high=ltp, low=ltp,
+            expiry_date=None,
+            source=SOURCE_HISTORICAL, source_observation_ids=(row.observation_id,),
+            observed_at=row.observation.identity.timestamp,
+        )
     return FuturesSnapshot(
         instrument=FUTURES_CONTINUOUS_IDENTITY,
         close=payload["close"], open=payload.get("open"), high=payload.get("high"), low=payload.get("low"),
@@ -307,13 +369,25 @@ def _build_vix_snapshot_intraday(
     date: str, as_of_time: str, historical_store: HistoricalObservationStore, cert_refs: List[str],
 ) -> Optional[VixSnapshot]:
     day_start, _ = _day_bounds(date)
-    rows = historical_store.range(VIX_SYMBOL, RESOLUTION_FIVE_MINUTE, day_start, as_of_time)
-    row = _latest_at_or_before(rows, as_of_time)
+    row = _latest_intraday_row(historical_store, VIX_SYMBOL, day_start, as_of_time)
     if row is None:
         return None
     payload = row.payload
     if row.lineage.certification_ref:
         cert_refs.append(row.lineage.certification_ref)
+    if "close" not in payload:
+        # POINT-SAMPLE row -- see the note in the futures builder above.
+        # This is the exact row shape that made 383 real VIX observations
+        # invisible on 2026-08-20.
+        ltp = payload.get("ltp")
+        if ltp is None:
+            return None  # unknown payload shape: absent beats invented
+        return VixSnapshot(
+            close=ltp, open=ltp, high=ltp, low=ltp,
+            change_percent=None, source=SOURCE_HISTORICAL,
+            source_observation_ids=(row.observation_id,),
+            observed_at=row.observation.identity.timestamp,
+        )
     return VixSnapshot(
         close=payload["close"], open=payload.get("open"), high=payload.get("high"), low=payload.get("low"),
         change_percent=None, source=SOURCE_HISTORICAL, source_observation_ids=(row.observation_id,),
