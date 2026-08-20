@@ -174,5 +174,20 @@ class TestAgainstTheRealHost:
         assert not any("backup" in name for name in names)
 
     def test_the_trading_timer_is_a_token_consumer(self):
+        """Consumer detection is a property of the UNIT, so it is asserted
+        directly rather than through token_fire_window().
+
+        Found live 2026-08-20: systemd reports an EMPTY
+        NextElapseUSecRealtime for any timer whose service is currently
+        running -- it does not schedule the next elapse until the run
+        finishes. Asserting through the window made this test pass or fail
+        depending on whether Bujji happened to be mid-session."""
+        assert st.consumes_env_file("bujji-options-os-trading.timer") is True
+
+    def test_a_running_service_removes_its_timer_from_the_upcoming_window(self):
+        """Pins the behaviour above rather than leaving it as folklore. A
+        timer with no scheduled next elapse is legitimately absent from
+        'upcoming fires' -- and promote's fallback exists for exactly this."""
         names = [t for t, _ in st.token_fire_window()]
-        assert any("options-os-trading" in name for name in names)
+        for timer in names:
+            assert st.next_elapse(timer, st.host_timezone()) is not None

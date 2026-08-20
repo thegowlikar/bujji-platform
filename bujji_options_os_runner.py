@@ -461,6 +461,34 @@ class OptionsOSRunner:
         exit_cfg = self._config.get("exit_policy", {})
         artifacts_cfg = self._config.get("artifacts", {})
 
+        # Set EARLY, because the market-hours gate below reads it. It is
+        # assigned again further down beside the other session fields; that
+        # re-assignment is the same object and is left in place so the
+        # original grouping still reads as one block.
+        self._session_cfg = session_cfg
+
+        # THE GATE RUNS BEFORE ANYTHING TOUCHES THE MARKET.
+        #
+        # OBSERVED LIVE, 2026-08-20. The gate was called from
+        # `_pre_market_check`, which runs AFTER `_startup` -- but `_startup`
+        # builds the regime provider, and that runs the warm-up: 16 spot polls
+        # at 30s intervals. With the timer firing at 09:14 the session began
+        # polling at 09:14:01, so its first two warm-up samples read a PRE-OPEN
+        # book, and those samples feed the evidence window the stability gate
+        # then judges. The capture units were unaffected (their first rows
+        # landed at 09:15:00.866, exactly at the open) -- this was the trading
+        # unit alone, sampling before the market existed.
+        #
+        # `_resolve_exchange_lot_size` below also reads the instrument master,
+        # and the broker is constructed a few lines later, so this is the last
+        # point at which the gate can precede every market touch.
+        #
+        # The call in `_pre_market_check` is DELIBERATELY KEPT. Both methods do
+        # broker work, and once this one has waited the second is a no-op that
+        # returns immediately -- a second net costs nothing and protects any
+        # path that reaches `_pre_market_check` without coming through here.
+        self._await_market_open()
+
         underlying = session_cfg.get("underlying", "NIFTY")
         exchange_lot_size = _resolve_exchange_lot_size(session_cfg)
 

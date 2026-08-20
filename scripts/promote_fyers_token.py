@@ -206,10 +206,21 @@ def report(path: Path, label: str) -> None:
         return
     fire, fire_label, discovered = last_token_fire(now)
     state = "VALID" if exp > now else "EXPIRED"
-    source = "systemd" if discovered else "FALLBACK -- systemd unavailable"
+    # "no upcoming fire discoverable" is NOT the same as "systemd unavailable",
+    # and the difference showed up live on 2026-08-20: while a service is
+    # running systemd reports no next elapse for its timer, so the window can
+    # legitimately come back empty on a perfectly healthy host.
+    source = ("systemd" if discovered
+              else "FALLBACK -- no upcoming fire discoverable (systemd absent, or "
+                   "every token-consuming timer is mid-run)")
     print(f"  {label:<24} expires {exp.isoformat()}  [{state}]")
+    # The DATE matters, not just the time. Checked mid-session on 2026-08-20
+    # this read "outlives ... at 09:27:30: False" for a token valid until
+    # 2026-08-21T06:00 -- correct (that timer had already run today, so its
+    # next fire was TOMORROW 09:27:30, after the token dies), but it reads
+    # like a failed promote unless the date is on screen.
     print(f"  {'':<24} outlives {fire_label} at "
-          f"{fire.strftime('%H:%M:%S')}: {exp > fire}   [{source}]")
+          f"{fire.strftime('%Y-%m-%d %H:%M:%S')}: {exp > fire}   [{source}]")
 
 
 def main() -> int:

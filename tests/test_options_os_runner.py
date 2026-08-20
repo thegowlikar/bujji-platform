@@ -228,7 +228,10 @@ def test_runner_stage_sequence_recorded_in_order(tmp_path):
 # --------------------------------------------------------------------- #
 
 def test_run_missing_config_file_exits_1(tmp_path):
-    exit_code = run(["--config", str(tmp_path / "nope.yaml"), "--as-of-date", DAY])
+    # --lock-path defaults to the PRODUCTION single-instance lock, so
+    # without this the test contends with a live trading session and
+    # fails on the guard rather than on the behaviour under test.
+    exit_code = run(["--config", str(tmp_path / "nope.yaml"), "--as-of-date", DAY, "--lock-path", str(tmp_path / "test.lock")])
     assert exit_code == EXIT_CONFIG_ERROR
 
 
@@ -237,7 +240,10 @@ def test_run_missing_regime_exits_1(tmp_path, monkeypatch):
     import yaml
     config = base_config(tmp_path, trend=None, volatility=None)
     config_path.write_text(yaml.safe_dump(config))
-    exit_code = run(["--config", str(config_path), "--as-of-date", DAY])
+    # --lock-path defaults to the PRODUCTION single-instance lock, so
+    # without this the test contends with a live trading session and
+    # fails on the guard rather than on the behaviour under test.
+    exit_code = run(["--config", str(config_path), "--as-of-date", DAY, "--lock-path", str(tmp_path / "test.lock")])
     assert exit_code == EXIT_CONFIG_ERROR
 
 
@@ -246,7 +252,10 @@ def test_run_missing_bhavcopy_path_exits_1(tmp_path):
     import yaml
     config = base_config(tmp_path, trend="SIDEWAYS", volatility="LOW_VOL", bhavcopy=None)
     config_path.write_text(yaml.safe_dump(config))
-    exit_code = run(["--config", str(config_path), "--as-of-date", DAY])
+    # --lock-path defaults to the PRODUCTION single-instance lock, so
+    # without this the test contends with a live trading session and
+    # fails on the guard rather than on the behaviour under test.
+    exit_code = run(["--config", str(config_path), "--as-of-date", DAY, "--lock-path", str(tmp_path / "test.lock")])
     assert exit_code == EXIT_CONFIG_ERROR
 
 
@@ -255,7 +264,10 @@ def test_run_valid_session_exits_0(tmp_path):
     import yaml
     config = base_config(tmp_path, trend="SIDEWAYS", volatility="LOW_VOL")
     config_path.write_text(yaml.safe_dump(config))
-    exit_code = run(["--config", str(config_path), "--as-of-date", DAY])
+    # --lock-path defaults to the PRODUCTION single-instance lock, so
+    # without this the test contends with a live trading session and
+    # fails on the guard rather than on the behaviour under test.
+    exit_code = run(["--config", str(config_path), "--as-of-date", DAY, "--lock-path", str(tmp_path / "test.lock")])
     assert exit_code == EXIT_OK
 
 
