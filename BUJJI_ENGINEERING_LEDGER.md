@@ -603,3 +603,41 @@ Also: a lens-count assertion went stale **twice in one day** (2→3→4). All su
 assertions are now name-based.
 
 7,612 green.
+
+## 2026-08-20 night — depth: acquired, recorded, NOT a lens
+
+Per-cycle `get_depth()` wired (operator directive). **Field names verified, not
+guessed** — `get_depth()`'s docstring forbids assuming a bids/asks shape without
+live confirmation, so only `totalbuyqty`/`totalsellqty` are read, both recorded
+in `data_certification/fyers_depth_discovery_20260813.json` (real example
+266760/318435 → imbalance −0.0883). The 5-level ladders are **not parsed**.
+
+**The lens is deliberately HELD.** `reconcile_lenses` ignores confidence when
+detecting conflict, and takes the **minimum** confidence across opinionated
+lenses. A single order-book snapshot is the thinnest of the four signals, so an
+honest LOW confidence would (a) cap the whole direction read at LOW whenever it
+spoke and (b) manufacture MIXED whenever the book leaned against real structure.
+Switching it on would most likely have made direction **worse**.
+
+**Recorded instead**, per derivation in `market_thesis.jsonl`:
+`imbalance` (None when unobserved, never 0.0), `direction_concluded` (what MDI
+actually said that cycle), `thesis_confidence`, and
+`consumed_by_direction: false` written into the record itself.
+
+**No threshold is baked in** — choosing a cutoff before measuring is exactly
+what this record exists to inform. A test asserts no lean/threshold in the
+payload. Three more tests pin that `msi_market_direction` and
+`direction_bridge` contain no reference to depth and that `LIQUIDITY_DIRECTION`
+stays unfilled — so the held boundary fails loudly rather than drifting.
+
+7,644 green.
+
+### Direction now: 4 lenses live, 1 measured
+price structure · market structure · options positioning (5 OI lenses) ·
+futures basis change — plus depth observed on the side.
+
+### OPERATOR GATE (from data, after N sessions)
+Does the book agree with structure or fight it? If it agrees, promoting it
+needs one of: accept the LOW ceiling · weight reconciliation by confidence (a
+philosophy change for ALL lenses) · a high abstention bar (threshold would need
+calibrating from this very trail).
