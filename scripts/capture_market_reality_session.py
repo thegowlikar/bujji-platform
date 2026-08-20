@@ -287,12 +287,22 @@ def _write_normalized(store, *, kind: str, identity: str, value, capture_timesta
 
 
 async def _capture_spot(broker, gate, store, capture_timestamp: str, log_raw: bool,
-                        normalized=None) -> None:
+                        normalized=None) -> bool:
+    """Returns True if an observation was actually recorded.
+
+    The boolean is what lets `_run_cycle` record a MISS. Before it, a poll
+    that produced nothing returned None exactly like a poll that succeeded,
+    so the two were indistinguishable to the caller -- and a dropped
+    observation left no trace anywhere.
+    """
     from bujji.market_reality import taxonomy
 
     ltp = await broker.get_spot(UNDERLYING)
     if log_raw:
         LOG.info("RAW spot ltp=%r (first-cycle timestamp inspection)", ltp)
+    if ltp is None:
+        LOG.warning("get_spot() returned no usable ltp this cycle -- recording a miss.")
+        return False
     cert_status, cert_ref = gate.status_for(ACCESS_METHOD, taxonomy.INSTRUMENT_SPOT)
     raw = build_spot_observation(ltp, capture_timestamp, cert_status, cert_ref)
     result = store.append(raw, now=capture_timestamp)
@@ -300,18 +310,21 @@ async def _capture_spot(broker, gate, store, capture_timestamp: str, log_raw: bo
     _write_normalized(normalized, kind="spot", identity=_NORMALIZED_IDENTITY["spot"][0],
                       value=ltp, capture_timestamp=capture_timestamp,
                       cert_status=cert_status, cert_ref=cert_ref)
+    return True
 
 
 async def _capture_vix(broker, gate, store, capture_timestamp: str, log_raw: bool,
-                       normalized=None) -> None:
+                       normalized=None) -> bool:
+    """Returns True if an observation was actually recorded -- see
+    `_capture_spot`."""
     from bujji.market_reality import taxonomy
 
     vix = await broker.get_vix()
     if log_raw:
         LOG.info("RAW vix response=%r (first-cycle timestamp inspection)", vix)
     if vix is None or vix.get("level") is None:
-        LOG.warning("get_vix() returned no usable level this cycle: %r -- skipping.", vix)
-        return
+        LOG.warning("get_vix() returned no usable level this cycle: %r -- recording a miss.", vix)
+        return False
     cert_status, cert_ref = gate.status_for(ACCESS_METHOD, taxonomy.INSTRUMENT_INDEX)
     raw = build_vix_observation(vix, capture_timestamp, cert_status, cert_ref)
     result = store.append(raw, now=capture_timestamp)
@@ -320,22 +333,26 @@ async def _capture_vix(broker, gate, store, capture_timestamp: str, log_raw: boo
     _write_normalized(normalized, kind="vix", identity=_NORMALIZED_IDENTITY["vix"][0],
                       value=vix.get("level"), capture_timestamp=capture_timestamp,
                       cert_status=cert_status, cert_ref=cert_ref)
+    return True
 
 
 async def _capture_futures(broker, gate, store, expiry_iso: str, capture_timestamp: str,
-                            log_raw: bool) -> None:
+                            log_raw: bool) -> bool:
+    """Returns True if an observation was actually recorded -- see
+    `_capture_spot`."""
     from bujji.market_reality import taxonomy
 
     quote = await broker.get_futures_quote(UNDERLYING)
     if log_raw:
         LOG.info("RAW futures quote=%r (first-cycle timestamp inspection)", quote)
     if quote is None or quote.get("ltp") is None:
-        LOG.warning("get_futures_quote() returned no usable ltp this cycle: %r -- skipping.", quote)
-        return
+        LOG.warning("get_futures_quote() returned no usable ltp this cycle: %r -- recording a miss.", quote)
+        return False
     cert_status, cert_ref = gate.status_for(ACCESS_METHOD, taxonomy.INSTRUMENT_FUTURE)
     raw = build_futures_observation(quote, expiry_iso, capture_timestamp, cert_status, cert_ref)
     result = store.append(raw, now=capture_timestamp)
     LOG.info("futures append outcome=%s observation_id=%s", result.outcome, result.observation_id)
+    return True
 
 
 async def _run_cycle(broker, gate, store, tracker, expiry_iso: str, log_raw: bool,
@@ -368,7 +385,26 @@ async def _run_cycle(broker, gate, store, tracker, expiry_iso: str, log_raw: boo
                                      normalized=normalized)),
     ):
         try:
-            await make_coro()
+            captured = await make_coro()
+            if captured is False:
+                # A GAP, RECORDED AS A GAP. The poll returned, the session
+                # continues, and nothing was observed -- so without this the
+                # series simply has no row for this minute, which on replay
+                # is indistinguishable from a market that did not move. Two
+                # real gaps opened on 2026-08-20 (121s spot, 601s chain) and
+                # neither left any trace. This is the trace.
+                # A POINT event, not an opening condition: the poll has
+                # already happened and is over, and the next cycle may well
+                # succeed. Recording it as a condition would also suppress
+                # the second and third miss as "the same condition" -- when
+                # three consecutive dropped polls are three distinct gaps.
+                tracker.record_point_event(
+                    reason=taxonomy.REASON_OBSERVATION_MISS, event_time=capture_timestamp,
+                    knowledge_time=capture_timestamp,
+                    detail=f"{label} poll returned no usable observation this cycle.",
+                    affected_instruments=(label,),
+                )
+                continue
             if tracker.has_open_condition:
                 tracker.record_recovery(
                     event_time=capture_timestamp, knowledge_time=capture_timestamp,

@@ -54,6 +54,7 @@ from .models import AppendResult
 from .taxonomy import (
     REASON_AUTH_FAILURE,
     REASON_COLLECTOR_RESTART,
+    REASON_OBSERVATION_MISS,
     REASON_DISCONNECT,
     REASON_QUEUE_OVERFLOW,
     REASON_RATE_LIMIT_SKIP,
@@ -70,7 +71,14 @@ OPENING_REASONS = (REASON_DISCONNECT, REASON_AUTH_FAILURE, REASON_SHUTDOWN_DRAIN
 # Conditions that are each, individually, a complete fact the instant they
 # happen -- no open/close pairing applies, and none is ever deduplicated
 # against a prior one.
-POINT_REASONS = (REASON_QUEUE_OVERFLOW, REASON_RATE_LIMIT_SKIP, REASON_COLLECTOR_RESTART)
+# REASON_OBSERVATION_MISS is a POINT reason, not an opening one: a poll that
+# returned nothing has already happened and is over, and the next cycle may
+# well succeed. Modelling it as an ongoing condition would claim a state the
+# collector is not in, and would suppress the second and third miss as "the
+# same condition" -- when three consecutive dropped polls are three distinct
+# gaps in the series.
+POINT_REASONS = (REASON_QUEUE_OVERFLOW, REASON_RATE_LIMIT_SKIP, REASON_COLLECTOR_RESTART,
+                 REASON_OBSERVATION_MISS)
 
 
 class CaptureLifecycleTracker:

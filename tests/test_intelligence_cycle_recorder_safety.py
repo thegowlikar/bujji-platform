@@ -221,6 +221,28 @@ _DIRECTION_POSITIONING_LENS_AUTHORIZED = (
 )
 
 
+# AUTHORIZED 2026-08-21 (Chief Engineer mandate, Layer 1/2 audit P0-8): the
+# market-data quality gate.
+#
+# WHY A NEW FILE IN A PROTECTED PACKAGE. Nothing stood between market data
+# and a trading decision. Tracing the entire runner for a quality gate found
+# exactly one string, in one branch, for one condition. Meanwhile
+# MarketDataAdapter had always computed health_status and missing_fields on
+# every snapshot, and IntelligenceCycleRecorder had always recorded the value
+# under "market_snapshot_health" -- where nothing read it. The signal existed
+# and was wired to a log line.
+#
+# WHAT IT DOES NOT DO. It adds no strategy, no construction rule, no risk
+# threshold, and it modifies no existing module in these protected packages.
+# It is additive and it only ever REFUSES -- it can turn a trade into a
+# no-trade and never the reverse, so no existing decision path is loosened.
+#
+# See tests/test_market_data_quality_gate.py.
+_DATA_QUALITY_GATE_AUTHORIZED = (
+    "bujji/production_runtime/market_data_gate.py",
+)
+
+
 def test_no_forbidden_module_imports_in_recorder():
     out = _grep(FORBIDDEN_IMPORTS, RECORDER_FILE)
     assert out == "", f"forbidden import found: {out}"
@@ -291,7 +313,7 @@ def test_no_protected_lineage_package_touched():
         cwd="/opt/bujji/app", capture_output=True, text=True,
     )
     changed = [l for l in result.stdout.strip().splitlines() if l]
-    changed = [l for l in changed if l not in _PAPERBROKER_V2_AUTHORIZED + _LOT_SIZE_AUTHORITATIVE_AUTHORIZED + _CPC_SAFETY_SPINE_AUTHORIZED + _CPC_EVIDENCE_AND_REALISM_AUTHORIZED + _LIVE_PREMIUM_FIX_AUTHORIZED + _THREE_PART_SELECTION_AUTHORIZED + _DEFINED_RISK_MODE_AUTHORIZED + _LEARNING_LOOP_AUTHORIZED + _DIRECTION_POSITIONING_LENS_AUTHORIZED]
+    changed = [l for l in changed if l not in _PAPERBROKER_V2_AUTHORIZED + _LOT_SIZE_AUTHORITATIVE_AUTHORIZED + _CPC_SAFETY_SPINE_AUTHORIZED + _CPC_EVIDENCE_AND_REALISM_AUTHORIZED + _LIVE_PREMIUM_FIX_AUTHORIZED + _THREE_PART_SELECTION_AUTHORIZED + _DEFINED_RISK_MODE_AUTHORIZED + _LEARNING_LOOP_AUTHORIZED + _DIRECTION_POSITIONING_LENS_AUTHORIZED + _DATA_QUALITY_GATE_AUTHORIZED]
     forbidden_prefixes = (
         "bujji/msi_strategy_selector/", "bujji/msi_trade_intent/", "bujji/msi_trade_construction/",
         "bujji/risk_governor/", "bujji/execution_engine/", "bujji/trading_brain/",
@@ -303,7 +325,9 @@ def test_no_protected_lineage_package_touched():
     # against THIS phase touching a forbidden lineage.
     violations = [
         l for l in changed
-        if any(l.startswith(p) for p in forbidden_prefixes) and l not in _PHASE14B_EXCEPTION
+        if any(l.startswith(p) for p in forbidden_prefixes)
+        and l not in _PHASE14B_EXCEPTION
+        and l not in _DATA_QUALITY_GATE_AUTHORIZED
     ]
     assert violations == [], f"forbidden module changes found: {violations}"
 

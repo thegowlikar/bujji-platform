@@ -116,11 +116,20 @@ def test_round_trip_preserves_every_field():
     assert restored == original
 
 
-def test_all_seven_reasons_are_constructible():
+def test_all_eight_reasons_are_constructible():
+    """The exact count is deliberate. It forces a conscious decision every
+    time the capture taxonomy grows, rather than letting a new reason appear
+    unnoticed -- which is how a reason ends up defined but never emitted.
+
+    Eight since 2026-08-21: REASON_OBSERVATION_MISS was added so that a poll
+    returning nothing leaves a trace. Before it, a dropped poll was logged and
+    abandoned, and the resulting hole in the series was indistinguishable on
+    replay from a market that did not move.
+    """
     for reason in taxonomy.ALL_CAPTURE_REASONS:
         ok, problems = validate_capture_event(_event(reason=reason))
         assert ok, problems
-    assert len(taxonomy.ALL_CAPTURE_REASONS) == 7
+    assert len(taxonomy.ALL_CAPTURE_REASONS) == 8
 
 
 # --- Validation -----------------------------------------------------------

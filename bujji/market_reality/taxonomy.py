@@ -83,6 +83,13 @@ REASON_RATE_LIMIT_SKIP = "RATE_LIMIT_SKIP"
 REASON_AUTH_FAILURE = "AUTH_FAILURE"
 REASON_SHUTDOWN_DRAIN_INCOMPLETE = "SHUTDOWN_DRAIN_INCOMPLETE"
 REASON_COLLECTOR_RESTART = "COLLECTOR_RESTART"
+# A poll that produced no usable observation. NOT an error and NOT a
+# disconnect: the call returned, the session continues, and the next cycle
+# may well succeed. It is recorded because the alternative is silence -- and
+# silence in an observation series is indistinguishable on replay from a
+# market that did not move. Two real gaps opened on 2026-08-20 (a 121s spot
+# gap and a 601s option-chain gap) and neither left any trace.
+REASON_OBSERVATION_MISS = "OBSERVATION_MISS"
 
 ALL_CAPTURE_REASONS = (
     REASON_DISCONNECT,
@@ -92,6 +99,7 @@ ALL_CAPTURE_REASONS = (
     REASON_AUTH_FAILURE,
     REASON_SHUTDOWN_DRAIN_INCOMPLETE,
     REASON_COLLECTOR_RESTART,
+    REASON_OBSERVATION_MISS,
 )
 
 # Stream item discriminators for the ordered union replay.

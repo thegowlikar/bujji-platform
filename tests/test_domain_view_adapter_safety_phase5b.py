@@ -198,6 +198,15 @@ _DIRECTION_POSITIONING_LENS_AUTHORIZED = (
 )
 
 
+# AUTHORIZED 2026-08-21 (Chief Engineer mandate, Layer 1/2 audit P0-8): the
+# market-data quality gate. Additive, refuses only -- it can turn a trade
+# into a no-trade and never the reverse, and it modifies no existing module
+# in a protected package. See tests/test_market_data_quality_gate.py.
+_DATA_QUALITY_GATE_AUTHORIZED = (
+    "bujji/production_runtime/market_data_gate.py",
+)
+
+
 def test_no_forbidden_module_imports_in_adapter():
     out = _grep(FORBIDDEN_IMPORTS, FILE)
     assert out == "", f"forbidden import found: {out}"
@@ -268,7 +277,7 @@ def test_no_decision_modules_beyond_consensus_and_synthesis_touched():
         cwd="/opt/bujji/app", capture_output=True, text=True,
     )
     changed = [l for l in result.stdout.strip().splitlines() if l]
-    changed = [l for l in changed if l not in _PAPERBROKER_V2_AUTHORIZED + _LOT_SIZE_AUTHORITATIVE_AUTHORIZED + _CPC_SAFETY_SPINE_AUTHORIZED + _CPC_EVIDENCE_AND_REALISM_AUTHORIZED + _THREE_PART_SELECTION_AUTHORIZED + _DEFINED_RISK_MODE_AUTHORIZED + _LEARNING_LOOP_AUTHORIZED + _DIRECTION_POSITIONING_LENS_AUTHORIZED]
+    changed = [l for l in changed if l not in _PAPERBROKER_V2_AUTHORIZED + _LOT_SIZE_AUTHORITATIVE_AUTHORIZED + _CPC_SAFETY_SPINE_AUTHORIZED + _CPC_EVIDENCE_AND_REALISM_AUTHORIZED + _THREE_PART_SELECTION_AUTHORIZED + _DEFINED_RISK_MODE_AUTHORIZED + _LEARNING_LOOP_AUTHORIZED + _DIRECTION_POSITIONING_LENS_AUTHORIZED + _DATA_QUALITY_GATE_AUTHORIZED]
     forbidden_prefixes = (
         "bujji/msi_trade_thesis/", "bujji/msi_trade_intent/",
         "bujji/msi_strategy_eligibility/", "bujji/msi_strategy_selector/",
@@ -277,7 +286,9 @@ def test_no_decision_modules_beyond_consensus_and_synthesis_touched():
     )
     violations = [
         l for l in changed
-        if any(l.startswith(p) for p in forbidden_prefixes) and l not in _PHASE14B_EXCEPTION
+        if any(l.startswith(p) for p in forbidden_prefixes)
+        and l not in _PHASE14B_EXCEPTION
+        and l not in _DATA_QUALITY_GATE_AUTHORIZED
     ]
     assert violations == [], f"forbidden module changes found: {violations}"
 
