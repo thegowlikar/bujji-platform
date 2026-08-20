@@ -721,3 +721,33 @@ Cadence note: the naked-position management interval stays at 60s. With the
 websocket live, lowering `undefined_risk_cycle_interval_seconds` is now
 meaningful (the tick source is no longer the floor) — an operator trading
 call, deliberately not made here.
+
+## 2026-08-21 — Layer 11 (Execution / OMS): the state machine reaches the path (36c73ff)
+
+**Score 62/100. NOT CERTIFIED.**
+
+The forensic finding was not a missing component. Gate A's order state machine
+was complete, tested, transactional and idempotency-keyed — and **had never
+executed once**. Proof, not inference: both journal databases held **zero
+rows**, `recover_group` had **zero callers**, and the composition root carried
+`journal` unused while `process_entry_cycle` placed orders in a bare loop.
+
+That produced the canonical uncontrolled-loss mechanism for an options seller:
+leg 1 fills, leg 2 rejects, the naked short stands — and it was *invisible*,
+since the runner logged "did not fill" and dropped the filled leg from its own
+model while it remained real at the broker.
+
+Now wired: INTENT durably journaled **before** placement (fail closed if it
+cannot be); partial fills contained via the canonical linked close-group, with
+the journal's own fold confirming CLOSED; failed unwinds surfaced as named
+orphans and registered for management; startup recovery run once before any new
+mint, refusing the session if legs stay unresolved.
+
+Failure-injected: clean fill → OPEN; leg-2 rejected → unwound → CLOSED; unwind
+fails → orphan named; crash after INTENT → recovered from broker truth
+(filled=75, ACKED); never-received → resolved as never-received.
+
+**Still open at this layer:** every fill above is a PaperBroker fill —
+`is_filled` is still believed synchronously rather than polled to terminal
+state; no cancel-on-timeout; no periodic in-session reconciliation against the
+broker book; exits (`trade_lifecycle_executor`) still place unjournaled.
