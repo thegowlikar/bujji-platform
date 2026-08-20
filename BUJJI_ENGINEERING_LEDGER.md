@@ -701,3 +701,23 @@ precise error: a miss is a POINT event, not an opening condition. It was
 right — modelling it as a condition would have suppressed the second and
 third miss as "the same condition", when three consecutive dropped polls are
 three distinct holes in the series.
+
+## 2026-08-21 — Websocket wired into the trading runner (c7cb659)
+
+`WebsocketTickProvider` at the existing `IntradayPriceProvider` seam: feed
+primary, per-symbol REST fallback via the execution-neutered live data
+broker, `TickSilenceWatchdog` driven off the management loop's own cadence.
+Stale (>90s) / zero / unreadable ticks are not prices; both sources dry
+yields None and `revalue()` refuses the group. Production config switched
+`tick_source: broker → websocket`; identical `market_thesis_live` fail-closed
+guard. Feed stopped in `_shutdown`.
+
+Runtime-proven after hours with the day's real token: connect, subscribe,
+`is_connected=True`, clean stop. **First tick-priced management pass still
+needs tomorrow's live session** — watch for "websocket priced N/N legs" vs
+REST-fallback lines, and the watchdog staying HEALTHY.
+
+Cadence note: the naked-position management interval stays at 60s. With the
+websocket live, lowering `undefined_risk_cycle_interval_seconds` is now
+meaningful (the tick source is no longer the floor) — an operator trading
+call, deliberately not made here.
