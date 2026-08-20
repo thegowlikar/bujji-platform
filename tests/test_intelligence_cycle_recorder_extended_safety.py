@@ -211,6 +211,27 @@ _WEBSOCKET_TICK_PROVIDER_AUTHORIZED = (
 )
 
 
+# AUTHORIZED 2026-08-21 (Chief Engineer mandate, Layer 11 audit): journaled
+# order execution.
+#
+# WHY. A complete order state machine already existed in Gate A --
+# MINTED/CONSTRUCTED/SUBMIT_INTENT/SUBMIT_ACK/FILL_OBSERVED, idempotency-keyed,
+# transactional, with per-leg crash recovery against broker truth. It never
+# ran: process_entry_cycle placed orders in a bare loop, both journal
+# databases held ZERO rows, recover_group had ZERO callers, and the
+# composition root carried `journal` unused. A partially-filled multi-leg
+# entry therefore left a naked short that was also invisible to the runner.
+#
+# WHAT THIS ADDS. Only wiring. Every event shape is copied from the journal's
+# own test suite and from msi_entry_bridge's already-written construction
+# path -- no new state machine, no new strategy, no new risk rule. It only
+# ever adds refusals and unwinds: an entry that cannot be journaled is not
+# placed, and a partial fill is contained. See tests/test_journaled_execution.py.
+_JOURNALED_EXECUTION_AUTHORIZED = (
+    "bujji/production_runtime/execution_journal_bridge.py",
+)
+
+
 def test_no_forbidden_module_imports():
     out = _grep(FORBIDDEN_IMPORTS, RECORDER_FILE)
     assert out == "", f"forbidden import found: {out}"
@@ -308,7 +329,7 @@ def test_no_protected_execution_lineage_touched():
         cwd="/opt/bujji/app", capture_output=True, text=True,
     )
     changed = [l for l in result.stdout.strip().splitlines() if l]
-    changed = [l for l in changed if l not in _PAPERBROKER_V2_AUTHORIZED + _LOT_SIZE_AUTHORITATIVE_AUTHORIZED + _CPC_SAFETY_SPINE_AUTHORIZED + _CPC_EVIDENCE_AND_REALISM_AUTHORIZED + _LIVE_PREMIUM_FIX_AUTHORIZED + _THREE_PART_SELECTION_AUTHORIZED + _DEFINED_RISK_MODE_AUTHORIZED + _LEARNING_LOOP_AUTHORIZED + _DATA_QUALITY_GATE_AUTHORIZED + _WEBSOCKET_TICK_PROVIDER_AUTHORIZED]
+    changed = [l for l in changed if l not in _PAPERBROKER_V2_AUTHORIZED + _LOT_SIZE_AUTHORITATIVE_AUTHORIZED + _CPC_SAFETY_SPINE_AUTHORIZED + _CPC_EVIDENCE_AND_REALISM_AUTHORIZED + _LIVE_PREMIUM_FIX_AUTHORIZED + _THREE_PART_SELECTION_AUTHORIZED + _DEFINED_RISK_MODE_AUTHORIZED + _LEARNING_LOOP_AUTHORIZED + _DATA_QUALITY_GATE_AUTHORIZED + _WEBSOCKET_TICK_PROVIDER_AUTHORIZED + _JOURNALED_EXECUTION_AUTHORIZED]
     forbidden_prefixes = (
         "bujji/msi_trade_construction/", "bujji/risk_governor/", "bujji/execution_engine/",
         "bujji/trading_brain/", "bujji/msi_shadow_trading/", "bujji/mic_replay/",

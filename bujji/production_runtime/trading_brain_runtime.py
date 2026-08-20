@@ -369,10 +369,46 @@ class TradingBrainRuntime:
         ))
 
         # -- Broker Layer: PaperBroker is the sole, terminal executor -----
-        order_results = tuple(
-            _await(root.broker.place_order(order)) for order in order_requests
+        #
+        # JOURNALED (2026-08-21, Layer 11 audit). This was a bare loop that
+        # trusted is_filled synchronously; both journal databases held zero
+        # rows, and root.journal -- handed in by the runner -- was never
+        # touched. Now every leg is SUBMIT_INTENT-journaled BEFORE placement
+        # (an order the journal does not know about is unrecoverable after a
+        # crash) and every broker response lands as SUBMIT_ACK/FILL_OBSERVED
+        # or SUBMIT_FAILURE, through Gate A's own already-tested machine.
+        #
+        # A PARTIAL multi-leg fill is CONTAINED: the filled legs are unwound
+        # at market immediately, journaled as the canonical close-group. A
+        # one-legged short left standing was the exact uncontrolled-loss
+        # mechanism this closes -- and before this, it was also invisible.
+        from bujji.production_runtime.execution_journal_bridge import (
+            contain_partial_entry, journaled_entry)
+
+        import logging as _logging
+        _exec_log = _logging.getLogger("bujji.trading_brain_runtime.execution")
+        entry_outcome = journaled_entry(
+            root.journal, lambda order: _await(root.broker.place_order(order)),
+            order_requests, plan_id=proposal.assessment_id,
+            strategy_id=proposal.strategy_family, underlying=root.underlying,
+            clock=root.clock, logger=_exec_log,
         )
-        all_filled = all(r.is_filled for r in order_results) if order_results else False
+        if entry_outcome.blocked_reason is not None:
+            return TradingBrainCycleResult(
+                proposal=proposal, governor_result=governor_result, context_unavailable=None,
+                order_results=(), approved_quantity=governor_result.final_quantity,
+                filled=False, blocking_reason=entry_outcome.blocked_reason,
+            )
+        order_results = entry_outcome.order_results
+        all_filled = entry_outcome.all_filled
+
+        containment = None
+        if entry_outcome.filled and not all_filled:
+            containment = contain_partial_entry(
+                root.journal, lambda order: _await(root.broker.place_order(order)),
+                entry_outcome, underlying=root.underlying,
+                strategy_id=proposal.strategy_family, clock=root.clock, logger=_exec_log,
+            )
         root.event_bus.publish_nowait(Event(
             type=EventType.DECISION_MADE,
             payload={"stage": STAGE_ORDER_FILLED, "assessment_id": proposal.assessment_id,
@@ -389,10 +425,21 @@ class TradingBrainRuntime:
                 timestamp=root.clock(),
             ))
 
+        if all_filled:
+            blocking_reason = None
+        elif containment is None:
+            blocking_reason = "UNFILLED"
+        elif containment.clean:
+            blocking_reason = "PARTIAL_CONTAINED"
+        else:
+            # An orphan is a LIVE position. The reason string names it so the
+            # runner can register it for management -- never silently drop it.
+            blocking_reason = "PARTIAL_ORPHANED:" + ",".join(containment.orphaned_coids)
+
         return TradingBrainCycleResult(
             proposal=proposal, governor_result=governor_result, context_unavailable=None,
             order_results=order_results, approved_quantity=governor_result.final_quantity,
-            filled=all_filled, blocking_reason=None if all_filled else "PARTIAL_OR_UNFILLED",
+            filled=all_filled, blocking_reason=blocking_reason,
         )
 
     def _build_order_requests(

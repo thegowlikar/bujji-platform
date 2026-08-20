@@ -539,6 +539,29 @@ class OptionsOSRunner:
         journal_path = REPO_ROOT / artifacts_cfg.get("journal_path", "data/options_os_shadow_position_group_journal.db")
         journal_path.parent.mkdir(parents=True, exist_ok=True)
         self._journal = PositionGroupJournal(str(journal_path))
+        # STARTUP RECOVERY (Layer 11, 2026-08-21) -- run once, before any new
+        # mint, per position_group_recovery's own stated contract, honoured
+        # for the first time (it previously had zero callers). Any leg a
+        # prior crash left SUBMIT_PENDING_UNKNOWN is resolved against broker
+        # truth by its exact client_order_id. If legs remain unresolved the
+        # session REFUSES to trade: an unresolved order is possibly a live
+        # position, and minting new risk on top of unknown risk is the one
+        # thing a restart must never do.
+        import asyncio as _asyncio_rec
+
+        from bujji.production_runtime.execution_journal_bridge import (
+            recover_unresolved_at_startup)
+
+        recovery = recover_unresolved_at_startup(
+            self._journal, str(journal_path), self._broker, _asyncio_rec.run,
+            self._logger, self._clock)
+        self._governor_result_summary["startup_order_recovery"] = recovery
+        if recovery["unresolved_after"]:
+            raise ConfigurationError(
+                "STARTUP RECOVERY could not resolve order state for group(s) "
+                f"{recovery['unresolved_after']} -- refusing to trade on top of "
+                "unknown in-flight orders. Inspect the position group journal and "
+                "the broker order book, then resolve or operator-correct them.")
 
         capital_snapshot_provider = _make_capital_snapshot_provider(
             capital_cfg, self._clock)
@@ -1738,6 +1761,15 @@ class OptionsOSRunner:
 
         if not cycle_result or not cycle_result.filled:
             reason = _entry_failure_reason(cycle_result)
+            # ORPHANED PARTIAL (Layer 11, 2026-08-21): some legs filled, the
+            # containment unwind did NOT fill, and those legs are LIVE
+            # positions. They are registered for management here -- an orphan
+            # with a stop-loss is a contained problem; an invisible one has
+            # nothing. Before this, a partial fill was logged as "did not
+            # fill" and the filled legs simply vanished from the runner's
+            # model while remaining real at the broker.
+            if isinstance(reason, str) and reason.startswith("PARTIAL_ORPHANED:"):
+                self._register_orphaned_legs(cycle_result, reason)
             self._logger.info("Entry did not fill (reason=%s).", reason)
             return False
 
@@ -1772,6 +1804,46 @@ class OptionsOSRunner:
         )
 
         return True
+
+    def _register_orphaned_legs(self, cycle_result, reason: str) -> None:
+        """Register the filled-but-not-unwound legs of a partial entry so
+        position management owns them. Never raises: failing to register
+        must not also lose the CRITICAL log that names the orphans."""
+        try:
+            orphan_coids = set(reason.split(":", 1)[1].split(","))
+            from bujji.trading_brain.risk_governor.msi_entry_bridge import _leg_to_core_contract
+
+            contracts = {}
+            entry_prices = {}
+            for leg, order_result in zip(cycle_result.proposal.legs, cycle_result.order_results):
+                if getattr(order_result, "client_order_id", None) in orphan_coids:
+                    contract = _leg_to_core_contract(leg, self._root.underlying,
+                                                     self._root.exchange_lot_size)
+                    contracts[contract.symbol] = contract
+                    entry_prices[contract.symbol] = order_result.average_price
+            if not contracts:
+                self._logger.critical(
+                    "ORPHAN REGISTRATION FAILED -- reason named %s but no matching "
+                    "order results were found. The broker book must be inspected "
+                    "manually NOW.", sorted(orphan_coids))
+                return
+            pg_id = f"{cycle_result.proposal.assessment_id}-ORPHAN"
+            self._registry.register_entry(
+                pg_id, cycle_result.proposal.strategy_family, list(contracts.keys()),
+                0.0, self._clock, contracts=contracts)
+            self._lifecycle_runtime.mark_open(pg_id)
+            self._entry_prices = entry_prices
+            self._contracts_by_symbol = contracts
+            self._logger.critical(
+                "ORPHANED LEGS REGISTERED FOR MANAGEMENT: %s -- position %s is LIVE "
+                "with legs %s. Management cycles will revalue and exit it; treat "
+                "this session as an incident regardless.",
+                sorted(orphan_coids), pg_id, list(contracts.keys()))
+        except Exception as exc:  # noqa: BLE001
+            self._logger.critical(
+                "ORPHAN REGISTRATION RAISED %s: %s -- the broker book holds live "
+                "legs this runner is NOT managing. Manual intervention required NOW.",
+                type(exc).__name__, exc)
 
     def _record_iv_divergence(self, chain, spot) -> None:
         """Measure the two IV derivations against each other, at the exact
