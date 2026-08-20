@@ -69,6 +69,7 @@ def build_thesis_artifact(
     cycle: Optional[int] = None,
     recorded_at: Optional[str] = None,
     level_context: Optional[Dict[str, Any]] = None,
+    depth_observation: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
     """One auditable record of a single regime derivation.
 
@@ -100,6 +101,24 @@ def build_thesis_artifact(
         # rather than from argument. None means no map was available, which
         # is itself worth knowing on the day of a trade.
         "level_context": level_context,
+        # ORDER-BOOK PRESSURE, RECORDED BUT NOT CONSUMED (2026-08-20).
+        #
+        # Depth is fetched every cycle and is deliberately NOT a direction
+        # lens yet. reconcile_lenses ignores confidence when detecting
+        # conflict, and takes the MINIMUM confidence across opinionated
+        # lenses -- so an honest LOW confidence on a single order-book
+        # snapshot would cap the whole direction read at LOW whenever it
+        # spoke, and manufacture MIXED whenever the book leaned against real
+        # structure. Promoting it is a judgement about the reconciliation
+        # rule, which is the operator's.
+        #
+        # So the raw imbalance is recorded beside what direction ACTUALLY
+        # concluded on the same cycle. After enough sessions the question
+        # "does the book agree with structure, or fight it?" is answerable
+        # from this trail instead of from argument -- and NO THRESHOLD is
+        # baked in here, because choosing one before measuring is the thing
+        # this record exists to avoid.
+        "depth_observation": depth_observation,
         # The understanding layer's own honest record for this cycle,
         # persisted verbatim -- this module reshapes nothing.
         "cycle_record": cycle_record,

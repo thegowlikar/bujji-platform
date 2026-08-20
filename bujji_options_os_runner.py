@@ -968,8 +968,49 @@ class OptionsOSRunner:
             cycle=getattr(self, "_pending_cycle", None),
             recorded_at=self._clock().isoformat(),
             level_context=self._level_context_dict(),
+            depth_observation=self._depth_observation(snapshot, thesis),
         )
         return MarketThesisRegimeProvider(thesis, volatility_regime)
+
+    def _depth_observation(self, snapshot, thesis) -> Optional[Dict[str, Any]]:
+        """Order-book pressure, recorded beside the direction it did not inform.
+
+        Depth is fetched every cycle (operator directive) and is deliberately
+        NOT a direction lens: see the note in thesis_artifact for the
+        reconcile_lenses mechanism that makes a thin fourth opinion harmful.
+        This records the raw imbalance next to what direction actually
+        concluded on the same cycle, so the promotion decision can be made
+        from a trail.
+
+        Never raises: a diagnostic must not end a session.
+        """
+        try:
+            from bujji.futures_observation.engine import compute_depth_imbalance
+
+            futures = getattr(snapshot, "futures", None)
+            if futures is None:
+                return {"status": "NO_FUTURES_SNAPSHOT", "consumed_by_direction": False}
+            buy = getattr(futures, "total_buy_qty", None)
+            sell = getattr(futures, "total_sell_qty", None)
+            return {
+                "status": "OK" if buy is not None and sell is not None else "NOT_OBSERVED",
+                "futures_symbol": getattr(futures, "symbol", None),
+                "total_buy_qty": buy,
+                "total_sell_qty": sell,
+                # None, never 0.0, when unobserved -- a zero imbalance is a
+                # measured balanced book and absence is not.
+                "imbalance": compute_depth_imbalance(buy, sell),
+                # What direction concluded on THIS cycle, for the comparison
+                # this record exists to enable.
+                "direction_concluded": getattr(thesis, "directional_bias", None),
+                "thesis_confidence": getattr(thesis, "confidence", None),
+                # Explicit in the record itself, so no reader can mistake a
+                # recorded observation for an input to the decision.
+                "consumed_by_direction": False,
+            }
+        except Exception as exc:  # noqa: BLE001 -- diagnostics never end a session
+            return {"status": f"FAILED:{type(exc).__name__}", "error": str(exc),
+                    "consumed_by_direction": False}
 
     def _persist_thesis(self, trend_regime=None, volatility_regime=None) -> None:
         """Write the pending derivation record, now that we know what the
