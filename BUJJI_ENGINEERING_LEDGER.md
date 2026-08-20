@@ -459,3 +459,40 @@ session ids and no unbuildable families.
   REJECT_IMPOSSIBLE_WING_WIDTH unreachable (both shared with IRON_CONDOR).
 - Websocket certified but unwired; slippage modelled, never measured.
 - Futures identity in the normalized store (rolled continuous vs real contract).
+
+## 2026-08-20 pre-open — size and stop coupled
+
+Three rupee figures were flat per-POSITION totals beside a separately
+configured size, read from config at three call sites, never related:
+
+    desired_quantity: 1
+    requested_risk: 5000.0                     -> initial_risk (the stop)
+    proposed_trade_effect.additional_margin    -> capital check
+    proposed_trade_effect.additional_max_loss  -> risk budget governor
+
+`strategy_risk_adapter` takes quantity and risk side by side and never relates
+them ("requested_risk stands in as both initial_risk and current_risk"), so
+only the caller could — and didn't. **At 5 lots the real risk quintuples while
+the stop stays Rs 5,000**: fires on noise, and the risk-budget/capital checks
+are sized for a position one fifth as large.
+
+Fixed in ONE place: `_risk_budget()` reads all three as **per lot** and
+multiplies by the lots; entry sizing and the exit policy's `initial_risk` both
+read it. A test asserts the raw config reads are gone and there are exactly
+two callers. **At 1 lot every value is identical to before** — no behaviour
+change today.
+
+New warning: a stop wider than the daily loss limit is incoherent (the daily
+limit halts the session first). Reachable at 6 lots on today's numbers; now
+logged instead of discovered by its effects. Degenerate sizes floor at 1 lot —
+a zero budget would disable the stop, not tighten it.
+
+7,549 green. Guard note: new files under `production_runtime/` are invisible
+to the lineage guards while untracked and surface on commit — third time this
+pattern has appeared; authorize by name, never advance the baseline.
+
+### Still open (operator decisions)
+- **Sizing itself is still static** (`desired_quantity: 1`, no sizing module).
+  The coupling is fixed; adaptive sizing is a separate build.
+- Holiday calendar unverified · `_wing_width` unit trap · `_nearest_grid`
+  clamping · websocket unwired · slippage uncalibrated · futures identity.
