@@ -181,6 +181,36 @@ _LEARNING_LOOP_AUTHORIZED = (
     "bujji/production_runtime/risk_memory_bridge.py",
 )
 
+# AUTHORIZED CHANGE (2026-08-20, operator directive): open interest reaches
+# the direction read. Direction was derived from exactly two lenses, price
+# structure and market structure, and BOTH read the same evidence -- NIFTY
+# spot price polled every 30 seconds. One instrument, one field. When they
+# disagreed the answer was UNKNOWN, which is what the first live continuous
+# session reported for most of 2026-08-20.
+#
+# MPPI was already computing five lenses over ~199,000 option rows a day and
+# reaching the THESIS, invisible to direction. OPTIONS_POSITIONING_DIRECTION
+# had been sitting in KNOWN_LENS_NAMES unfilled the whole time.
+#
+#   bujji/msi_market_direction/engine.py   + derive_participant_positioning_lens
+#     and an OPTIONAL mppi parameter (default None -> UNKNOWN opinion), so every
+#     existing caller and test keeps working. No existing lens is touched and
+#     the reconciliation rule is unchanged: conflicting lenses still yield
+#     MIXED/UNKNOWN rather than an average.
+#   bujji/market_state/direction_bridge.py  passes the assessment through.
+#
+# NO INVERSION: MPPI's bias is already normalised to PRICE direction (verified
+# in derive_writer_dominance_lens -- call writers dominant yields
+# BEARISH_POSITIONING). Confidence is capped at MODERATE because positioning
+# is intent, not a fact about price; HIGH stays reserved for MSSI's structural
+# breakout/breakdown. MIXED_POSITIONING becomes UNKNOWN, never NEUTRAL.
+#
+# Coverage: tests/test_direction_positioning_lens.py.
+_DIRECTION_POSITIONING_LENS_AUTHORIZED = (
+    "bujji/msi_market_direction/engine.py",
+    "bujji/market_state/direction_bridge.py",
+)
+
 
 def test_no_forbidden_module_imports_in_recorder():
     out = _grep(FORBIDDEN_IMPORTS, RECORDER_FILE)
@@ -231,7 +261,18 @@ def test_all_consumed_bridges_and_engines_unmodified_this_phase():
         cwd="/opt/bujji/app", capture_output=True, text=True,
     )
     changed_files = [l.split("|")[0].strip() for l in result.stdout.strip().splitlines() if l and "|" in l]
-    unexpected = [f for f in changed_files if f not in _PHASE14B_EXCEPTION]
+    # AUTHORIZED 2026-08-20 (operator directive): the positioning lens.
+    # msi_market_direction/engine.py and market_state/direction_bridge.py
+    # gained OPTIONS_POSITIONING_DIRECTION -- the lens slot that had been in
+    # KNOWN_LENS_NAMES unfilled since the package was written. Direction had
+    # been derived from two lenses that BOTH read spot price alone. The mppi
+    # parameter is OPTIONAL (default None), no existing lens is touched, and
+    # the reconciliation rule is unchanged. See
+    # _DIRECTION_POSITIONING_LENS_AUTHORIZED above and
+    # tests/test_direction_positioning_lens.py.
+    unexpected = [f for f in changed_files
+                  if f not in _PHASE14B_EXCEPTION
+                  and f not in _DIRECTION_POSITIONING_LENS_AUTHORIZED]
     assert unexpected == [], f"a reused bridge/engine was modified: {unexpected}"
 
 
@@ -241,7 +282,7 @@ def test_no_protected_lineage_package_touched():
         cwd="/opt/bujji/app", capture_output=True, text=True,
     )
     changed = [l for l in result.stdout.strip().splitlines() if l]
-    changed = [l for l in changed if l not in _PAPERBROKER_V2_AUTHORIZED + _LOT_SIZE_AUTHORITATIVE_AUTHORIZED + _CPC_SAFETY_SPINE_AUTHORIZED + _CPC_EVIDENCE_AND_REALISM_AUTHORIZED + _LIVE_PREMIUM_FIX_AUTHORIZED + _THREE_PART_SELECTION_AUTHORIZED + _DEFINED_RISK_MODE_AUTHORIZED + _LEARNING_LOOP_AUTHORIZED]
+    changed = [l for l in changed if l not in _PAPERBROKER_V2_AUTHORIZED + _LOT_SIZE_AUTHORITATIVE_AUTHORIZED + _CPC_SAFETY_SPINE_AUTHORIZED + _CPC_EVIDENCE_AND_REALISM_AUTHORIZED + _LIVE_PREMIUM_FIX_AUTHORIZED + _THREE_PART_SELECTION_AUTHORIZED + _DEFINED_RISK_MODE_AUTHORIZED + _LEARNING_LOOP_AUTHORIZED + _DIRECTION_POSITIONING_LENS_AUTHORIZED]
     forbidden_prefixes = (
         "bujji/msi_strategy_selector/", "bujji/msi_trade_intent/", "bujji/msi_trade_construction/",
         "bujji/risk_governor/", "bujji/execution_engine/", "bujji/trading_brain/",

@@ -27,4 +27,9 @@ def build_market_direction(
     mssi = market_state_assessment.market_structure
     if psi is None or mssi is None:
         return None
-    return determine_market_direction(psi, mssi, timestamp=timestamp)
+    # MPPI is OPTIONAL here, unlike psi/mssi: an absent positioning assessment
+    # contributes an UNKNOWN opinion rather than blocking the direction read.
+    # Requiring it would make direction unavailable on any cycle with a thin
+    # chain, which is strictly worse than the two-lens answer we had before.
+    return determine_market_direction(
+        psi, mssi, market_state_assessment.participant_positioning, timestamp=timestamp)

@@ -70,6 +70,13 @@ def base_config(tmp_path):
             "underlying": "NIFTY", "exchange_lot_size": LOT, "desired_quantity": 1,
             "instrument_master_dir": _master_fixture(tmp_path),
             "requested_risk": 5000.0,
+            # Lifecycle mechanics, not market hours. Since the gate moved into
+            # _startup (2026-08-20) every runner construction reaches it, so a
+            # test running after the configured session end would fail on the
+            # clock rather than on the behaviour under test. The gate itself is
+            # proven in tests/test_market_hours_gate.py and its ordering in
+            # tests/test_market_open_gate_ordering.py.
+            "skip_market_hours_check": True,
             "proposed_trade_effect": {"additional_margin": 10000.0, "additional_max_loss": 5000.0},
         },
         "exit_policy": {"profit_target_fraction": 0.5, "max_loss_fraction": 1.0, "mandatory_exit_time": None},

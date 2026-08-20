@@ -92,6 +92,36 @@ _THREE_PART_SELECTION_AUTHORIZED = (
     "bujji/production_runtime/trading_session_governor/strategy_selector.py",
 )
 
+# AUTHORIZED CHANGE (2026-08-20, operator directive): open interest reaches
+# the direction read. Direction was derived from exactly two lenses, price
+# structure and market structure, and BOTH read the same evidence -- NIFTY
+# spot price polled every 30 seconds. One instrument, one field. When they
+# disagreed the answer was UNKNOWN, which is what the first live continuous
+# session reported for most of 2026-08-20.
+#
+# MPPI was already computing five lenses over ~199,000 option rows a day and
+# reaching the THESIS, invisible to direction. OPTIONS_POSITIONING_DIRECTION
+# had been sitting in KNOWN_LENS_NAMES unfilled the whole time.
+#
+#   bujji/msi_market_direction/engine.py   + derive_participant_positioning_lens
+#     and an OPTIONAL mppi parameter (default None -> UNKNOWN opinion), so every
+#     existing caller and test keeps working. No existing lens is touched and
+#     the reconciliation rule is unchanged: conflicting lenses still yield
+#     MIXED/UNKNOWN rather than an average.
+#   bujji/market_state/direction_bridge.py  passes the assessment through.
+#
+# NO INVERSION: MPPI's bias is already normalised to PRICE direction (verified
+# in derive_writer_dominance_lens -- call writers dominant yields
+# BEARISH_POSITIONING). Confidence is capped at MODERATE because positioning
+# is intent, not a fact about price; HIGH stays reserved for MSSI's structural
+# breakout/breakdown. MIXED_POSITIONING becomes UNKNOWN, never NEUTRAL.
+#
+# Coverage: tests/test_direction_positioning_lens.py.
+_DIRECTION_POSITIONING_LENS_AUTHORIZED = (
+    "bujji/msi_market_direction/engine.py",
+    "bujji/market_state/direction_bridge.py",
+)
+
 
 def test_market_direction_summary_has_only_allowed_fields():
     from bujji.market_state.models import MarketDirectionSummary
@@ -137,7 +167,19 @@ def test_msi_market_direction_itself_unmodified():
          "bujji/msi_market_direction/engine.py", "bujji/msi_market_direction/models.py"],
         cwd="/opt/bujji/app", capture_output=True, text=True,
     )
-    assert result.stdout.strip() == "", f"msi_market_direction was modified: {result.stdout}"
+    # AUTHORIZED 2026-08-20 (operator directive): the positioning lens.
+    # msi_market_direction/engine.py and market_state/direction_bridge.py
+    # gained OPTIONS_POSITIONING_DIRECTION -- the lens slot that had been in
+    # KNOWN_LENS_NAMES unfilled since the package was written. Direction had
+    # been derived from two lenses that BOTH read spot price alone. The mppi
+    # parameter is OPTIONAL (default None), no existing lens is touched, and
+    # the reconciliation rule is unchanged. See
+    # _DIRECTION_POSITIONING_LENS_AUTHORIZED above and
+    # tests/test_direction_positioning_lens.py.
+    changed = [l.split("|")[0].strip()
+               for l in result.stdout.strip().splitlines() if l and "|" in l]
+    unexpected = [f for f in changed if f not in _DIRECTION_POSITIONING_LENS_AUTHORIZED]
+    assert unexpected == [], f"msi_market_direction was modified: {unexpected}"
 
 
 def test_shadow_session_runner_not_coupled_to_market_direction():
@@ -178,5 +220,6 @@ def test_no_protected_package_was_modified_this_phase():
         and "market_state_builder" not in l and "/market_state/" not in l
         and l not in _phase9_liquidity_bridge_exception and l not in _LIVE_PREMIUM_FIX_AUTHORIZED
            and l not in _THREE_PART_SELECTION_AUTHORIZED
+           and l not in _DIRECTION_POSITIONING_LENS_AUTHORIZED
     ]
     assert violations == [], f"unexpected protected-package changes: {violations}"

@@ -57,6 +57,9 @@ def _cfg(tmp_path, continuous):
         "shadow_mode": True, "logging": {"namespace": "continuous-test"},
         "session": {"underlying": "NIFTY", "exchange_lot_size": 75, "desired_quantity": 1,
                     "requested_risk": 5000.0,
+                    # Loop mechanics, not market hours -- see the note in
+                    # tests/test_options_os_runner_outcome_loop.py.
+                    "skip_market_hours_check": True,
                     "proposed_trade_effect": {"additional_margin": 10000.0, "additional_max_loss": 5000.0},
                     "continuous": continuous},
         "exit_policy": {"profit_target_fraction": 0.5, "max_loss_fraction": 1.0, "mandatory_exit_time": None},

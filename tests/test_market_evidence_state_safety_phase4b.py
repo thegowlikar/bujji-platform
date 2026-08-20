@@ -177,6 +177,36 @@ _LEARNING_LOOP_AUTHORIZED = (
     "bujji/production_runtime/risk_memory_bridge.py",
 )
 
+# AUTHORIZED CHANGE (2026-08-20, operator directive): open interest reaches
+# the direction read. Direction was derived from exactly two lenses, price
+# structure and market structure, and BOTH read the same evidence -- NIFTY
+# spot price polled every 30 seconds. One instrument, one field. When they
+# disagreed the answer was UNKNOWN, which is what the first live continuous
+# session reported for most of 2026-08-20.
+#
+# MPPI was already computing five lenses over ~199,000 option rows a day and
+# reaching the THESIS, invisible to direction. OPTIONS_POSITIONING_DIRECTION
+# had been sitting in KNOWN_LENS_NAMES unfilled the whole time.
+#
+#   bujji/msi_market_direction/engine.py   + derive_participant_positioning_lens
+#     and an OPTIONAL mppi parameter (default None -> UNKNOWN opinion), so every
+#     existing caller and test keeps working. No existing lens is touched and
+#     the reconciliation rule is unchanged: conflicting lenses still yield
+#     MIXED/UNKNOWN rather than an average.
+#   bujji/market_state/direction_bridge.py  passes the assessment through.
+#
+# NO INVERSION: MPPI's bias is already normalised to PRICE direction (verified
+# in derive_writer_dominance_lens -- call writers dominant yields
+# BEARISH_POSITIONING). Confidence is capped at MODERATE because positioning
+# is intent, not a fact about price; HIGH stays reserved for MSSI's structural
+# breakout/breakdown. MIXED_POSITIONING becomes UNKNOWN, never NEUTRAL.
+#
+# Coverage: tests/test_direction_positioning_lens.py.
+_DIRECTION_POSITIONING_LENS_AUTHORIZED = (
+    "bujji/msi_market_direction/engine.py",
+    "bujji/market_state/direction_bridge.py",
+)
+
 
 def test_market_evidence_state_has_only_allowed_fields():
     from bujji.market_state.evidence_boundary import MarketEvidenceState
@@ -306,7 +336,7 @@ def test_no_protected_lineage_package_modified():
         cwd="/opt/bujji/app", capture_output=True, text=True,
     )
     changed = [l for l in result.stdout.strip().splitlines() if l]
-    changed = [l for l in changed if l not in _PAPERBROKER_V2_AUTHORIZED + _LOT_SIZE_AUTHORITATIVE_AUTHORIZED + _CPC_SAFETY_SPINE_AUTHORIZED + _CPC_EVIDENCE_AND_REALISM_AUTHORIZED + _LIVE_PREMIUM_FIX_AUTHORIZED + _THREE_PART_SELECTION_AUTHORIZED + _DEFINED_RISK_MODE_AUTHORIZED + _LEARNING_LOOP_AUTHORIZED]
+    changed = [l for l in changed if l not in _PAPERBROKER_V2_AUTHORIZED + _LOT_SIZE_AUTHORITATIVE_AUTHORIZED + _CPC_SAFETY_SPINE_AUTHORIZED + _CPC_EVIDENCE_AND_REALISM_AUTHORIZED + _LIVE_PREMIUM_FIX_AUTHORIZED + _THREE_PART_SELECTION_AUTHORIZED + _DEFINED_RISK_MODE_AUTHORIZED + _LEARNING_LOOP_AUTHORIZED + _DIRECTION_POSITIONING_LENS_AUTHORIZED]
     protected_prefixes = (
         "bujji/msi_", "bujji/trading_brain/", "bujji/execution_engine/",
         "bujji/risk_governor/", "bujji/msi_shadow_trading/", "bujji/mic_replay/",
