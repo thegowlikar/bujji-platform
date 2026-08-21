@@ -321,6 +321,47 @@ _REGISTRY_PURE_ACCESSOR_AUTHORIZED = (
     "bujji/production_runtime/position_reality_registry.py",
 )
 
+# OPERATOR AUTHORIZATION 2026-08-21 -- the single option-symbol vocabulary.
+#
+# WHY THESE THREE, AND WHY THEY ARE UNDER A PROTECTED PREFIX. Two vocabularies
+# described the same contract: the chain carried the broker's own symbol
+# ("NSE:NIFTY2681824100CE") while every downstream consumer REBUILT its own
+# from the strategy leg ("NIFTY2026-08-2524500CE"). Measured live 2026-08-20:
+#
+#     'NIFTY2026-08-2524500CE'  -> verified=False  total_margin=None
+#     'NSE:NIFTY26AUG22700PE'   -> verified=True   total_margin=98915.87
+#
+# The API was never broken; every entry that session was blocked by a string
+# format, and the same split made every paper fill frictionless because the
+# quote book was keyed one way and orders looked up the other.
+#
+#   option_symbol_resolver.py  NEW. The only place a broker symbol is now
+#                              OBTAINED. Lookup-only: it cannot construct,
+#                              prefix, strip, reformat, round or coerce, and
+#                              a test asserts that structurally over its AST.
+#   live_chain_provider.py     Tags FYERS rows BROKER_AUTHORITATIVE and stops
+#                              fabricating a symbol when FYERS omits one --
+#                              that `or` wrote a THIRD invented format into
+#                              the exact field Gate B trusts as broker-real.
+#   store_chain_provider.py    Stops fabricating instrument_symbol entirely.
+#                              The capture never recorded broker symbols, so
+#                              it now emits an explicit non-tradable sentinel
+#                              with provenance ABSENT and fails closed.
+#
+# WHAT IT DOES NOT DO. It adds no execution surface, no new broker call, and
+# no new mutation path. Every one of the three either REMOVES a construction
+# site or refuses where it previously invented. The net change to production
+# behaviour is that a symbol nobody could verify is now refused instead of
+# sent.
+# Coverage: tests/test_option_symbol_resolver.py (39),
+#           tests/test_single_symbol_vocabulary.py (23),
+#           tests/test_symbol_provenance.py (36), each with negative controls.
+_SYMBOL_VOCABULARY_AUTHORIZED = (
+    "bujji/production_runtime/option_symbol_resolver.py",
+    "bujji/production_runtime/live_chain_provider.py",
+    "bujji/production_runtime/store_chain_provider.py",
+)
+
 
 def test_no_forbidden_module_imports_in_bridge():
     out = _grep(FORBIDDEN_IMPORTS, FILE)
@@ -388,7 +429,7 @@ def test_no_forbidden_protected_package_touched():
         cwd="/opt/bujji/app", capture_output=True, text=True,
     )
     changed = [l for l in result.stdout.strip().splitlines() if l]
-    changed = [l for l in changed if l not in _PAPERBROKER_V2_AUTHORIZED + _LOT_SIZE_AUTHORITATIVE_AUTHORIZED + _CPC_SAFETY_SPINE_AUTHORIZED + _CPC_EVIDENCE_AND_REALISM_AUTHORIZED + _LIVE_PREMIUM_FIX_AUTHORIZED + _THREE_PART_SELECTION_AUTHORIZED + _DEFINED_RISK_MODE_AUTHORIZED + _LEARNING_LOOP_AUTHORIZED + _DATA_QUALITY_GATE_AUTHORIZED + _WEBSOCKET_TICK_PROVIDER_AUTHORIZED + _JOURNALED_EXECUTION_AUTHORIZED + _EXIT_BROKER_TRUTH_AUTHORIZED + _EOD_CLOSURE_AUTHORIZED + _POSITION_RECONCILIATION_AUTHORIZED + _REGISTRY_PURE_ACCESSOR_AUTHORIZED]
+    changed = [l for l in changed if l not in _PAPERBROKER_V2_AUTHORIZED + _LOT_SIZE_AUTHORITATIVE_AUTHORIZED + _CPC_SAFETY_SPINE_AUTHORIZED + _CPC_EVIDENCE_AND_REALISM_AUTHORIZED + _LIVE_PREMIUM_FIX_AUTHORIZED + _THREE_PART_SELECTION_AUTHORIZED + _DEFINED_RISK_MODE_AUTHORIZED + _LEARNING_LOOP_AUTHORIZED + _DATA_QUALITY_GATE_AUTHORIZED + _WEBSOCKET_TICK_PROVIDER_AUTHORIZED + _JOURNALED_EXECUTION_AUTHORIZED + _EXIT_BROKER_TRUTH_AUTHORIZED + _EOD_CLOSURE_AUTHORIZED + _POSITION_RECONCILIATION_AUTHORIZED + _REGISTRY_PURE_ACCESSOR_AUTHORIZED + _SYMBOL_VOCABULARY_AUTHORIZED]
     forbidden_prefixes = (
         "bujji/msi_strategy_selector/", "bujji/msi_trade_intent/", "bujji/msi_trade_construction/",
         "bujji/risk_governor/", "bujji/execution_engine/", "bujji/trading_brain/",
