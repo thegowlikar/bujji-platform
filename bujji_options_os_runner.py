@@ -987,10 +987,31 @@ class OptionsOSRunner:
                     "tick_source.type=websocket -- the same credentials the live "
                     "regime path already requires."
                 )
-            # Verified live (fyers_ws module docstring): the websocket token
-            # format is "{app_id}:{access_token}".
+            # THE BARE TOKEN. FyersTickFeed builds the "{app_id}:{token}" form
+            # ITSELF at the SDK boundary (fyers_ws.py, FyersDataSocket
+            # construction). Passing the joined form here produced
+            # "APPID:APPID:TOKEN", which the SDK cannot authenticate: the
+            # symbol-token lookup fails, NO symbol is ever subscribed, and the
+            # feed sits there reporting itself connected while delivering
+            # nothing.
+            #
+            # That is exactly what 2026-08-21 looked like: tick_feed_error at
+            # 09:52:35, "tick feed priced 0/2 legs" on EVERY cycle,
+            # cycles_priced_from_ticks=0, session_blind=true. Three blind
+            # cycles then tripped the emergency brake on a naked short
+            # strangle -- so this one argument is the head of that whole
+            # incident chain.
+            #
+            # The comment that used to sit here quoted the fyers_ws module
+            # docstring correctly and applied it one layer too high. The two
+            # callers that get it right pass the bare token:
+            # run_live_shadow.py:195 hands over live_tick_credentials()
+            # verbatim, and scripts that drive FyersDataSocket directly add
+            # exactly one prefix -- which is the format the 2026-08-20
+            # websocket certification proved against REST (ws ltp == REST ltp,
+            # 0.0000% deviation).
             self._tick_feed = FyersTickFeed(
-                app_id, f"{app_id}:{token}", self._logger,
+                app_id, token, self._logger,
                 log_path=str(REPO_ROOT / "logs"))
             self._tick_feed.start()
             watchdog = TickSilenceWatchdog(
