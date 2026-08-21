@@ -2040,15 +2040,37 @@ class OptionsOSRunner:
             self._logger.info("Entry did not fill (reason=%s).", reason)
             return False
 
-        from bujji.trading_brain.risk_governor.msi_entry_bridge import _leg_to_core_contract
         contracts = {}
         entry_prices: Dict[str, float] = {}
         for order_result in cycle_result.order_results:
             order_id = getattr(order_result, "client_order_id", None)
             if order_id:
                 self._execution_order_ids.append(order_id)
-        for leg, order_result in zip(cycle_result.proposal.legs, cycle_result.order_results):
-            contract = _leg_to_core_contract(leg, self._root.underlying, self._root.exchange_lot_size)
+        # THE AUTHORITATIVE CONTRACT, keyed by client_order_id (2026-08-21).
+        #
+        # This rebuilt each contract with _leg_to_core_contract, re-deriving
+        # broker identity from strategy-leg fields AFTER the broker had
+        # already been told a specific symbol. The rebuild is what keeps two
+        # symbol vocabularies alive.
+        #
+        # It also paired legs to results POSITIONALLY, which is wrong on a
+        # reachable path: when SUBMIT_INTENT cannot be journaled,
+        # journaled_entry records the pair and `continue`s WITHOUT appending
+        # to `results`, so order_results can be shorter than proposal.legs and
+        # the zip then pairs leg[0] with results[1] -- one leg's contract
+        # against another leg's fill.
+        for order_result in cycle_result.order_results:
+            coid = getattr(order_result, "client_order_id", None)
+            contract = cycle_result.contract_for(coid) if coid else None
+            if contract is None:
+                # NEVER REBUILD. A missing contract means the propagation
+                # boundary was not crossed; rebuilding would resurrect the
+                # defect this removes, and silently.
+                self._logger.critical(
+                    "CONTRACT PROPAGATION MISSING for %s -- the order was placed but its "
+                    "contract did not reach registration. This leg cannot be registered "
+                    "and will NOT be managed. Inspect the broker book NOW.", coid)
+                continue
             contracts[contract.symbol] = contract
             entry_prices[contract.symbol] = order_result.average_price
 
@@ -2090,16 +2112,26 @@ class OptionsOSRunner:
         try:
             orphan_coids = set(
                 c for c in reason.split(":", 1)[1].split(",") if c)
-            from bujji.trading_brain.risk_governor.msi_entry_bridge import _leg_to_core_contract
 
             contracts = {}
             entry_prices = {}
-            for leg, order_result in zip(cycle_result.proposal.legs, cycle_result.order_results):
-                if getattr(order_result, "client_order_id", None) in orphan_coids:
-                    contract = _leg_to_core_contract(leg, self._root.underlying,
-                                                     self._root.exchange_lot_size)
-                    contracts[contract.symbol] = contract
-                    entry_prices[contract.symbol] = order_result.average_price
+            # Authoritative contracts only -- see the note at the post-fill
+            # registration site. Keyed by client_order_id, which is also what
+            # `orphan_coids` names, so the match is on the same identity the
+            # runtime used rather than on position.
+            for order_result in cycle_result.order_results:
+                coid = getattr(order_result, "client_order_id", None)
+                if coid not in orphan_coids:
+                    continue
+                contract = cycle_result.contract_for(coid)
+                if contract is None:
+                    self._logger.critical(
+                        "ORPHAN CONTRACT PROPAGATION MISSING for %s -- this leg may be a "
+                        "live position and cannot be registered from an authoritative "
+                        "contract. It is NOT rebuilt. Inspect the broker book NOW.", coid)
+                    continue
+                contracts[contract.symbol] = contract
+                entry_prices[contract.symbol] = order_result.average_price
             if not contracts:
                 # GAP 3. This logged CRITICAL and returned, registering
                 # nothing -- so the legs it had just declared unaccounted-for
@@ -2114,12 +2146,11 @@ class OptionsOSRunner:
                 self._logger.critical(
                     "ORPHAN REGISTRATION -- reason named %s but no matching order "
                     "results were found. Falling back to registering ALL %d "
-                    "proposal leg(s); broker truth filters the ones that do not "
-                    "exist. Inspect the broker book.",
-                    sorted(orphan_coids), len(cycle_result.proposal.legs))
-                for leg in cycle_result.proposal.legs:
-                    contract = _leg_to_core_contract(leg, self._root.underlying,
-                                                     self._root.exchange_lot_size)
+                    "ORDERED contract(s); broker truth filters the ones that do "
+                    "not exist. These are the contracts the broker was actually "
+                    "handed, never rebuilt ones. Inspect the broker book.",
+                    sorted(orphan_coids), len(cycle_result.order_contracts))
+                for coid, contract in cycle_result.order_contracts:
                     contracts[contract.symbol] = contract
                     entry_prices.setdefault(contract.symbol, None)
             if not contracts:

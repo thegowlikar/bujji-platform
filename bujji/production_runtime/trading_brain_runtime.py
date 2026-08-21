@@ -115,6 +115,41 @@ class TradingBrainCycleResult:
     approved_quantity: int
     filled: bool
     blocking_reason: Optional[str]
+    # THE AUTHORITATIVE CONTRACTS, keyed by client_order_id -- the exact
+    # objects that produced the OrderRequests the broker received.
+    #
+    # WHY THIS EXISTS. Post-order code used to REBUILD a contract from
+    # StrikeLeg via _leg_to_core_contract, re-deriving broker identity from
+    # strategy-leg fields after the broker had already been told a specific
+    # symbol. That is a second construction of a value that already exists,
+    # and it is how two symbol vocabularies stay alive.
+    #
+    # WHY A MAP AND NOT A TUPLE. The runner paired legs to results with
+    # `zip(proposal.legs, order_results)`. That is not merely fragile, it is
+    # WRONG on a reachable path: when SUBMIT_INTENT cannot be journaled,
+    # journaled_entry records the pair in `unfilled_pairs` and `continue`s
+    # WITHOUT appending to `results` (execution_journal_bridge). So
+    # len(order_results) < len(proposal.legs) is reachable, and the zip then
+    # pairs leg[0] with results[1] -- silently associating one leg's contract
+    # with another leg's fill. client_order_id is unique per leg
+    # (f"{assessment_id}-LEG-{index}") and is carried on OrderResult itself,
+    # so a keyed lookup cannot misassociate regardless of length or order.
+    #
+    # Tuple-of-pairs, not a dict: this dataclass is frozen, and a tuple keeps
+    # it shallowly immutable. Read via contract_for().
+    order_contracts: Tuple[Tuple[str, Any], ...] = ()
+
+    def contract_for(self, client_order_id: str):
+        """The contract actually sent to the broker for this order, or None.
+
+        None means the propagation boundary was not crossed for this order --
+        the caller must treat that as a MISSING contract and never rebuild
+        one, because rebuilding is the defect this field removes.
+        """
+        for coid, contract in self.order_contracts:
+            if coid == client_order_id:
+                return contract
+        return None
 
 
 class TradingBrainRuntime:
@@ -458,6 +493,7 @@ class TradingBrainRuntime:
             return TradingBrainCycleResult(
                 proposal=proposal, governor_result=governor_result, context_unavailable=None,
                 order_results=entry_outcome.order_results,
+            order_contracts=_contracts_by_coid(order_requests),
                 approved_quantity=governor_result.final_quantity, filled=False,
                 blocking_reason="BROKER_TRUTH_UNKNOWN:" + ",".join(entry_outcome.truth_unknown),
             )
@@ -499,6 +535,7 @@ class TradingBrainRuntime:
         return TradingBrainCycleResult(
             proposal=proposal, governor_result=governor_result, context_unavailable=None,
             order_results=order_results, approved_quantity=governor_result.final_quantity,
+            order_contracts=_contracts_by_coid(order_requests),
             filled=all_filled, blocking_reason=blocking_reason,
         )
 
@@ -520,6 +557,15 @@ class TradingBrainRuntime:
                 tag=f"TRADING_BRAIN:{proposal.strategy_family}:{proposal.assessment_id}",
             ))
         return tuple(requests)
+
+
+def _contracts_by_coid(order_requests) -> Tuple[Tuple[str, Any], ...]:
+    """(client_order_id, contract) for every request actually built.
+
+    Carries the EXACT contract objects the broker was handed. Nothing is
+    derived, re-derived, or normalised here -- that is the entire point.
+    """
+    return tuple((r.client_order_id, r.contract) for r in (order_requests or ()))
 
 
 def _await(awaitable):

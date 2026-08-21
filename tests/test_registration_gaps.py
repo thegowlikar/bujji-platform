@@ -80,10 +80,25 @@ class TestGap3NoMatchFallsBackToAllLegs:
     legs it had just declared unaccounted-for invisible to management, which
     is the state the log was warning about."""
 
-    def test_it_falls_back_to_every_proposal_leg(self):
+    def test_it_falls_back_to_every_ORDERED_contract(self):
+        """INVARIANT TIGHTENED 2026-08-21 (commit 2b).
+
+        This asserted a fallback over `cycle_result.proposal.legs`, rebuilding
+        a contract for each. It now falls back over
+        `cycle_result.order_contracts` -- the exact contracts the broker was
+        handed.
+
+        That is a strictly better superset, not a weaker one: a leg that was
+        never ordered cannot be a live position, so it does not need
+        registering; and every leg that WAS ordered is present with the
+        identity the broker actually saw, rather than one re-derived from
+        strategy-leg fields after the fact.
+        """
         body = ast.unparse(_fn(RUNNER, "_register_orphaned_legs"))
         i = body.index("no matching order")
-        assert "cycle_result.proposal.legs" in body[i:i + 900]
+        window = body[i:i + 900]
+        assert "cycle_result.order_contracts" in window
+        assert "_leg_to_core_contract" not in window, "the fallback still rebuilds"
 
     def test_it_still_refuses_when_there_are_no_legs_at_all(self):
         """A superset of nothing is nothing -- say so rather than pretend."""
