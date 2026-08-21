@@ -34,10 +34,73 @@ silently ignored.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from datetime import date, timedelta
+from datetime import date, time, timedelta
 from typing import Dict, Optional, Set, Tuple
 
 CALENDAR_VERSION = "2026.1-cross-verified-secondary-sources"
+
+# ---------------------------------------------------------------------------
+# SESSION TIMES -- THE SINGLE AUTHORITY. There are TWO closes, not one.
+#
+# WHY THIS EXISTS. Before it, fifteen production files and scripts each
+# declared their own close-time literal, and they did not agree: 15:15, 15:20,
+# 15:30 and 15:40 all appeared, some as "MARKET_CLOSE", some as an exit time,
+# some as a bhavcopy row stamp. A reader could not tell which were describing
+# the same fact and which were describing different ones, so a future NSE
+# change would mean finding every literal and guessing at each.
+#
+# THE TWO CLOSES ARE REAL, NOT A BUG. The cash/index segment closes at 15:30.
+# The F&O segment closes at 15:40 -- NSE circular 2026-05-30, effective
+# 2026-08-03, when a Closing Auction Session was added to the cash segment and
+# derivatives followed it. Verified 2026-08-13 and recorded in
+# scripts/certify_websocket_access.py, which was already citing it correctly.
+# scripts/certify_fyers_optionchain_reality_access.py deliberately flagged the
+# divergence rather than silently reconciling it -- that was the right call and
+# this module is the place it should have been reconciled TO.
+#
+# WHICH ONE TO USE. Bujji trades NIFTY OPTIONS, which are F&O. Anything
+# reasoning about Bujji's own instruments -- when its market is open, when a
+# position can still be traded out of, how long to keep observing -- wants
+# FO_MARKET_CLOSE. CASH_MARKET_CLOSE is correct only for cash/index
+# instruments (NSE:NIFTY50-INDEX spot, INDIAVIX). Import the one whose SEGMENT
+# you mean, by name, so the choice is visible to the next reader instead of
+# being an anonymous "15:30".
+#
+# WHAT THIS IS NOT. It is not an exit time. `hard_exit`, `mandatory_exit_time`,
+# `monitor_until` and `observe_until` sit at 15:15 and 15:30 because somebody
+# decided to be out well before the bell -- a TRADING judgement, and it belongs
+# in session config where an operator can change it, not here. A buffer stated
+# as an absolute time reads like a belief about when the market closes; it is
+# not one. Nor is NSE_BHAVCOPY_MARKET_CLOSE_TIME, which stamps EOD rows in a
+# file format and is a third, unrelated fact.
+# ---------------------------------------------------------------------------
+
+MARKET_OPEN = time(9, 15)                 # both segments
+
+CASH_MARKET_CLOSE = time(15, 30)          # equity / index / VIX
+FO_MARKET_CLOSE = time(15, 40)            # futures & options -- what Bujji trades
+
+SESSION_TIMES_SOURCE = (
+    "NSE circular 2026-05-30, effective 2026-08-03 (Closing Auction Session in "
+    "the cash segment; derivatives follow it). Verified 2026-08-13."
+)
+
+
+def market_close_for(segment: str) -> time:
+    """The close for a named segment. Refuses an unknown one.
+
+    Deliberately not defaulted: a caller that cannot say which segment it means
+    has not decided, and picking one for it is how the split started.
+    """
+    key = (segment or "").strip().upper()
+    if key in ("FO", "F&O", "DERIVATIVES", "OPTIONS", "FUTURES"):
+        return FO_MARKET_CLOSE
+    if key in ("CASH", "EQUITY", "INDEX", "SPOT"):
+        return CASH_MARKET_CLOSE
+    raise ValueError(
+        f"unknown market segment {segment!r} -- say CASH or FO explicitly; "
+        f"they close ten minutes apart ({SESSION_TIMES_SOURCE})"
+    )
 
 # Real NSE 2026 trading holidays (equity/equity-derivatives segment),
 # cross-verified against 3 independent secondary sources (cleartax.in,

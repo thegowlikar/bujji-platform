@@ -39,7 +39,12 @@ STATUS_INCOMPLETE = "INCOMPLETE"
 STATUS_SESSION_FAILED = "SESSION_FAILED"
 STATUS_MISSING = "MISSING"
 
-EOD_AS_OF_TIME_SUFFIX = "T15:40:00+05:30"  # NSE market close -- matches capture's own MARKET_CLOSE constant.
+# Derived from the single authority rather than restated. "matches capture's
+# own MARKET_CLOSE constant" was true when written and is exactly the coupling
+# that let four different closes drift apart.
+from bujji.market_calendar import FO_MARKET_CLOSE  # noqa: E402
+
+EOD_AS_OF_TIME_SUFFIX = f"T{FO_MARKET_CLOSE.strftime('%H:%M:%S')}+05:30"
 
 
 @dataclass(frozen=True)

@@ -39,11 +39,22 @@ from .report import build_end_of_day_report
 from .freshness import FreshnessReport, assess_freshness
 from .rate_limiter import RateLimitedCaller, RateLimiterConfig
 
-# NSE regular trading session, IST. A well-known, structural constant --
-# not tuned, not read from a broker capability call (Deliverable 1's own
-# audit found no such call anywhere in this codebase).
-MARKET_OPEN_IST = "09:15"
-MARKET_CLOSE_IST = "15:30"
+# NSE session, IST -- from bujji.market_calendar, the single authority.
+#
+# SEGMENT FLAGGED, NOT SILENTLY CHANGED (2026-08-21). This was a bare "15:30"
+# labelled "NSE regular trading session", which names no segment. 15:30 is the
+# CASH close; the F&O close is 15:40. Bujji trades NIFTY options, i.e. F&O, so
+# this operator very likely wants FO_MARKET_CLOSE and is currently standing
+# down ten minutes early.
+#
+# Left as CASH deliberately: switching it changes when this operator stops
+# generating decisions, which is a behavioural call for the operator to make,
+# not a tidy-up to smuggle into a constants refactor. Naming the segment makes
+# the choice visible so it can be reviewed instead of re-discovered.
+from bujji.market_calendar import CASH_MARKET_CLOSE, MARKET_OPEN  # noqa: E402
+
+MARKET_OPEN_IST = MARKET_OPEN.strftime("%H:%M")
+MARKET_CLOSE_IST = CASH_MARKET_CLOSE.strftime("%H:%M")
 
 
 class DecisionGenerationPaused(RuntimeError):

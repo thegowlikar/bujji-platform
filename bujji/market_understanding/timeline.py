@@ -40,7 +40,11 @@ SCHEMA_VERSION = "1.0.0"
 
 CHECKPOINT_INTERVAL_MINUTES = 30
 MARKET_OPEN = datetime.time(9, 15)
-MARKET_CLOSE = datetime.time(15, 40)  # NSE circular 2026-05-30 -- see reality_structure_bridge's
+# F&O close, from the single authority. This module reasons about NIFTY
+# derivatives, so FO is the right segment -- previously a correct literal that
+# nothing tied to the fact it came from.
+from bujji.market_calendar import FO_MARKET_CLOSE as MARKET_CLOSE  # noqa: E402
+_MARKET_CLOSE_UNUSED = None  # see reality_structure_bridge's
 # own note; harmless for pre-2026-08-03 dates since no bars exist past their real
 # historical close anyway, so this checkpoint just resolves to the same data as
 # the real close would.
