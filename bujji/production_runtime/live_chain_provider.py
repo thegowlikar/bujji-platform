@@ -77,10 +77,19 @@ class LiveChainProvider(MarketDataProvider):
     place both short legs and both wings of a condor.
     """
 
-    def __init__(self, broker, underlying: str = "NIFTY", strike_count: int = 20) -> None:
+    def __init__(self, broker, underlying: str = "NIFTY", strike_count: int = 20,
+                 logger=None) -> None:
         self._broker = broker
         self._underlying = underlying
         self._strike_count = strike_count
+        # A component that cannot explain itself fails silently -- the exact
+        # defect that cost three blind cycles on 2026-08-21, when
+        # WebsocketTickProvider's diagnostics went to a logger the session
+        # never configured. Callers pass the session logger; the module
+        # default exists only so this class is usable in isolation.
+        import logging as _logging
+
+        self._logger = logger or _logging.getLogger("bujji.live_chain_provider")
         self._chain: Optional[Sequence] = None
         self._spot: Optional[float] = None
 
@@ -138,6 +147,7 @@ class LiveChainProvider(MarketDataProvider):
                 break
 
         chain = []
+        dropped_no_symbol = []
         for row in rows:
             option_type = row.get("option_type")
             strike = row.get("strike_price")
@@ -146,9 +156,28 @@ class LiveChainProvider(MarketDataProvider):
             close = _positive(row.get("ltp"))
             if close is None:
                 continue  # never traded -- not a usable chain row.
+            row_symbol = row.get("symbol")
+            if not row_symbol:
+                # NO FABRICATED SYMBOL (2026-08-21).
+                #
+                # This read `row.get("symbol") or f"{underlying}{strike}{type}"`.
+                # That `or` was a silent downgrade: when FYERS omits `symbol`
+                # on a row it manufactured a THIRD symbol format carrying no
+                # expiry and no NSE: prefix -- and wrote it into the exact
+                # field Gate B (trading_brain_runtime.py:274-280) trusts as
+                # broker-real. A fabricated value in a field whose whole
+                # purpose is to be the broker's own string is the most
+                # expensive kind of default.
+                #
+                # Dropped and COUNTED, not `continue`d silently: this builder
+                # already drops rows above when `ltp` is missing, so a second
+                # uncounted drop would be invisible -- the chain would just be
+                # quietly shorter.
+                dropped_no_symbol.append(f"{option_type}{int(strike)}")
+                continue
             chain.append(build_option_observation(
                 underlying=self._underlying,
-                instrument_symbol=row.get("symbol") or f"{self._underlying}{int(strike)}{option_type}",
+                instrument_symbol=row_symbol,
                 strike=float(strike), expiry=expiry or as_of_date, option_type=option_type,
                 exchange="NSE", segment="FO", timestamp=as_of_date, resolution="SNAPSHOT",
                 # A live quote carries a traded price, not OHLC bars.
@@ -161,4 +190,13 @@ class LiveChainProvider(MarketDataProvider):
                 acquisition_timestamp=as_of_date, normalization_timestamp=as_of_date,
                 bid=_positive(row.get("bid")), ask=_positive(row.get("ask")),
             ))
+        if dropped_no_symbol:
+            # Loud, and specific about WHICH strikes: a caller that later
+            # cannot resolve one of these needs to know the row existed and
+            # was refused, not guess that the chain was short.
+            self._logger.warning(
+                "option chain: dropped %d row(s) carrying no broker symbol -- %s. "
+                "These strikes are NOT selectable this cycle.",
+                len(dropped_no_symbol), sorted(dropped_no_symbol))
+
         return chain, spot

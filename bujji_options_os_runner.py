@@ -770,6 +770,7 @@ class OptionsOSRunner:
             self._market_data_provider = LiveChainProvider(
                 chain_broker, underlying=underlying,
                 strike_count=int(market_data_cfg.get("strike_count", 20)),
+                logger=self._logger,
             )
         else:
             bhavcopy_path = market_data_cfg.get("bhavcopy_path")

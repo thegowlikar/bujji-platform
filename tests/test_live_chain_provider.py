@@ -77,11 +77,71 @@ class TestFailsClosed:
             LiveChainProvider(Broken()).get_option_chain(AS_OF)
 
     def test_rows_without_an_underlying_price_refuse(self):
+        # The row carries a `symbol`, as every real FYERS row does (the
+        # captured artifact fyers_option_chain_discovery_20260813.json has 23
+        # rows, 0 missing it). Without one this test would now trip the
+        # no-broker-symbol rule below and assert the wrong refusal.
         raw = {"data": {"optionsChain": [
-            {"strike_price": 24100, "option_type": "CE", "ltp": 100.0},
+            {"strike_price": 24100, "option_type": "CE", "ltp": 100.0,
+             "symbol": "NSE:NIFTY2681824100CE"},
         ], "expiryData": [{"date": "18-08-2026"}]}}
         with pytest.raises(MarketDataUnavailableError, match="underlying price"):
             LiveChainProvider(_Broker(raw)).get_option_chain(AS_OF)
+
+    def test_a_row_without_a_broker_symbol_is_dropped_not_fabricated(self):
+        """This builder used to do `row.get("symbol") or f"{u}{strike}{type}"`.
+
+        That `or` manufactured a THIRD symbol format -- no expiry, no NSE:
+        prefix -- into the exact field Gate B
+        (trading_brain_runtime.py:274-280) trusts as the broker's own string.
+        A fabricated value in a field whose entire purpose is to be real is
+        the most expensive kind of default: it cannot be priced, cannot be
+        subscribed, and cannot be matched against a broker position, and
+        nothing downstream can tell it apart from a real one.
+        """
+        raw = {"data": {"optionsChain": [
+            {"strike_price": -1, "option_type": "", "ltp": 24100.0},
+            {"strike_price": 24100, "option_type": "CE", "ltp": 100.0},          # no symbol
+            {"strike_price": 24200, "option_type": "PE", "ltp": 90.0,
+             "symbol": "NSE:NIFTY2681824200PE"},
+        ], "expiryData": [{"date": "18-08-2026"}]}}
+        chain = LiveChainProvider(_Broker(raw)).get_option_chain(AS_OF)
+        symbols = [getattr(r, "instrument_symbol", None) for r in chain]
+        assert symbols == ["NSE:NIFTY2681824200PE"]
+        # And nothing synthetic leaked in.
+        assert not any(s and not s.startswith("NSE:") for s in symbols)
+
+    def test_dropping_every_row_refuses_rather_than_returning_an_empty_chain(self):
+        raw = {"data": {"optionsChain": [
+            {"strike_price": -1, "option_type": "", "ltp": 24100.0},
+            {"strike_price": 24100, "option_type": "CE", "ltp": 100.0},          # no symbol
+        ], "expiryData": [{"date": "18-08-2026"}]}}
+        with pytest.raises(MarketDataUnavailableError):
+            LiveChainProvider(_Broker(raw)).get_option_chain(AS_OF)
+
+    def test_the_drop_is_reported_not_silent(self):
+        """This builder already drops rows with no `ltp`. A second uncounted
+        drop would be invisible -- the chain would just be quietly shorter."""
+        import logging
+
+        records = []
+
+        class _Capture(logging.Handler):
+            def emit(self, record):
+                records.append(record.getMessage())
+
+        log = logging.getLogger("chain-drop-test")
+        log.setLevel(logging.WARNING)
+        log.addHandler(_Capture())
+        raw = {"data": {"optionsChain": [
+            {"strike_price": -1, "option_type": "", "ltp": 24100.0},
+            {"strike_price": 24100, "option_type": "CE", "ltp": 100.0},          # no symbol
+            {"strike_price": 24200, "option_type": "PE", "ltp": 90.0,
+             "symbol": "NSE:NIFTY2681824200PE"},
+        ], "expiryData": [{"date": "18-08-2026"}]}}
+        LiveChainProvider(_Broker(raw), logger=log).get_option_chain(AS_OF)
+        assert any("no broker symbol" in m for m in records), records
+        assert any("CE24100" in m for m in records), "the dropped strike is not named"
 
 
 @pytest.mark.skipif(not _HAVE_CAPTURE, reason="real FYERS capture present only on the VPS")
