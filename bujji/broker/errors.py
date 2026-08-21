@@ -32,6 +32,26 @@ class AuthenticationError(RuntimeError):
     """
 
 
+class PositionReadError(RuntimeError):
+    """Raised when the broker's position book could not be READ.
+
+    Never raised for a genuinely flat account -- an `s: "ok"` response with
+    no open legs is a real answer and returns an empty list.
+
+    Exists because `get_open_positions()` had no success check at all: it went
+    straight to `data.get("netPositions", [])`, so an error response, a
+    malformed body, or a renamed field all produced `[]` -- and `[]` means
+    FLAT to every caller. The adapter was manufacturing the one answer the
+    entire closure machine above it is built to distrust.
+
+    Both callers already do the right thing with an exception --
+    `_broker_reports_flat` and `eod_closure.discover_broker_positions` each
+    convert it to None, meaning UNKNOWN, whose own docstring says: "A read
+    that fails returns None, never False: 'I could not ask' must never become
+    'there is nothing there'." Raising is what lets that machinery work.
+    """
+
+
 class UnverifiedPositionSchemaError(RuntimeError):
     """Raised instead of placing a REAL order while `netQty` / `symbol` in the
     FYERS positions payload are still unconfirmed against a live account.

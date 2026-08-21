@@ -40,7 +40,8 @@ from ..core.config import BrokerConfig
 from ..core.enums import Direction, OrderStatus, Side
 from ..core.models import Candle, OptionContract, OrderRequest, OrderResult
 from .base import Broker
-from .errors import AuthenticationError, UnverifiedPositionSchemaError
+from .errors import (AuthenticationError, PositionReadError,
+                     UnverifiedPositionSchemaError)
 from .fyers_token_manager import FyersTokenManager
 
 # Best-effort FYERS error-code classification for auth/session failures
@@ -940,8 +941,40 @@ class FyersBroker(Broker):
         # contents without placing a real order.
         data = await self._call("positions")
         self._raise_if_auth_error(data)
+
+        # A FAILED READ IS NOT AN EMPTY BOOK.
+        #
+        # This went straight to `data.get("netPositions", [])`. An error
+        # response, a malformed body, or a shape change all yielded `[]`, and
+        # `[]` means FLAT to every caller above. get_funds(), twenty lines
+        # below, has always checked `s == "ok"` and returned None otherwise;
+        # this method never checked anything.
+        if str(data.get("s", "")).lower() != "ok":
+            raise PositionReadError(
+                f"FYERS positions response was not ok (s={data.get('s')!r}, "
+                f"message={data.get('message')!r}) -- refusing to report a "
+                f"failed read as a flat account")
+        if "netPositions" not in data:
+            # Live-verified as present even for an empty book (see the note
+            # above). Absent means the shape changed, which is exactly when
+            # guessing is most dangerous.
+            raise PositionReadError(
+                "FYERS positions response carried no 'netPositions' key -- the "
+                "payload shape changed; refusing to infer flatness from a "
+                "response this adapter no longer understands")
+
         normalized: list[dict] = []
         for p in data.get("netPositions", []):
+            if "netQty" not in p:
+                # `netQty` is the UNVERIFIED field name this module's own gate
+                # is about: if it is wrong, every row reads as qty 0, every
+                # position is filtered out, and the account looks EMPTY. That
+                # is the documented "manufactures flatness" failure, and a
+                # default of 0 is how it happens silently.
+                raise PositionReadError(
+                    f"position row has no 'netQty' field (keys={sorted(p)!r}) -- "
+                    f"reading it as flat would manufacture flatness, which is "
+                    f"the exact failure FYERS_POSITION_SCHEMA_VERIFIED names")
             net = int(p.get("netQty", 0))
             if net == 0:
                 continue  # Flat legs are not open positions.
