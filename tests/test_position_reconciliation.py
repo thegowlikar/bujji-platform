@@ -155,3 +155,91 @@ class TestProductionWiring:
         block = _method_body(self.RUNNER, "_reconcile_broker_positions")
         for forbidden in ("mark_closed", "place_order", "register_entry", "_execute_reduce"):
             assert forbidden not in block
+
+
+class TestOneReadNotNPlusOne:
+    """A safety check that can invent its own alarm is worse than none.
+
+    DEFECT IN d6fbfaf (my own). _expected_symbols called
+    registry.get_group_reality() per group, and that re-reads
+    get_open_positions() on EVERY call to compute is_open. So reconciling N
+    groups issued N+1 broker reads, and derived EXPECTED from reads 1..N while
+    OBSERVED came from read N+1. A position closing between them dropped its
+    symbol out of EXPECTED while it still appeared in OBSERVED -- a
+    manufactured BROKER_ONLY, the CRITICAL finding that blocks new risk.
+    """
+
+    def test_the_registry_exposes_a_pure_symbols_accessor(self):
+        """Pure means no broker call -- that is the whole point.
+
+        Asserted over the AST, not the source text: the docstring explains
+        WHY it does not call get_open_positions, so a substring check trips
+        on the explanation rather than on any real call."""
+        import ast
+        import inspect
+        import textwrap
+
+        from bujji.production_runtime.position_reality_registry import PositionRealityRegistry
+        tree = ast.parse(textwrap.dedent(
+            inspect.getsource(PositionRealityRegistry.symbols_for_group)))
+        called = {n.func.attr for n in ast.walk(tree)
+                  if isinstance(n, ast.Call) and isinstance(n.func, ast.Attribute)}
+        assert "get_open_positions" not in called
+        assert "_open_symbols" not in called
+        assert not [n for n in ast.walk(tree) if isinstance(n, ast.Await)]
+
+    def test_expected_symbols_takes_the_observed_set(self):
+        """If it computes its own view, the two sides can disagree again."""
+        import inspect
+        import importlib.util
+
+        spec = importlib.util.spec_from_file_location(
+            "runner_race", REPO_ROOT / "bujji_options_os_runner.py")
+        mod = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(mod)
+        sig = inspect.signature(mod.OptionsOSRunner._expected_symbols)
+        assert "observed_symbols" in sig.parameters
+
+    def test_expected_symbols_makes_no_broker_call(self):
+        """AST again -- the docstring names the methods it deliberately avoids."""
+        import ast
+        import textwrap
+
+        body = _method_body(
+            (REPO_ROOT / "bujji_options_os_runner.py").read_text(), "_expected_symbols")
+        tree = ast.parse(textwrap.dedent(body))
+        called = {n.func.attr for n in ast.walk(tree)
+                  if isinstance(n, ast.Call) and isinstance(n.func, ast.Attribute)}
+        assert "get_group_reality" not in called, "still re-reads the broker per group"
+        assert "get_open_positions" not in called
+        assert "run" not in called, "asyncio.run implies a broker call"
+
+    def test_the_reconcile_call_uses_a_single_read(self):
+        body = _method_body(
+            (REPO_ROOT / "bujji_options_os_runner.py").read_text(),
+            "_reconcile_broker_positions")
+        assert body.count("discover_broker_positions(") == 1
+        assert "self._expected_symbols(observed_symbols)" in body
+
+    def test_a_group_whose_legs_all_closed_raises_no_stale_belief(self):
+        """The is_open semantics must survive the fix: a fully-closed group is
+        not a belief Bujji still holds, so it must not produce EXPECTED_ONLY."""
+        import importlib.util
+
+        spec = importlib.util.spec_from_file_location(
+            "runner_race2", REPO_ROOT / "bujji_options_os_runner.py")
+        mod = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(mod)
+
+        class _Registry:
+            def all_group_ids(self):
+                return ("PG-CLOSED", "PG-OPEN")
+
+            def symbols_for_group(self, pg):
+                return ("CE",) if pg == "PG-OPEN" else ("OLD",)
+
+        class _Stub:
+            _registry = _Registry()
+
+        expected = mod.OptionsOSRunner._expected_symbols(_Stub(), {"CE"})
+        assert expected == {"CE"}, "a closed group leaked into EXPECTED"

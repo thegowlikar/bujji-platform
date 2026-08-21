@@ -310,6 +310,28 @@ _POSITION_RECONCILIATION_AUTHORIZED = (
 )
 
 
+# AUTHORIZED 2026-08-21: PositionRealityRegistry.symbols_for_group() -- one
+# PURE accessor, no new capability.
+#
+# WHY. Reconciliation (d6fbfaf) derived EXPECTED via get_group_reality() per
+# group, and that re-reads get_open_positions() on EVERY call to compute
+# is_open. So reconciling N groups issued N+1 broker reads AND -- the real
+# hazard -- derived EXPECTED from reads 1..N while OBSERVED came from read
+# N+1. A position closing between them dropped its symbol out of EXPECTED
+# while it still appeared in OBSERVED: a manufactured BROKER_ONLY, which is
+# the CRITICAL finding that blocks new risk. A safety check that can invent
+# its own alarm is worse than no check.
+#
+# WHAT IT ADDS. A read-only accessor returning the group's already-stored
+# symbols tuple. It calls no broker method (asserted over the AST, not the
+# source text), adds no mutation surface, and lets reconciliation derive both
+# sides of its comparison from a SINGLE read.
+# Coverage: tests/test_position_reconciliation.py::TestOneReadNotNPlusOne.
+_REGISTRY_PURE_ACCESSOR_AUTHORIZED = (
+    "bujji/production_runtime/position_reality_registry.py",
+)
+
+
 def test_no_forbidden_module_imports_in_adapter():
     out = _grep(FORBIDDEN_IMPORTS, FILE)
     assert out == "", f"forbidden import found: {out}"
@@ -380,7 +402,7 @@ def test_no_decision_modules_beyond_consensus_and_synthesis_touched():
         cwd="/opt/bujji/app", capture_output=True, text=True,
     )
     changed = [l for l in result.stdout.strip().splitlines() if l]
-    changed = [l for l in changed if l not in _PAPERBROKER_V2_AUTHORIZED + _LOT_SIZE_AUTHORITATIVE_AUTHORIZED + _CPC_SAFETY_SPINE_AUTHORIZED + _CPC_EVIDENCE_AND_REALISM_AUTHORIZED + _THREE_PART_SELECTION_AUTHORIZED + _DEFINED_RISK_MODE_AUTHORIZED + _LEARNING_LOOP_AUTHORIZED + _DIRECTION_POSITIONING_LENS_AUTHORIZED + _DATA_QUALITY_GATE_AUTHORIZED + _WEBSOCKET_TICK_PROVIDER_AUTHORIZED + _JOURNALED_EXECUTION_AUTHORIZED + _EXIT_BROKER_TRUTH_AUTHORIZED + _EOD_CLOSURE_AUTHORIZED + _POSITION_RECONCILIATION_AUTHORIZED]
+    changed = [l for l in changed if l not in _PAPERBROKER_V2_AUTHORIZED + _LOT_SIZE_AUTHORITATIVE_AUTHORIZED + _CPC_SAFETY_SPINE_AUTHORIZED + _CPC_EVIDENCE_AND_REALISM_AUTHORIZED + _THREE_PART_SELECTION_AUTHORIZED + _DEFINED_RISK_MODE_AUTHORIZED + _LEARNING_LOOP_AUTHORIZED + _DIRECTION_POSITIONING_LENS_AUTHORIZED + _DATA_QUALITY_GATE_AUTHORIZED + _WEBSOCKET_TICK_PROVIDER_AUTHORIZED + _JOURNALED_EXECUTION_AUTHORIZED + _EXIT_BROKER_TRUTH_AUTHORIZED + _EOD_CLOSURE_AUTHORIZED + _POSITION_RECONCILIATION_AUTHORIZED + _REGISTRY_PURE_ACCESSOR_AUTHORIZED]
     forbidden_prefixes = (
         "bujji/msi_trade_thesis/", "bujji/msi_trade_intent/",
         "bujji/msi_strategy_eligibility/", "bujji/msi_strategy_selector/",
@@ -397,6 +419,7 @@ def test_no_decision_modules_beyond_consensus_and_synthesis_touched():
         and l not in _EXIT_BROKER_TRUTH_AUTHORIZED
         and l not in _EOD_CLOSURE_AUTHORIZED
         and l not in _POSITION_RECONCILIATION_AUTHORIZED
+        and l not in _REGISTRY_PURE_ACCESSOR_AUTHORIZED
     ]
     assert violations == [], f"forbidden module changes found: {violations}"
 

@@ -140,6 +140,20 @@ class PositionRealityRegistry:
     def all_group_ids(self) -> Tuple[str, ...]:
         return tuple(self._order)
 
+    def symbols_for_group(self, position_group_id: str) -> Tuple[str, ...]:
+        """This group's registered leg symbols. PURE -- no broker call.
+
+        `get_group_reality()` also exposes `.symbols`, but it re-reads
+        get_open_positions() on every call to compute `is_open`. A caller that
+        wants only the symbols -- e.g. reconciliation, which already has its
+        own single unfiltered read -- would otherwise pay one broker call PER
+        GROUP and, worse, derive its two sides of the comparison from
+        DIFFERENT reads, so a position closing between them could manufacture
+        a false divergence."""
+        if position_group_id not in self._groups:
+            raise UnknownPositionGroupError(f"position_group_id {position_group_id!r} was never registered")
+        return tuple(self._groups[position_group_id]["symbols"])
+
     def initial_risk(self, position_group_id: str) -> float:
         if position_group_id not in self._groups:
             raise UnknownPositionGroupError(f"position_group_id {position_group_id!r} was never registered")

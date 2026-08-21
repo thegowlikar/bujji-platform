@@ -2303,23 +2303,38 @@ class OptionsOSRunner:
         self._capture_exit_fills(symbols_before_exit, result)
 
 
-    def _expected_symbols(self) -> set:
-        """Every symbol Bujji believes it holds, from the registry's own
-        public surface. Memory -- deliberately the WEAKER side of the
-        comparison; the broker always wins."""
+    def _expected_symbols(self, observed_symbols: set) -> set:
+        """Every symbol Bujji believes it holds, decided against the SAME
+        broker read the comparison uses.
+
+        FIXED 2026-08-21 (defect in d6fbfaf, my own): this called
+        registry.get_group_reality() per group, and that re-reads
+        get_open_positions() on EVERY call to compute is_open. So a
+        reconciliation over N groups issued N+1 broker reads, and -- the real
+        hazard -- derived EXPECTED from reads 1..N while OBSERVED came from
+        read N+1. A position closing between them made its symbol drop out of
+        EXPECTED while still appearing in OBSERVED: a manufactured
+        BROKER_ONLY, which is the CRITICAL finding that blocks new risk.
+        A safety check that can invent its own alarm is worse than none.
+
+        Now: one read, passed in, used for both sides. `symbols_for_group` is
+        pure memory. Memory remains deliberately the WEAKER side -- the broker
+        always wins the comparison itself.
+        """
         expected = set()
         registry = getattr(self, "_registry", None)
         if registry is None:
             return expected
-        import asyncio as _asyncio
-
         for pg_id in registry.all_group_ids():
             try:
-                reality = _asyncio.run(registry.get_group_reality(pg_id))
+                symbols = set(registry.symbols_for_group(pg_id))
             except Exception:  # noqa: BLE001 -- one unreadable group never blinds the rest
                 continue
-            if reality.is_open:
-                expected.update(reality.symbols)
+            # "Open" per THIS read: a group with at least one leg the broker
+            # currently reports. A group whose legs have all closed is not a
+            # belief Bujji still holds, so it must not raise EXPECTED_ONLY.
+            if symbols & observed_symbols:
+                expected.update(symbols)
         return expected
 
     def _reconcile_broker_positions(self, stage_label: str):
@@ -2338,7 +2353,10 @@ class OptionsOSRunner:
                 SEVERITY_CRITICAL, SEVERITY_WARNING, UNKNOWN, reconcile)
 
             observed, read_detail = discover_broker_positions(self._broker, _asyncio.run)
-            result = reconcile(self._expected_symbols(), observed)
+            # ONE read, both sides. See _expected_symbols for why.
+            observed_symbols = {str(p.get("symbol")) for p in (observed or [])
+                                if p.get("symbol")}
+            result = reconcile(self._expected_symbols(observed_symbols), observed)
         except Exception as exc:  # noqa: BLE001 -- fail CLOSED, never silently open
             self._logger.critical(
                 "%s -- RECONCILIATION FAILED TO RUN (%s: %s). Treating position truth as "
