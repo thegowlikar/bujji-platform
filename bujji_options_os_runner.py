@@ -1692,8 +1692,25 @@ class OptionsOSRunner:
         # _attempt_entry returned False. Without this it was never managed at
         # all: the loop simply moved on to post-cutoff observation while a
         # naked leg sat at the broker.
-        if entered or getattr(self, "_orphan_position_live", False):
-            self._position_management()
+        # THE MONITORING LOOP RUNS WHETHER OR NOT WE ENTERED (2026-08-21).
+        #
+        # This was gated on `entered or _orphan_position_live`, so on a
+        # no-entry day the loop never started -- and with it, reconciliation.
+        # Proven live today: a NO_TRADE session produced ZERO
+        # position_reconciliation.jsonl records, because the only caller of
+        # _run_one_management_pass (which reconciles first) is this loop.
+        #
+        # That is precisely backwards. The case reconciliation exists for is
+        # "Bujji believes it holds nothing while the broker holds something",
+        # and `entered` is False in exactly that case. Moving reconciliation
+        # to the top of the pass (0d681f8) fixed the inner gate and left this
+        # outer one closed, so the detector still could not run.
+        #
+        # Each pass with no position costs ONE unfiltered broker read and then
+        # returns at the `if not self._entry_prices` guard -- no valuation, no
+        # exit evaluation, no order path. One call per cadence against a
+        # host-wide ~8.3/s budget.
+        self._position_management()
 
         # Post-trade / post-cutoff observation: the position may be closed;
         # Bujji is not. The organism watches until the market ends.
@@ -2767,7 +2784,13 @@ class OptionsOSRunner:
         # Cost against the shared FYERS budget is negligible: a pass quotes one
         # price per leg, so a 2-leg strangle at 60s is ~0.03 calls/s against a
         # host-wide ~8.3/s.
-        naked = self._position_is_undefined_risk()
+        # MONITORING-ONLY MODE. With no position open, this loop exists solely
+        # to keep reconciliation ticking. There is nothing naked to protect,
+        # so the tighter undefined-risk cadence would buy nothing and
+        # _position_is_undefined_risk would log its fail-closed warning on
+        # every pass, all day, for a position that does not exist.
+        monitoring_only = not self._entry_prices
+        naked = False if monitoring_only else self._position_is_undefined_risk()
         base_interval_s = int(mgmt_cfg.get("cycle_interval_seconds", 300))
         # TIGHTER, NEVER WIDER. min() rather than reading a separate key
         # outright, for two reasons. A naked position must never be revalued
@@ -2779,6 +2802,10 @@ class OptionsOSRunner:
         interval_s = (min(base_interval_s,
                           int(mgmt_cfg.get("undefined_risk_cycle_interval_seconds", 60)))
                       if naked else base_interval_s)
+        if monitoring_only:
+            self._logger.info(
+                "POSITION_MANAGEMENT -- monitoring-only (no position open): each pass "
+                "reconciles broker truth and returns. interval=%ss", interval_s)
 
         end_t = dt_time.fromisoformat(end_time_s)
 

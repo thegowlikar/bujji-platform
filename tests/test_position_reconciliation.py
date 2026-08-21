@@ -378,3 +378,75 @@ class TestTheEntryGatesAreReachableInProduction:
         assert cfg["session"].get("continuous"), (
             "production no longer runs the continuous branch -- re-verify which "
             "path reaches the entry gates")
+
+
+class TestTheMonitoringLoopRunsWithoutAnEntry:
+    """PROVEN LIVE 2026-08-21. A NO_TRADE session produced ZERO records in
+    position_reconciliation.jsonl, because _position_management() -- the only
+    caller of _run_one_management_pass, which reconciles first -- was gated on
+    `entered or _orphan_position_live`.
+
+    That is precisely backwards. The case reconciliation exists for is "Bujji
+    believes it holds nothing while the broker holds something", and `entered`
+    is False in exactly that case. Moving reconciliation to the top of the
+    pass fixed the INNER gate and left this OUTER one closed, so the detector
+    still could not run on the day it was needed.
+    """
+
+    @staticmethod
+    def _fn(name):
+        import ast
+        src = (REPO_ROOT / "bujji_options_os_runner.py").read_text()
+        for node in ast.walk(ast.parse(src)):
+            if isinstance(node, ast.FunctionDef) and node.name == name:
+                return node
+        raise AssertionError(f"{name} not found")
+
+    def test_continuous_mode_calls_management_unconditionally(self):
+        import ast
+        body = ast.unparse(self._fn("_continuous_session"))
+        assert "self._position_management()" in body
+        i = body.index("self._position_management()")
+        preceding = body[max(0, i - 220):i]
+        assert "if entered" not in preceding, (
+            "the monitoring loop is still gated on having entered")
+
+    def test_the_loop_still_reconciles_first(self):
+        """The inner fix must survive: reconciliation before every early
+        return, so a monitoring-only pass still reads the broker."""
+        import ast
+        body = self._fn("_run_one_management_pass").body
+        assert "_reconcile_broker_positions" in ast.unparse(body[0])
+
+    def test_a_no_position_pass_costs_one_read_then_returns(self):
+        """Monitoring-only must not evaluate exits or place anything."""
+        import ast
+        body = self._fn("_run_one_management_pass").body
+        recon = 0
+        guard = next(i for i, st in enumerate(body)
+                     if isinstance(st, ast.If) and "_entry_prices" in ast.unparse(st.test))
+        assert recon < guard
+        before = ast.unparse(ast.Module(body=body[:guard], type_ignores=[]))
+        for forbidden in ("evaluate_and_enforce_exit", "place_order", "_execute_reduce"):
+            assert forbidden not in before
+
+    def test_monitoring_only_does_not_claim_a_naked_position(self):
+        """_position_is_undefined_risk fails closed to 'naked' when no
+        strategy is recorded -- correct for a real position, but on a
+        no-entry day it would log that warning every pass, all day, about a
+        position that does not exist."""
+        import ast
+        body = ast.unparse(self._fn("_position_management"))
+        assert "monitoring_only" in body
+        i = body.index("monitoring_only")
+        assert "naked = False if monitoring_only" in body[i:i + 400]
+
+    def test_there_is_still_exactly_one_reconcile_call_site(self):
+        """One authority, one home. The 15:15->15:30 observation window is
+        deliberately NOT given a second call site: _eod_close() follows it
+        immediately and both reconciles AND acts, and the entry cutoff is
+        14:30 so blocking new risk in that window is moot. A second site
+        would buy ~15 minutes of earlier DETECTION with no earlier ACTION,
+        at the cost of a call site that can drift."""
+        src = (REPO_ROOT / "bujji_options_os_runner.py").read_text()
+        assert src.count("self._reconcile_broker_positions(stage_label)") == 1
