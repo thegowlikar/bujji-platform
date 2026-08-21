@@ -2943,7 +2943,26 @@ class OptionsOSRunner:
                 lifecycle, list(exit_symbols), list(orders_submitted), self._contracts_by_symbol,
             )
             self._exit_prices_by_leg.update(mapped)
-            for submitted in execution.orders_submitted:
+            # orders_submitted, NOT execution.orders_submitted.
+            #
+            # When this function was extracted out of _capture_exit_fills, the
+            # caller's local name came along for the ride and `execution` was
+            # left unbound here -- a NameError on EVERY exit, on the one path
+            # every closure route funnels through. It was swallowed by the
+            # except below, because bookkeeping is not allowed to end a
+            # session, so nothing ever surfaced it.
+            #
+            # The exit PRICES still landed: the update() above runs first, so
+            # the closure fix itself worked and the lifecycle still closed.
+            # What was silently lost was every exit ORDER ID, and with it the
+            # fee/slippage half of the outcome record -- collect_execution_costs
+            # then priced a round trip from its entry side alone.
+            #
+            # A structural test asserted this funnel EXISTS. It could not
+            # assert the funnel RUNS, because the except made failure look
+            # like success. tests/test_closure_integrity.py now calls it for
+            # real and checks the order ids arrive.
+            for submitted in orders_submitted:
                 order_id = getattr(submitted, "client_order_id", None)
                 if order_id:
                     self._execution_order_ids.append(order_id)
