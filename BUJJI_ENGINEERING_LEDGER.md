@@ -920,3 +920,43 @@ the stale cache the registry avoids.
 **Method note:** two character-window test assertions failed a *correct*
 implementation because the window truncated the asserted text. Replaced with
 real function-body extraction — char windows are brittle and I hit this twice.
+
+## 2026-08-21 — Auto-containment: designed, adversarially rejected, NOT built
+
+An adversarial design panel (4 independent stances → 4 attackers) was convened
+to design auto-containment of `BROKER_ONLY` positions. **Verdicts: 3 REJECT,
+1 ACCEPT_WITH_CHANGES — and all four rated the design MORE DANGEROUS than
+doing nothing.** Auto-containment is **not** built.
+
+**The decisive argument.** `FYERS_POSITION_SCHEMA_VERIFIED = False`. If a
+misread `netQty` reports a phantom position, containment BUYS to close it —
+**actually creating** one. The next pass sees that real position and buys
+again. Auto-containment converts an unverified schema into an unbounded
+position-building loop. EOD closure has the same exposure but fires once, at a
+known time, with a human able to read the artifact; a 60-second loop does not.
+
+Other fatal findings: the "adopt, don't flatten" design writes into
+`_entry_prices`/`_contracts_by_symbol` and thereby **arms the exit machinery**
+— a "non-actuating" design that actuates. Two designs were calibrated against
+code that had already changed mid-review.
+
+### What the panel found instead — two real defects in my own d6fbfaf
+
+**1. N+1 read race (fixed, `da2d00e`).** `_expected_symbols` called
+`get_group_reality()` per group, each re-reading `get_open_positions()`. So
+EXPECTED came from reads 1..N and OBSERVED from read N+1 — a position closing
+between them **manufactured a BROKER_ONLY**, the CRITICAL finding that blocks
+all new risk. *A safety check that can invent its own alarm is worse than no
+check.* Now one read, both sides.
+
+**2. The detector was dead where it mattered (fixed, `0d681f8`).**
+`_run_one_management_pass` opens `if not self._entry_prices: return`, and
+`_entry_prices` fills only on a successful entry. Reconciliation sat 128 lines
+below that guard. **A position Bujji doesn't know about means no entry of ours
+filled** → empty `_entry_prices` → return at statement one → the unfiltered
+read never happens. The detector could not run in the presence of the thing it
+detects. Now statement 0, asserted by AST to precede every `Return`.
+
+**Method note:** three assertions this session tripped on their own explanatory
+comments (which quote the code they describe). Source-text assertions are
+retired in favour of AST/behavioural checks.
