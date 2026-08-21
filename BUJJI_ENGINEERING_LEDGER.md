@@ -960,3 +960,32 @@ detects. Now statement 0, asserted by AST to precede every `Return`.
 **Method note:** three assertions this session tripped on their own explanatory
 comments (which quote the code they describe). Source-text assertions are
 retired in favour of AST/behavioural checks.
+
+## 2026-08-21 — The entry gates were unreachable in production (5e09332)
+
+The most serious defect of the engagement, and mine twice over.
+
+```python
+if self._session_cfg.get("continuous"):   # production config SETS this
+    self._continuous_session()             # → calls _attempt_entry DIRECTLY
+else:
+    self._entry_window()                   # ← the ONLY caller of the gates
+```
+
+**Both the hard data-quality boundary and `_reconciliation_blocks_entry` were
+never executed in production.** I built both, certified both `WIRED` and
+`PAPER VERIFIED`, and neither was on the branch production takes.
+
+This is the same built-not-wired class I spent the week auditing Bujji for —
+committed twice *while looking for it*. The lesson is sharper than the fix:
+**"wired" must mean reachable from the branch production actually takes**, not
+"called from a method that exists".
+
+Gates now sit at the top of `_attempt_entry` — the choke point both paths
+share — and **before** `select_and_lock_strategy`, so a blocked cycle does not
+burn the one-strategy-per-day lock. One authority, one home.
+
+Reachability is now asserted structurally (AST): gate is the first executable
+statement, precedes selection, exactly one call site, both paths reach it. One
+test reads the production config and fails if it stops taking the continuous
+branch — so the reachability argument cannot silently expire.
