@@ -857,3 +857,35 @@ process). The mechanism is real only under a live broker — which is the
 
 **Severity, honestly:** `shadow_mode: true`, PaperBroker execution. No rupees
 were at risk. P1 today, P0 the day the broker is real.
+
+## 2026-08-21 — Rule 11: EOD closure as a broker-truth state machine (a377165)
+
+`_eod_close()` ran a management pass, then `run_market_close_sequence()` — two
+state transitions. **Nothing asked the broker whether the account was flat**
+before COMPLETE and process exit. `finalize_session(final_positions=(), ...)`
+then wrote a summary asserting nothing was open.
+
+`bujji/production_runtime/eod_closure.py`: cancel working orders → discover
+positions **unfiltered** → per-symbol residuals → exit via the *same*
+broker-truth `place_fn` → reconcile → verify flat. COMPLETE reachable only from
+a proven flat.
+
+**Composed, not rebuilt** — placement is `ExecutionEngine.submit_and_confirm`;
+the reversal pattern is lifted from `core/orchestrator._flatten_orphan`.
+
+**Rule 0 correction found:** the Broker interface has **no working-order
+enumeration** — only `get_order(client_order_id)`. So "cancel working orders"
+is honestly scoped to *orders Bujji itself submitted*, recovered from the
+journal. An order placed outside Bujji cannot be seen from here and is not
+claimed to be.
+
+**Rule 13 gate declared:** `FYERS_POSITION_SCHEMA_VERIFIED = False`.
+`get_open_positions` reads `netQty`/`netAvg`; the top-level shape was confirmed
+against an **empty** book and the per-row names have never been seen against a
+real position. If `netQty` were named otherwise, every row reads qty 0 and the
+account looks **EMPTY** — a silent failure that manufactures flatness. Only an
+operator observing a real open position may flip it.
+
+**Still open:** no continuous in-session reconciliation; the runner discards
+the honest exit status from the management pass; `MANAGING`-state sessions are
+not resumed across a restart.
