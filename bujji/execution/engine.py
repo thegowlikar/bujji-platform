@@ -26,6 +26,12 @@ class ExecutionError(RuntimeError):
     """Raised when an order cannot be confirmed after all retries."""
 
 
+# Distinguishes "the lookup itself failed" from "the broker answered and does
+# not have this order". Both surface as OrderStatus.UNKNOWN; only the second
+# one makes a re-place safe.
+LOOKUP_FAILED = "lookup_failed"
+
+
 class ExecutionEngine:
     """Reliable order placement and confirmation over any :class:`Broker`."""
 
@@ -118,12 +124,48 @@ class ExecutionEngine:
                     log_event(self._log, "place_order_landed_despite_error",
                               cid=cid, status=landed.status.value)
                     return landed
+
+                # "I COULD NOT ASK" IS NOT "IT IS NOT THERE".
+                #
+                # `_lookup` returns UNKNOWN for two completely different
+                # facts: the broker answered and does not have this order,
+                # and the lookup ITSELF failed. The comment below this block
+                # used to read "Confirmed absent -> safe to try placing
+                # again" and the loop re-placed on both.
+                #
+                # The second case is the dangerous one and it is also the
+                # LIKELY one: place_order just failed, so the broker is
+                # already unwell, so the follow-up query fails too. That is
+                # exactly the state in which the original order most plausibly
+                # DID reach the exchange -- and with retry_attempts=3 on the
+                # production path this loop would place it up to two more
+                # times.
+                #
+                # An order whose fate is unknown is a first-class state, not a
+                # reason to try again. Stop and escalate; reconciliation
+                # against broker truth is a separate, deliberate act.
+                if landed.message == LOOKUP_FAILED:
+                    log_event(self._log, "place_order_fate_unknown",
+                              cid=cid, attempt=attempt)
+                    raise ExecutionError(
+                        f"place_order failed AND the order's fate could not be "
+                        f"established (cid={cid}): the lookup that would prove "
+                        f"it absent also failed. NOT re-placing -- this order "
+                        f"may already be live at the exchange. Reconcile "
+                        f"against broker truth before any retry. Cause: {exc}"
+                    )
+
                 if attempt >= attempts:
                     raise ExecutionError(
                         f"place_order failed and order absent after {attempts} "
                         f"attempts (cid={cid}): {exc}"
                     )
-                # Confirmed absent -> safe to try placing again.
+                # The broker ANSWERED and does not have it -> placing again is
+                # safe, to the extent the broker's own absent-answer is
+                # trustworthy. On FYERS that rests on the orderTag round-trip,
+                # which get_order's docstring records as UNVERIFIED -- so this
+                # branch is only as sound as that, and it is flagged rather
+                # than assumed.
         # Unreachable, but keeps the type checker happy.
         raise ExecutionError(f"place_order exhausted (cid={cid})")
 
@@ -135,8 +177,11 @@ class ExecutionEngine:
             )
         except ExecutionError:
             # If we cannot even query, report UNKNOWN so callers stay cautious.
+            # The MESSAGE is what distinguishes this from "the broker answered
+            # and does not have it" -- both are UNKNOWN, and _place_idempotent
+            # must never collapse them (see its own note).
             return OrderResult(client_order_id, OrderStatus.UNKNOWN,
-                               message="lookup_failed")
+                               message=LOOKUP_FAILED)
 
     async def _await_fill(self, client_order_id: str,
                           requested_qty: int) -> OrderResult:

@@ -1,0 +1,153 @@
+"""An order whose fate is unknown must never be re-placed.
+
+THE DEFECT. `ExecutionEngine._place_idempotent` retried like this:
+
+    except Exception as exc:                 # the placement may have LANDED
+        landed = await self._lookup(cid)
+        if landed.status is not OrderStatus.UNKNOWN:
+            return landed
+        if attempt >= attempts:
+            raise ...
+        # Confirmed absent -> safe to try placing again.     <- NOT confirmed
+
+`_lookup` returns UNKNOWN for two entirely different facts:
+
+    1. the broker ANSWERED and does not have this order   -> absent
+    2. the lookup ITSELF failed                           -> we could not ask
+
+The loop treated both as (1) and re-placed. Case (2) is the dangerous one AND
+the likely one: place_order has just failed, so the broker is already unwell,
+so the follow-up query fails too -- which is precisely the state in which the
+original order most plausibly DID reach the exchange.
+
+`retry_attempts` is 3 on the production path (runner:695), so a broker outage
+could place the same order up to THREE times. The engine is wired into the
+trading spine at runner:691 and drives the exit path at runner:729.
+
+The information needed to tell the cases apart already existed --
+`_lookup` set `message="lookup_failed"` -- and was discarded one line later.
+
+This is the state the brief named as most dangerous: "Bujji does not know
+whether an order was submitted... Never automatically resubmit until broker
+truth is reconciled."
+"""
+from __future__ import annotations
+
+import asyncio
+import logging
+import sys
+from pathlib import Path
+
+import pytest
+
+REPO_ROOT = Path(__file__).resolve().parents[1]
+if str(REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(REPO_ROOT))
+
+from bujji.core.config import AppConfig, BrokerConfig  # noqa: E402
+from bujji.core.enums import OrderStatus, Side  # noqa: E402
+from bujji.core.models import OrderResult  # noqa: E402
+from bujji.execution.engine import (  # noqa: E402
+    LOOKUP_FAILED, ExecutionEngine, ExecutionError,
+)
+
+LOG = logging.getLogger("test-engine")
+CFG = AppConfig(broker=BrokerConfig(
+    name="paper", retry_attempts=3, retry_backoff_seconds=0.0,
+    poll_interval_seconds=0.0, order_timeout_seconds=1.0))
+
+
+class _Req:
+    class contract:
+        symbol = "NSE:NIFTY2582524450CE"
+    side = Side.SELL
+    quantity = 65
+    limit_price = None
+    client_order_id = "COID-1"
+    reference_price = None
+
+
+class _Broker:
+    """place_order always fails. get_order behaves as configured."""
+
+    def __init__(self, lookup):
+        self.places = 0
+        self._lookup = lookup
+
+    async def place_order(self, request):
+        self.places += 1
+        raise ConnectionError("broker unreachable")
+
+    async def get_order(self, cid):
+        return self._lookup(cid)
+
+
+def _engine(broker):
+    return ExecutionEngine(broker, CFG, LOG)
+
+
+class TestAnUnknownFateStopsImmediately:
+    def test_a_failed_lookup_never_re_places(self):
+        """The lookup could not be performed, so the order's fate is unknown.
+        Exactly ONE placement attempt may ever have reached the exchange."""
+
+        def _lookup_blows_up(_cid):
+            raise ConnectionError("cannot query either")
+
+        broker = _Broker(_lookup_blows_up)
+        with pytest.raises(ExecutionError) as exc:
+            asyncio.run(_engine(broker)._place_idempotent(_Req()))
+
+        assert broker.places == 1, (
+            f"the order was placed {broker.places} times after its fate became "
+            f"unknown -- each extra placement may be a real duplicate")
+        assert "may already be live" in str(exc.value)
+
+    def test_the_operator_is_told_to_reconcile_not_to_retry(self):
+        def _lookup_blows_up(_cid):
+            raise ConnectionError("cannot query either")
+
+        with pytest.raises(ExecutionError) as exc:
+            asyncio.run(_engine(_Broker(_lookup_blows_up))._place_idempotent(_Req()))
+        assert "Reconcile against broker truth" in str(exc.value)
+
+
+class TestAConfirmedAbsentOrderStillRetries:
+    """The guard must not become a wall: when the broker ANSWERS and does not
+    have the order, re-placing is the correct behaviour and must survive."""
+
+    def test_an_answered_absent_order_is_retried_to_the_limit(self):
+        def _answers_absent(cid):
+            return OrderResult(cid, OrderStatus.UNKNOWN, message="not found")
+
+        broker = _Broker(_answers_absent)
+        with pytest.raises(ExecutionError) as exc:
+            asyncio.run(_engine(broker)._place_idempotent(_Req()))
+        assert broker.places == 3, (
+            f"expected 3 attempts against an answered-absent broker, saw "
+            f"{broker.places}")
+        assert "order absent after 3 attempts" in str(exc.value)
+
+
+class TestALandedOrderIsReturned:
+    def test_an_order_that_landed_despite_the_error_is_adopted(self):
+        def _landed(cid):
+            return OrderResult(cid, OrderStatus.FILLED, message="ok")
+
+        broker = _Broker(_landed)
+        out = asyncio.run(_engine(broker)._place_idempotent(_Req()))
+        assert out.status is OrderStatus.FILLED
+        assert broker.places == 1, "a landed order must never be placed again"
+
+
+class TestTheSentinelIsNotAccidental:
+    def test_lookup_failure_uses_the_named_constant(self):
+        def _lookup_blows_up(_cid):
+            raise ConnectionError("nope")
+
+        eng = _engine(_Broker(_lookup_blows_up))
+        result = asyncio.run(eng._lookup("COID-1"))
+        assert result.status is OrderStatus.UNKNOWN
+        assert result.message == LOOKUP_FAILED, (
+            "the re-place guard keys on this exact message; a silent rename "
+            "would restore the duplicate-order path")
