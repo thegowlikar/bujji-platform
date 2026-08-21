@@ -241,3 +241,75 @@ class TestTheEodClosureCarriesRealFills:
         src = (REPO_ROOT / "bujji" / "production_runtime" / "eod_closure.py").read_text()
         assert '"average_price"' in src, (
             "a flattened session recorded THAT it closed but never AT WHAT")
+
+
+class TestTheFunnelActuallyRuns:
+    """Structure said yes. Runtime said NameError.
+
+    The original tests here asserted that every flattening route CALLS the
+    funnel -- and they were right, it did. What none of them asserted was that
+    the funnel WORKS, because `_capture_exit_fills_from` wraps its body in
+    `except Exception` so that bookkeeping can never end a live session. That
+    except turned a NameError on `execution.orders_submitted` (a caller local
+    that came along when the function was extracted) into a log line, on the
+    one path every exit funnels through, and 8122 tests stayed green.
+
+    Exit PRICES still landed -- the update() runs before the bad line -- so
+    the closure fix worked and the lifecycle still closed. What vanished was
+    every exit order id, and with it the fee/slippage half of the outcome
+    record. These tests call the funnel for real."""
+
+    @staticmethod
+    def _runner_with_lifecycle():
+        r = object.__new__(runner_mod.OptionsOSRunner)
+        leg = SimpleNamespace(leg_id="L1", strike=24000.0, option_type="CE", expiry="2026-08-25")
+        r._canonical_position_id = "POS-1"
+        r._lifecycle_states = {"POS-1": SimpleNamespace(legs=[leg])}
+        r._contracts_by_symbol = {
+            "NSE:NIFTY26AUG24000CE": SimpleNamespace(
+                strike=24000.0, option_type="CE", expiry="2026-08-25")}
+        r._exit_prices_by_leg = {}
+        r._execution_order_ids = []
+        r._logger = SimpleNamespace(info=lambda *a, **k: None,
+                                    exception=lambda *a, **k: None,
+                                    warning=lambda *a, **k: None)
+        return r
+
+    def test_a_real_call_captures_both_the_price_and_the_order_id(self):
+        r = self._runner_with_lifecycle()
+        fill = SimpleNamespace(average_price=12.5, filled_quantity=65,
+                               client_order_id="EOD-A1-NSE:NIFTY26AUG24000CE")
+        r._capture_exit_fills_from(["NSE:NIFTY26AUG24000CE"], [fill], source="TEST")
+
+        assert r._exit_prices_by_leg == {"L1": {"exit_price": 12.5, "exit_quantity": 65}}, \
+            "the exit price did not reach the lifecycle"
+        assert r._execution_order_ids == ["EOD-A1-NSE:NIFTY26AUG24000CE"], \
+            "the exit ORDER ID was lost -- execution costs will price the round trip " \
+            "from its entry side alone"
+
+    def test_it_raises_nothing_into_the_session(self):
+        """The except must stay -- bookkeeping cannot end a live session. This
+        pins that it stays a SAFETY NET and not a silencer for real defects."""
+        r = self._runner_with_lifecycle()
+        r._contracts_by_symbol = {}          # unresolvable -> mapper skips the leg
+        r._capture_exit_fills_from(["NSE:UNKNOWN"], [SimpleNamespace(average_price=1.0)],
+                                   source="TEST")
+        assert r._exit_prices_by_leg == {}
+
+    def test_the_function_has_no_unbound_names(self):
+        """A cheap structural backstop for the whole family: any name loaded
+        in this function must be a parameter, a local, or a builtin."""
+        import builtins
+        fn = _method("_capture_exit_fills_from")
+        bound = {a.arg for a in fn.args.args}
+        bound |= {x.id for n in ast.walk(fn) if isinstance(n, ast.Assign)
+                  for x in ast.walk(n.targets[0]) if isinstance(x, ast.Name)}
+        bound |= {n.target.id for n in ast.walk(fn)
+                  if isinstance(n, ast.For) and isinstance(n.target, ast.Name)}
+        bound |= {h.name for h in ast.walk(fn) if isinstance(h, ast.ExceptHandler) and h.name}
+        bound |= {a.asname or a.name.split(".")[0] for n in ast.walk(fn)
+                  if isinstance(n, (ast.Import, ast.ImportFrom)) for a in n.names}
+        unbound = sorted(n.id for n in ast.walk(fn)
+                         if isinstance(n, ast.Name) and isinstance(n.ctx, ast.Load)
+                         and n.id not in bound and not hasattr(builtins, n.id))
+        assert unbound == [], f"unbound names in the exit funnel: {unbound}"
