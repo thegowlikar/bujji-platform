@@ -889,3 +889,34 @@ operator observing a real open position may flip it.
 **Still open:** no continuous in-session reconciliation; the runner discards
 the honest exit status from the management pass; `MANAGING`-state sessions are
 not resumed across a restart.
+
+## 2026-08-21 — Continuous broker-truth reconciliation (d6fbfaf)
+
+Broker truth was consulted at placement, at startup and at EOD — **never in
+between**. The only in-session position read went through
+`PositionRealityRegistry`, which *intersects* broker positions with an
+in-memory table of registered symbols. A position at an unregistered symbol was
+**mathematically undiscoverable** through that API: never valued, never
+stop-lossed, never escalated, unnoticed until EOD.
+
+`position_reconciliation.py` compares belief against an **unfiltered** read on
+the existing management cadence. Severity follows **risk direction**:
+
+| Condition | Verdict | Blocks new risk |
+|---|---|---|
+| broker holds what Bujji doesn't know | `CRITICAL_UNEXPECTED_EXPOSURE` | ✅ |
+| Bujji believes, broker says no | WARNING (usually a completed exit) | ❌ |
+| read failed / malformed row | `UNKNOWN` | ✅ |
+
+It **reports and gates; it never mutates position state** — asserted by test.
+The unfiltered read reuses `eod_closure.discover_broker_positions`.
+
+**Declared limitation:** the registry deliberately never caches quantity
+(*"re-read from PaperBroker on demand, never cached here"*), so no independent
+expected quantity exists. Symbol presence is compared; `quantity_compared=False`
+travels in every record. Inventing an expected quantity would recreate exactly
+the stale cache the registry avoids.
+
+**Method note:** two character-window test assertions failed a *correct*
+implementation because the window truncated the asserted text. Replaced with
+real function-body extraction — char windows are brittle and I hit this twice.
