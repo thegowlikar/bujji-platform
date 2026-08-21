@@ -1742,9 +1742,10 @@ class OptionsOSRunner:
         # for one condition. Stale, gapped, degraded and non-LIVE data all
         # reached strategy selection stamped completeness 1.0.
         #
-        # A decision is BLOCKED here, not warned about.
-        if not self._data_quality_permits_entry():
-            return
+        # A decision is BLOCKED, not warned about -- but the gate now lives
+        # inside _attempt_entry, the choke point BOTH the single-shot and the
+        # continuous paths share. Calling it here too would give one gate two
+        # homes and let them drift.
         self._attempt_entry(trend_regime, volatility_regime)
 
     def _data_quality_permits_entry(self) -> bool:
@@ -1864,10 +1865,28 @@ class OptionsOSRunner:
         return budget
 
     def _attempt_entry(self, trend_regime, volatility_regime) -> bool:
-        """One complete entry attempt: selection -> Gate B'd risk pipeline ->
-        fills -> registry -> canonical lifecycle. Returns True only when a
-        position is actually OPEN. Shared verbatim by the single-shot entry
-        window and the continuous session loop -- one entry path, two clocks."""
+        """One complete entry attempt: gates -> selection -> Gate B'd risk
+        pipeline -> fills -> registry -> canonical lifecycle. Returns True
+        only when a position is actually OPEN. Shared verbatim by the
+        single-shot entry window and the continuous session loop -- one entry
+        path, two clocks.
+
+        THE GATES LIVE HERE, NOT IN _entry_window (fixed 2026-08-21).
+        _entry_window called _data_quality_permits_entry() and was the only
+        caller. But run() takes _entry_window ONLY when session.continuous is
+        unset -- and the production config sets it, so production runs
+        _continuous_session(), which calls THIS method directly. Both the hard
+        data-quality boundary and the reconciliation block were therefore
+        unreachable in production while being reported as wired. Two gates I
+        built, certified, and never verified were on the executed branch.
+
+        Putting them at this choke point makes the branch irrelevant: every
+        entry in either mode passes the same gates, and a third caller added
+        later inherits them automatically instead of silently bypassing them.
+        """
+        if not self._data_quality_permits_entry():
+            return False
+
         selection = self._governor.select_and_lock_strategy(trend_regime, volatility_regime)
         self._governor_result_summary["strategy_selected"] = selection.selected_strategy
         if selection.selected_strategy is None:

@@ -300,3 +300,81 @@ class TestReconciliationIsNotDeadWhereItMatters:
     def test_there_is_exactly_one_call_site(self):
         src = (REPO_ROOT / "bujji_options_os_runner.py").read_text()
         assert src.count("self._reconcile_broker_positions(stage_label)") == 1
+
+
+class TestTheEntryGatesAreReachableInProduction:
+    """THE defect this file exists to prevent recurring.
+
+    run() branches: `if session.continuous -> _continuous_session() else
+    _entry_window()`. The production config SETS session.continuous, so
+    production runs _continuous_session(), which calls _attempt_entry
+    DIRECTLY. _entry_window was the only caller of
+    _data_quality_permits_entry -- so the hard data-quality boundary AND the
+    reconciliation block were both unreachable in production while being
+    reported as wired.
+
+    The gates now sit at _attempt_entry, the choke point BOTH paths share.
+    """
+
+    @staticmethod
+    def _fn(name):
+        import ast
+        src = (REPO_ROOT / "bujji_options_os_runner.py").read_text()
+        for node in ast.walk(ast.parse(src)):
+            if isinstance(node, ast.FunctionDef) and node.name == name:
+                return node
+        raise AssertionError(f"{name} not found")
+
+    def test_the_gate_is_the_first_executable_statement_of_attempt_entry(self):
+        import ast
+        body = [st for st in self._fn("_attempt_entry").body
+                if not (isinstance(st, ast.Expr) and isinstance(st.value, ast.Constant))]
+        assert "_data_quality_permits_entry" in ast.unparse(body[0])
+
+    def test_the_gate_precedes_strategy_selection(self):
+        """Selecting a strategy locks it for the day (one strategy per day),
+        so gating after selection would burn the lock on a blocked cycle."""
+        import ast
+        body = self._fn("_attempt_entry").body
+        gate = next(i for i, st in enumerate(body)
+                    if "_data_quality_permits_entry" in ast.unparse(st))
+        select = next(i for i, st in enumerate(body)
+                      if "select_and_lock_strategy" in ast.unparse(st))
+        assert gate < select
+
+    def test_the_continuous_path_reaches_the_gate(self):
+        """Production's actual branch. _continuous_session calls
+        _attempt_entry directly -- which is exactly why the gate had to move
+        out of _entry_window."""
+        import ast
+        assert "_attempt_entry" in ast.unparse(self._fn("_continuous_session"))
+
+    def test_the_single_shot_path_also_reaches_it(self):
+        import ast
+        assert "_attempt_entry" in ast.unparse(self._fn("_entry_window"))
+
+    def test_the_gate_has_exactly_one_call_site(self):
+        """One authority, one home. Two homes drift."""
+        import ast
+        src = (REPO_ROOT / "bujji_options_os_runner.py").read_text()
+        calls = [n for n in ast.walk(ast.parse(src))
+                 if isinstance(n, ast.Call) and isinstance(n.func, ast.Attribute)
+                 and n.func.attr == "_data_quality_permits_entry"]
+        assert len(calls) == 1
+
+    def test_the_reconciliation_block_is_read_by_that_gate(self):
+        """_reconciliation_blocks_entry was read only inside the gate, so it
+        died with it. It must ride the same reachable path."""
+        import ast
+        assert "_reconciliation_blocks_entry" in ast.unparse(
+            self._fn("_data_quality_permits_entry"))
+
+    def test_production_config_actually_takes_the_continuous_branch(self):
+        """If this ever flips, the reachability argument above changes and
+        this suite should be re-read rather than trusted."""
+        import yaml
+        cfg = yaml.safe_load(
+            (REPO_ROOT / "config" / "options_os_paper_trading.yaml").read_text())
+        assert cfg["session"].get("continuous"), (
+            "production no longer runs the continuous branch -- re-verify which "
+            "path reaches the entry gates")
