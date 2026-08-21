@@ -63,7 +63,9 @@ from __future__ import annotations
 
 import argparse
 import logging
+import signal as _signal
 import sys
+import threading as _threading
 import uuid
 from datetime import time as dt_time
 from pathlib import Path
@@ -1808,6 +1810,16 @@ class OptionsOSRunner:
             now = self._clock()
             if now.time() >= observe_until:
                 break
+            if termination_requested():
+                # SIGTERM lands HERE, in the loop that occupies the whole
+                # day, and exits it the normal way -- so control falls
+                # through to _eod_close() and the position is flattened and
+                # archived rather than abandoned. See
+                # install_termination_handlers.
+                self._logger.critical(
+                    "ORDERLY STOP requested -- leaving the observation loop and proceeding "
+                    "to EOD closure with the position (if any) still open.")
+                break
             cycles += 1
             # RECONCILE ON EVERY CYCLE OF THE LOOP THAT ACTUALLY RUNS ALL DAY.
             #
@@ -2504,6 +2516,17 @@ class OptionsOSRunner:
             self._logger.warning("%s -- no valuation available for %s", stage_label, pg_id)
             return
 
+        # Snapshot the group's open positions BEFORE any exit runs -- and
+        # before the BRAKE, not after it. Both the emergency route and the
+        # ordinary route need this same list to attribute their fills, and
+        # taking it below the brake meant the emergency route had no list at
+        # all and therefore captured nothing (see _execute_emergency_close).
+        # After an exit executes those positions are flat and the registry
+        # returns nothing, so reading it afterwards silently drops every real
+        # exit fill and leaves the outcome record with no P&L.
+        positions_before_exit = asyncio.run(self._registry.positions_for_group(pg_id))
+        symbols_before_exit = [p["symbol"] for p in positions_before_exit]
+
         # -- EMERGENCY BRAKE (Master Plan D-6) -- evaluated every pass,
         # BEFORE the ordinary exit policy.
         #
@@ -2535,17 +2558,9 @@ class OptionsOSRunner:
             self._logger.critical("%s -- EMERGENCY CLOSE: %s", stage_label, brake_reason)
             self._governor_result_summary["emergency_close_reason"] = brake_reason
             self._emergency_closed = True
-            self._execute_emergency_close(brake_reason, valuation, stage_label)
+            self._execute_emergency_close(
+                brake_reason, valuation, stage_label, symbols_before_exit)
             return
-
-        # Snapshot the group's open positions BEFORE the exit runs. The
-        # executor iterates exactly this list to build its reduce orders,
-        # and `orders_submitted` comes back in the same order -- but by
-        # the time the exit has executed, those positions are flat and
-        # the registry returns nothing, so reading it afterwards yields
-        # an empty list and every real exit fill is silently lost.
-        positions_before_exit = asyncio.run(self._registry.positions_for_group(pg_id))
-        symbols_before_exit = [p["symbol"] for p in positions_before_exit]
 
         selected = self._governor_result_summary.get("strategy_selected")
         result = asyncio.run(self._governor.evaluate_and_enforce_exit(
@@ -2732,7 +2747,8 @@ class OptionsOSRunner:
             "Management continues and EOD closure will attempt it again against "
             "broker truth.", stage_label, exit_status, record["reason"])
 
-    def _execute_emergency_close(self, brake_reason, valuation, stage_label: str) -> None:
+    def _execute_emergency_close(self, brake_reason, valuation, stage_label: str,
+                                 symbols_before_exit=()) -> None:
         """Actually flatten, then prove it against the broker.
 
         Reuses the governor's own forced-exit path (the hard-limit branch),
@@ -2780,6 +2796,17 @@ class OptionsOSRunner:
         status = getattr(execution, "status", None)
         self._governor_result_summary["emergency_close_status"] = status
         self._logger.critical("%s -- EMERGENCY CLOSE execution status=%s", stage_label, status)
+
+        # FINALISE THE RECORD, NOT ONLY THE BOOK (2026-08-21 closure audit).
+        # This method returned straight after run_market_close_sequence() on
+        # its SUCCESS branch, so a brake that genuinely flattened still left
+        # _exit_prices_by_leg empty -- and _close_canonical_lifecycle then
+        # recorded canonical_close_outcome=NEVER_EXITED for a position the
+        # broker had confirmed closed. Flat book, absent history. Captured
+        # here, from the same execution object and through the same mapper
+        # the ordinary exit path uses, so the two cannot attribute fills
+        # differently.
+        self._capture_exit_fills(symbols_before_exit, result)
 
         flat, detail = self._broker_reports_flat()
         self._governor_result_summary["emergency_close_broker_flat"] = flat
@@ -2885,6 +2912,27 @@ class OptionsOSRunner:
         execution = getattr(result, "forced_execution", None)
         if execution is None or not getattr(execution, "orders_submitted", ()):
             return
+        self._capture_exit_fills_from(
+            exit_symbols, execution.orders_submitted, source="MANAGEMENT")
+
+    def _capture_exit_fills_from(self, exit_symbols, orders_submitted, source: str) -> None:
+        """THE ONE PLACE exit evidence becomes lifecycle truth.
+
+        Every route that reduces a position -- ordinary policy exit, 15:15
+        mandatory exit, emergency brake, EOD broker-truth closure -- funnels
+        through here. Before the 2026-08-21 closure audit only the first two
+        did, so the two routes that actually ran on a bad day flattened the
+        book and left the record saying the position never exited.
+
+        `exit_symbols` and `orders_submitted` are PARALLEL: index i of one is
+        index i of the other. Both callers preserve that ordering, and
+        map_exit_fills_to_legs skips anything it cannot resolve rather than
+        approximating it.
+        """
+        from bujji.production_runtime.lifecycle_outcome_bridge import map_exit_fills_to_legs
+
+        if not orders_submitted:
+            return
         if self._canonical_position_id is None:
             return
         lifecycle = self._lifecycle_states.get(self._canonical_position_id)
@@ -2892,14 +2940,15 @@ class OptionsOSRunner:
             return
         try:
             mapped = map_exit_fills_to_legs(
-                lifecycle, exit_symbols, execution.orders_submitted, self._contracts_by_symbol,
+                lifecycle, list(exit_symbols), list(orders_submitted), self._contracts_by_symbol,
             )
             self._exit_prices_by_leg.update(mapped)
             for submitted in execution.orders_submitted:
                 order_id = getattr(submitted, "client_order_id", None)
                 if order_id:
                     self._execution_order_ids.append(order_id)
-            self._logger.info("Captured %d real exit fill(s) for %s", len(mapped), self._canonical_position_id)
+            self._logger.info("Captured %d real exit fill(s) for %s via %s",
+                              len(mapped), self._canonical_position_id, source)
         except Exception as exc:  # noqa: BLE001 -- bookkeeping never kills a live session.
             self._logger.exception("exit-fill capture failed (session continues): %s", exc)
 
@@ -3030,6 +3079,11 @@ class OptionsOSRunner:
             if getattr(self, "_emergency_closed", False):
                 self._logger.critical("POSITION_MANAGEMENT halted: emergency close executed.")
                 break
+            if termination_requested():
+                self._logger.critical(
+                    "ORDERLY STOP requested -- ending position management; EOD closure will "
+                    "flatten against broker truth.")
+                break
             self._run_one_management_pass(f"POSITION_MANAGEMENT[{cycles + 1}]")
             cycles += 1
             if not self._entry_prices:
@@ -3102,6 +3156,20 @@ class OptionsOSRunner:
         self._governor_result_summary["eod_closure"] = result.to_dict()
         self._governor_result_summary["session_closed"] = result.session_closed
 
+        # THE CLOSURE MACHINE FLATTENS THE BOOK; THIS FINALISES THE RECORD.
+        # run_eod_closure lives outside the management path and never touched
+        # _capture_exit_fills, so every position it flattened -- including
+        # today's, and every EOD-closed session before it -- produced a
+        # provably flat broker and a lifecycle permanently stuck at
+        # NEVER_EXITED, with no exit price, no fees and no outcome memory.
+        # The fills it really got are now mapped through the SAME
+        # map_exit_fills_to_legs the management path uses.
+        fills = tuple(getattr(result, "exit_fills", ()) or ())
+        if fills:
+            self._capture_exit_fills_from(
+                [symbol for symbol, _ in fills], [outcome for _, outcome in fills],
+                source="EOD_CLOSURE")
+
         if result.session_closed:
             # THE ONLY PATH TO COMPLETE. Positively verified flatness.
             self._trading_brain_runtime.run_market_close_sequence()
@@ -3173,6 +3241,67 @@ class OptionsOSRunner:
         self._logger.info("SESSION_ARCHIVE -- final_state=%s realized_pnl=%s",
                            self._governor.state.value, realized)
         self._close_canonical_lifecycle()
+        self._assert_closure_truths_agree()
+
+    def _assert_closure_truths_agree(self) -> None:
+        """Three truths must tell one story. Nothing compared them before.
+
+        A session carries three independent accounts of the same fact:
+
+          BROKER   -- eod_closure's own unfiltered read (`flat`)
+          LIFECYCLE-- the canonical position record (`canonical_close_outcome`)
+          JOURNAL  -- the archived summary (`final_positions_status`)
+
+        Each was individually honest and none was ever checked against the
+        others, so the contradiction this audit found could persist
+        indefinitely: broker provably FLAT, lifecycle permanently
+        NEVER_EXITED, summary reading as a clean, complete session. The
+        divergence was not hidden -- both values sat in the same dict -- it
+        was simply never read as a pair.
+
+        Runs AFTER _close_canonical_lifecycle so it grades the final state.
+        Never raises: this is the detector of last resort, and a detector
+        that can end the session would be a new way to lose one.
+        """
+        try:
+            summary = self._governor_result_summary
+            closure = getattr(self, "_eod_closure_result", None)
+            broker_flat = getattr(closure, "flat", None)
+            lifecycle_outcome = summary.get("canonical_close_outcome")
+            positions_status = summary.get("final_positions_status")
+
+            # A position that was opened and is now flat MUST have an exit
+            # record. NEVER_EXITED is only honest when nothing ever closed.
+            lifecycle_flat = lifecycle_outcome == "ACCEPTED"
+            had_position = bool(self._canonical_position_id)
+            divergences = []
+            if had_position and broker_flat is True and not lifecycle_flat:
+                divergences.append(
+                    f"broker reports FLAT but the lifecycle says "
+                    f"{lifecycle_outcome!r} -- the position closed and the record does not "
+                    f"know how, at what price, or at what cost")
+            if had_position and broker_flat is True and not self._exit_prices_by_leg:
+                divergences.append(
+                    "broker reports FLAT but no exit fill was captured for any leg -- "
+                    "realized P&L cannot be attributed to this trade")
+            if broker_flat is True and positions_status not in (None, "FLAT"):
+                divergences.append(
+                    f"broker reports FLAT but the archived summary says "
+                    f"final_positions_status={positions_status!r}")
+            if broker_flat is False and summary.get("session_closed"):
+                divergences.append(
+                    "session_closed is True while the broker reports open legs")
+
+            summary["closure_truths_agree"] = not divergences
+            if divergences:
+                summary["closure_truth_divergences"] = divergences
+                self._logger.critical(
+                    "CLOSURE TRUTH DIVERGENCE (%d): %s. The book and the record disagree; "
+                    "this session's outcome is NOT evidence and must not be pooled with "
+                    "sessions whose lifecycle closed cleanly.",
+                    len(divergences), " | ".join(divergences))
+        except Exception as exc:  # noqa: BLE001 -- a detector must never end a session
+            self._logger.warning("closure-truth check failed (session unaffected): %s", exc)
 
     def _close_canonical_lifecycle(self) -> None:
         """The final two hops this runner never reached before: close the
@@ -3349,6 +3478,62 @@ class OptionsOSRunner:
         # session from STARTUP -- it never reads back a prior one.
 
 
+_TERMINATION_REQUESTED = _threading.Event()
+
+
+def termination_requested() -> bool:
+    return _TERMINATION_REQUESTED.is_set()
+
+
+def install_termination_handlers(logger=None) -> None:
+    """Make SIGTERM mean "stop at the next safe point", not "vanish".
+
+    THE UNIT FILE ALREADY PROMISED THIS AND THE CODE DID NOT DO IT. The
+    service says:
+
+        # Give the session time to release its lock and finalise the outcome
+        # record on SIGTERM before systemd escalates.
+        TimeoutStopSec=60
+        KillSignal=SIGTERM
+
+    but there was no handler anywhere on this entrypoint's import tree, so
+    Python's default SIGTERM disposition terminated the process WITHOUT
+    unwinding: `finally` never ran, nothing was archived, and any open
+    position was abandoned. A false safety comment is worse than a missing
+    feature, because it stops anyone from looking.
+
+    COOPERATIVE, NOT AN EXCEPTION. Raising from the handler would unwind
+    straight past `_eod_close()` -- the session would tear down without ever
+    flattening, which is barely better than being killed. Setting a flag that
+    the session's own loops check means SIGTERM lands the process in its
+    NORMAL closure path: break the loop, run the EOD close, archive.
+
+    HONEST LIMIT: this only helps where the process is executing Python. A
+    SIGTERM arriving while blocked in a broker call still cannot be serviced
+    until that call returns, and the installed fyers SDK sets no HTTP timeout
+    (verified: zero occurrences of "timeout" in the package), so that wait is
+    unbounded. systemd escalates to SIGKILL after TimeoutStopSec regardless.
+    """
+    def _request_stop(signum, _frame):
+        _TERMINATION_REQUESTED.set()
+        if logger is not None:
+            logger.critical(
+                "SIGNAL %s received -- requesting an ORDERLY stop: the current loop will "
+                "break at its next check and the session will run its normal EOD closure "
+                "(flatten, verify, archive). It does NOT stop immediately.", signum)
+
+    for signame in ("SIGTERM", "SIGINT"):
+        sig = getattr(_signal, signame, None)
+        if sig is None:
+            continue
+        try:
+            _signal.signal(sig, _request_stop)
+        except (ValueError, OSError):
+            # Not the main thread, or a platform without it. Never fatal:
+            # the session simply keeps the old behaviour for that signal.
+            pass
+
+
 def run(argv=None) -> int:
     from bujji.production_runtime.market_data_provider import MarketDataUnavailableError
     from bujji.production_runtime.regime_provider import MissingRegimeInputError
@@ -3385,6 +3570,11 @@ def run(argv=None) -> int:
     except LockAcquisitionError as exc:
         logging.getLogger("bujji-options-os-shadow").error("Refusing to start: %s", exc)
         return EXIT_RUNTIME_ERROR
+
+    # Installed AFTER the lock is held and BEFORE the session starts, on the
+    # main thread, so the handler is in place for every second this process
+    # could be asked to stop while holding a position.
+    install_termination_handlers(logging.getLogger("bujji-options-os-shadow"))
 
     try:
         return _run_session(args, as_of_date)

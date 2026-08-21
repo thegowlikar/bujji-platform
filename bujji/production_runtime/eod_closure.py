@@ -61,6 +61,13 @@ class EodClosureResult:
     positions_before: Tuple[Dict[str, Any], ...] = ()
     positions_after: Tuple[Dict[str, Any], ...] = ()
     exits_submitted: Tuple[Dict[str, Any], ...] = ()
+    # (symbol, OrderResult) for every exit that actually FILLED. Kept as the
+    # broker's own result objects, not dicts, because the lifecycle mapper
+    # (lifecycle_outcome_bridge.map_exit_fills_to_legs) reads .average_price
+    # and .filled_quantity off them -- reusing that one mapper is what keeps
+    # this path and the management path from attributing fills differently.
+    # Deliberately absent from to_dict(): an OrderResult is not JSON.
+    exit_fills: Tuple[Tuple[str, Any], ...] = ()
     cancellations: Tuple[Dict[str, Any], ...] = ()
     attempts: int = 0
     detail: str = ""
@@ -215,6 +222,11 @@ def run_eod_closure(*, broker, place_fn, run_async, journal, journal_db_path,
     result = EodClosureResult(state=STATE_BROKER_TRUTH_UNKNOWN, flat=None)
     cancellations: List[Dict[str, Any]] = []
     exits: List[Dict[str, Any]] = []
+    # Real fills, carried out so the caller can finalise the LIFECYCLE and not
+    # only the book. Flattening without this produced a session that was
+    # provably flat at the broker and permanently "NEVER_EXITED" in its own
+    # outcome record -- see the runner's _finalize_exit_evidence.
+    fills: List[Tuple[str, Any]] = []
 
     for attempt in range(1, max_attempts + 1):
         result.attempts = attempt
@@ -235,6 +247,7 @@ def run_eod_closure(*, broker, place_fn, run_async, journal, journal_db_path,
             result.detail = detail
             result.cancellations = tuple(cancellations)
             result.exits_submitted = tuple(exits)
+            result.exit_fills = tuple(fills)
             logger.critical("EOD: broker truth UNKNOWN (%s). Session is NOT complete.", detail)
             return result
         if attempt == 1:
@@ -248,6 +261,7 @@ def run_eod_closure(*, broker, place_fn, run_async, journal, journal_db_path,
             result.positions_after = ()
             result.cancellations = tuple(cancellations)
             result.exits_submitted = tuple(exits)
+            result.exit_fills = tuple(fills)
             result.detail = ("already flat" if attempt == 1 and not exits
                              else "flat after flattening")
             logger.info("EOD: broker confirms FLAT (%s).", result.detail)
@@ -268,6 +282,7 @@ def run_eod_closure(*, broker, place_fn, run_async, journal, journal_db_path,
                 continue
             try:
                 outcome = place_fn(request)
+                fills.append((symbol, outcome))
                 exits.append({
                     "symbol": symbol, "client_order_id": coid,
                     "quantity": int(position["qty"]),
@@ -275,6 +290,10 @@ def run_eod_closure(*, broker, place_fn, run_async, journal, journal_db_path,
                     "status": getattr(getattr(outcome, "status", None), "value",
                                       str(getattr(outcome, "status", None))),
                     "filled_quantity": getattr(outcome, "filled_quantity", None),
+                    # The price this leg actually left at. Absent from the
+                    # artifact until now, so a flattened session recorded THAT
+                    # it closed but never AT WHAT.
+                    "average_price": getattr(outcome, "average_price", None),
                 })
             except Exception as exc:  # noqa: BLE001
                 exits.append({"symbol": symbol, "client_order_id": coid,
@@ -288,6 +307,7 @@ def run_eod_closure(*, broker, place_fn, run_async, journal, journal_db_path,
     positions, detail = discover_broker_positions(broker, run_async)
     result.cancellations = tuple(cancellations)
     result.exits_submitted = tuple(exits)
+    result.exit_fills = tuple(fills)
     if positions is None:
         result.state = STATE_BROKER_TRUTH_UNKNOWN
         result.flat = None
