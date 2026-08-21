@@ -49,6 +49,9 @@ def _build(
     underlying_price=363.65,
 ):
     return engine.build_option_observation(
+        # "ABCAPITAL26JUL360PE" is NSE's own FinInstrmNm form -- real at the
+        # source, unproven at any execution venue.
+        symbol_provenance="SOURCE_AUTHORITATIVE",
         underlying=underlying,
         instrument_symbol=instrument_symbol,
         strike=strike,
@@ -310,6 +313,7 @@ class TestSeriesOrdering:
         series = engine.new_option_series(
             underlying="ABCAPITAL", strike=360.0, expiry="2026-07-28", option_type="PE",
             instrument_symbol="ABCAPITAL26JUL360PE", resolution=moc_taxonomy.RESOLUTION_DAILY,
+            symbol_provenance="SOURCE_AUTHORITATIVE",
         )
         oo1 = _build(timestamp="2026-05-25T15:30:00")
         oo2 = _build(timestamp="2026-05-26T15:30:00", close=40.0)
@@ -323,6 +327,7 @@ class TestSeriesOrdering:
         series = engine.new_option_series(
             underlying="ABCAPITAL", strike=360.0, expiry="2026-07-28", option_type="PE",
             instrument_symbol="ABCAPITAL26JUL360PE", resolution=moc_taxonomy.RESOLUTION_DAILY,
+            symbol_provenance="SOURCE_AUTHORITATIVE",
         )
         oo_later = _build(timestamp="2026-05-26T15:30:00")
         oo_earlier = _build(timestamp="2026-05-25T15:30:00", close=40.0)
@@ -410,6 +415,7 @@ class TestQuery:
         series = engine.new_option_series(
             underlying="ABCAPITAL", strike=360.0, expiry="2026-07-28", option_type="PE",
             instrument_symbol="ABCAPITAL26JUL360PE", resolution=moc_taxonomy.RESOLUTION_DAILY,
+            symbol_provenance="SOURCE_AUTHORITATIVE",
         )
         oo1 = _build(timestamp="2026-05-25T15:30:00")
         oo2 = _build(timestamp="2026-05-26T15:30:00", close=40.0)

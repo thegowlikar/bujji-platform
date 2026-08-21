@@ -87,6 +87,16 @@ class OptionObservation:
     expiry: str
     option_type: str
     underlying: str
+    # WHERE instrument_symbol CAME FROM (taxonomy.ALL_SYMBOL_PROVENANCES).
+    #
+    # DELIBERATELY ON THE WRAPPER, NOT INSIDE `observation`. `observation_id`
+    # is computed by moc_engine.build_observation() from identity + value
+    # ALONE, and this field is attached only after that call returns. Its
+    # non-participation in content-addressing is therefore STRUCTURAL -- not
+    # a convention a later edit could quietly break -- which matters because
+    # every historical option row in the observation store is addressed by
+    # that hash.
+    symbol_provenance: str
 
     @property
     def observation_id(self) -> str:
@@ -207,6 +217,13 @@ class OptionObservationSeries:
     expiry: str
     option_type: str
     underlying: str
+    # Same provenance, carried at series level for one concrete reason:
+    # observations() and query.py rebuild OptionObservation wrappers from
+    # the SERIES. Without it here those rebuilds would have nothing honest
+    # to declare and would have to invent a value -- exactly the failure
+    # this field exists to prevent. engine.append_option_observation()
+    # refuses to mix provenances within one series.
+    symbol_provenance: str
 
     @property
     def instrument_symbol(self) -> str:
@@ -224,6 +241,7 @@ class OptionObservationSeries:
                 expiry=self.expiry,
                 option_type=self.option_type,
                 underlying=self.underlying,
+                symbol_provenance=self.symbol_provenance,
             )
             for o in self.series.observations
         )

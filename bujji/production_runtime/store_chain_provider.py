@@ -150,6 +150,7 @@ class StoreChainProvider(MarketDataProvider):
         return latest
 
     def _load_chain(self, start: str, end: str, spot: Optional[float]):
+        from bujji.options_observation import taxonomy as opt_taxonomy
         from bujji.options_observation.engine import build_option_observation
 
         # Keep only the LAST real print per contract at or before `end` --
@@ -187,7 +188,26 @@ class StoreChainProvider(MarketDataProvider):
             timestamp = getattr(timestamp, "timestamp", None) or end
             chain.append(build_option_observation(
                 underlying=underlying,
-                instrument_symbol=f"{underlying}{expiry}{int(strike)}{option_type}",
+                # NO BROKER SYMBOL EXISTS HERE, AND THIS NO LONGER PRETENDS ONE DOES.
+                #
+                # This line used to read
+                #     instrument_symbol=f"{underlying}{expiry}{int(strike)}{option_type}"
+                # which manufactured "NIFTY2026-08-1824000CE" -- shaped like a
+                # real symbol, tradable nowhere. The observation store simply
+                # never captured broker symbols: option rows are keyed
+                # "NIFTY|2026-08-18|22000|CE" (see _parse_identity above), a
+                # pipe-delimited INTERNAL identity. The fabrication existed only
+                # because `instrument_symbol` is a required, validated-non-empty
+                # field that feeds observation_id, so "no symbol" was not
+                # expressible. Provenance makes it expressible.
+                #
+                # The sentinel keeps identity working (deterministic, so
+                # observation_id stays stable across rebuilds) while being
+                # unmistakable: it carries "|", which no exchange symbol
+                # vocabulary in use here contains.
+                instrument_symbol=opt_taxonomy.unresolved_symbol(
+                    underlying, expiry, int(strike), option_type),
+                symbol_provenance=opt_taxonomy.SYMBOL_PROVENANCE_ABSENT,
                 strike=strike, expiry=expiry, option_type=option_type,
                 exchange="NSE", segment="FO", timestamp=timestamp,
                 resolution=self._resolution,

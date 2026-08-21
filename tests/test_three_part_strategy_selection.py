@@ -155,6 +155,7 @@ def _chain():
             moneyness = (SPOT - strike) if option_type == "CE" else (strike - SPOT)
             premium = max(5.0, moneyness + 120.0)
             rows.append(build_option_observation(
+                symbol_provenance="BROKER_AUTHORITATIVE",   # "NSE:..." -- broker form
                 underlying="NIFTY", instrument_symbol=f"NSE:NIFTY{int(strike)}{option_type}",
                 strike=strike, expiry=EXPIRY, option_type=option_type, exchange="NSE",
                 segment="FO", timestamp="2026-08-19T10:00:00+05:30", resolution="SNAPSHOT",

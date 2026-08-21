@@ -32,6 +32,7 @@ from bujji.market_observation import taxonomy as moc_taxonomy
 from . import engine
 from .config import DEFAULT_SOURCE, SCHEMA_VERSION
 from .models import OptionObservation, OptionObservationSeries
+from . import taxonomy
 from .taxonomy import ALL_OPTIONS_INSTRUMENT_TYPES
 
 NSE_BHAVCOPY_MARKET_CLOSE_TIME = "15:30:00"
@@ -105,6 +106,11 @@ def build_option_observation_from_row(
     timestamp = f"{trading_date}T{market_close_time}"
 
     return engine.build_option_observation(
+        # NSE's own FinInstrmNm, read from the row and dropped (above) when
+        # absent -- genuinely observed, never built. But it is an NSE-native
+        # string ("NIFTY26AUG24000CE"), and nothing has established that the
+        # broker execution venue accepts it, so it is not BROKER_AUTHORITATIVE.
+        symbol_provenance=taxonomy.SYMBOL_PROVENANCE_SOURCE_AUTHORITATIVE,
         underlying=underlying,
         instrument_symbol=instrument_symbol,
         strike=strike,
@@ -191,6 +197,7 @@ def ingest_option_observations_from_bhavcopy(
         option_type=target_option_type,
         instrument_symbol=instrument_symbol,
         resolution=resolution,
+        symbol_provenance=taxonomy.SYMBOL_PROVENANCE_SOURCE_AUTHORITATIVE,
     )
 
     for row in contract_rows:
@@ -259,6 +266,7 @@ def ingest_all_option_series_from_bhavcopy(
         series = engine.new_option_series(
             underlying=underlying, strike=strike, expiry=expiry, option_type=option_type,
             instrument_symbol=instrument_symbol, resolution=resolution,
+            symbol_provenance=taxonomy.SYMBOL_PROVENANCE_SOURCE_AUTHORITATIVE,
         )
         for row in contract_rows:
             oo = build_option_observation_from_row(

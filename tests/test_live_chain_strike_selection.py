@@ -41,7 +41,8 @@ def _row(strike, option_type, *, settlement=None, close=None, bid=None, ask=None
         close=close, settlement=settlement,
         volume=1000, open_interest=50000, change_in_open_interest=100,
         underlying_price=SPOT, origin="test",
-        acquisition_timestamp="x", normalization_timestamp="x", bid=bid, ask=ask)
+        acquisition_timestamp="x", normalization_timestamp="x", bid=bid, ask=ask,
+        symbol_provenance="BROKER_AUTHORITATIVE")   # "NSE:..." -- broker form
 
 
 def _chain(shape: str):

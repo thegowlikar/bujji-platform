@@ -23,6 +23,7 @@ from bujji.msi_participant_positioning import taxonomy as mppi_taxonomy
 # ---------------------------------------------------------------------------
 def _mk_option(strike, option_type, oi, change_oi, underlying_price=100.0, ts="2026-07-24T00:00:00", expiry="2026-07-30"):
     return opt_engine.build_option_observation(
+        symbol_provenance="SYNTHETIC",   # built from strike/type by this fixture
         underlying="NIFTY", instrument_symbol=f"NIFTY{strike}{option_type}", strike=strike, expiry=expiry,
         option_type=option_type, exchange="NSE", segment="FO", timestamp=ts, resolution="DAILY",
         open_=None, high=None, low=None, close=None, settlement=None, volume=None,

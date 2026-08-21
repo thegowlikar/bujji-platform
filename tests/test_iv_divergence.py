@@ -40,6 +40,8 @@ def _chain(forward=24123.0, sigma=0.10, df=0.9977, n=13):
         for is_call, option_type in ((True, "CE"), (False, "PE")):
             p = price(forward, strike, sigma, T, is_call, df)
             rows.append(build_option_observation(
+                # "X24500CE" is invented by this test and belongs to no venue.
+                symbol_provenance="SYNTHETIC",
                 underlying="NIFTY", instrument_symbol=f"X{int(strike)}{option_type}",
                 strike=strike, expiry=EXPIRY, option_type=option_type,
                 exchange="NSE", segment="FO", timestamp=AS_OF, resolution="SNAPSHOT",

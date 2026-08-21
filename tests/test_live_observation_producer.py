@@ -99,6 +99,10 @@ class TestEventTranslation:
                 "close": 120.0, "open": 110.0, "high": 130.0, "low": 105.0,
                 "settlement": None, "volume": 200.0, "open_interest": 300.0,
                 "underlying_price": 25010.0,
+                # The Producer normalises the raw frame; this translator never
+                # sees it and so cannot know where the symbol came from. The
+                # payload must therefore carry it -- see the next test.
+                "symbol_provenance": "BROKER_AUTHORITATIVE",
             },
             sequence=0,
         )
@@ -106,6 +110,26 @@ class TestEventTranslation:
         from bujji.options_observation.models import OptionObservation
         assert isinstance(obs, OptionObservation)
         assert obs.observation.identity.observation_type == moc_taxonomy.TYPE_OPTION_CHAIN
+        assert obs.symbol_provenance == "BROKER_AUTHORITATIVE"
+
+    def test_a_producer_that_omits_symbol_provenance_fails_loudly(self):
+        """The translator must never invent a provenance it does not have.
+        A KeyError naming the field is the correct outcome: it points at the
+        producer that has to declare it. (No production emitter of
+        EVENT_OPTION_CHAIN_UPDATED exists today -- this pins the contract
+        BEFORE one is written, which is the only time it is cheap.)"""
+        event = models.LiveObservationEvent(
+            event_id="e5b", event_type=taxonomy.EVENT_OPTION_CHAIN_UPDATED,
+            timestamp="2026-07-24T09:15:00+05:30", source="FYERS",
+            payload={
+                "underlying": "NIFTY", "instrument_symbol": "NIFTY26JUL25000CE",
+                "strike": 25000.0, "expiry": "2026-07-30", "option_type": "CE",
+                "close": 120.0,
+            },
+            sequence=0,
+        )
+        with pytest.raises(KeyError, match="symbol_provenance"):
+            engine.translate_event(event)
 
     @pytest.mark.parametrize("event_type", [
         taxonomy.EVENT_CONNECTION_ESTABLISHED,

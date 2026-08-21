@@ -18,6 +18,7 @@ from __future__ import annotations
 from typing import Tuple
 
 from bujji.market_observation import taxonomy as moc_taxonomy
+from bujji.options_observation import taxonomy as opt_taxonomy
 from bujji.options_observation.engine import build_option_observation
 from bujji.options_observation.models import OptionObservation
 
@@ -60,6 +61,11 @@ def build_option_observations_from_snapshot(snapshot: MarketSnapshot) -> Tuple[O
                 normalization_timestamp=snapshot.timestamp,
                 bid=leg.bid, ask=leg.ask,
                 source=SOURCE, schema_version=SCHEMA_VERSION,
+                # leg.symbol traces to OptionContract.symbol, read verbatim
+                # from FYERS's own cached instrument master
+                # (market_perception/option_chain_adapter.py: COL_SYMBOL of
+                # data/instrument_master/fyers_fo_NSE.csv). The venue's string.
+                symbol_provenance=opt_taxonomy.SYMBOL_PROVENANCE_BROKER_AUTHORITATIVE,
             )
         )
     return tuple(observations)

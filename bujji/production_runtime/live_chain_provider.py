@@ -128,6 +128,7 @@ class LiveChainProvider(MarketDataProvider):
         self._chain, self._spot = tuple(chain), spot
 
     def _build(self, raw: dict, as_of_date: str):
+        from bujji.options_observation import taxonomy as opt_taxonomy
         from bujji.options_observation.engine import build_option_observation
 
         data = raw.get("data") or {}
@@ -188,6 +189,12 @@ class LiveChainProvider(MarketDataProvider):
                 underlying_price=spot,
                 origin="fyers_optionchain_live",
                 acquisition_timestamp=as_of_date, normalization_timestamp=as_of_date,
+                # FYERS's optionchain response returned `row_symbol` itself --
+                # this is the execution venue's own string, passed through
+                # verbatim above, and rows lacking it were already dropped and
+                # counted rather than filled in. Nothing else in this codebase
+                # may claim BROKER_AUTHORITATIVE.
+                symbol_provenance=opt_taxonomy.SYMBOL_PROVENANCE_BROKER_AUTHORITATIVE,
                 bid=_positive(row.get("bid")), ask=_positive(row.get("ask")),
             ))
         if dropped_no_symbol:

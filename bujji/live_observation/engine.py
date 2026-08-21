@@ -139,6 +139,14 @@ def translate_event(event, *, origin: str = moc_taxonomy.ORIGIN_LIVE) -> Optiona
 
     if event.event_type == taxonomy.EVENT_OPTION_CHAIN_UPDATED:
         return options_engine.build_option_observation(
+            # REQUIRED FROM THE PAYLOAD, with no default. This translator
+            # never sees the raw broker frame -- the Producer normalises it
+            # upstream -- so this function does not know where the symbol came
+            # from and must not guess. A producer that cannot state it fails
+            # here with a KeyError naming the field, which is the correct
+            # outcome. (No production emitter of EVENT_OPTION_CHAIN_UPDATED
+            # exists today; this branch is reachable only from tests.)
+            symbol_provenance=payload["symbol_provenance"],
             underlying=payload["underlying"],
             instrument_symbol=payload["instrument_symbol"],
             strike=payload["strike"],

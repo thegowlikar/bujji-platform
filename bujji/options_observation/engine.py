@@ -63,6 +63,8 @@ def build_option_observation(
     source_quality: str = moc_taxonomy.SOURCE_QUALITY_HIGH,
     confidence: Optional[float] = None,
     observation_type: str = moc_taxonomy.TYPE_OPTION_CHAIN,
+    *,
+    symbol_provenance: str,
 ) -> OptionObservation:
     """Construct one OptionObservation from already-normalized inputs
     (one Bhavcopy option row's fields, as plain values). Any of the
@@ -73,6 +75,17 @@ def build_option_observation(
     always None -- see taxonomy.py's module docstring for the disclosed
     evidence that Bhavcopy carries no such columns.
     """
+    # No default, and rejected rather than coerced. Every construction path
+    # must state what it actually knew about `instrument_symbol`; a builder
+    # that cannot say must not build. Keyword-only above so the four
+    # positional identity args can never silently absorb it.
+    if symbol_provenance not in taxonomy.ALL_SYMBOL_PROVENANCES:
+        raise ValueError(
+            f"symbol_provenance must be one of {taxonomy.ALL_SYMBOL_PROVENANCES}, "
+            f"got {symbol_provenance!r} -- refusing to record an option observation "
+            f"whose symbol origin is undeclared."
+        )
+
     field_values: Dict[str, Optional[float]] = {
         taxonomy.FIELD_OPEN: open_,
         taxonomy.FIELD_HIGH: high,
@@ -136,12 +149,15 @@ def build_option_observation(
         transformation_history=(),
     )
 
+    # Attached AFTER build_observation() has already returned, so it cannot
+    # reach observation_id. See models.py.
     return OptionObservation(
         observation=observation,
         strike=strike,
         expiry=expiry,
         option_type=option_type,
         underlying=underlying,
+        symbol_provenance=symbol_provenance,
     )
 
 
@@ -153,14 +169,23 @@ def new_option_series(
     instrument_symbol: str,
     resolution: str,
     observation_type: str = moc_taxonomy.TYPE_OPTION_CHAIN,
+    *,
+    symbol_provenance: str,
 ) -> OptionObservationSeries:
+    if symbol_provenance not in taxonomy.ALL_SYMBOL_PROVENANCES:
+        raise ValueError(
+            f"symbol_provenance must be one of {taxonomy.ALL_SYMBOL_PROVENANCES}, "
+            f"got {symbol_provenance!r} -- refusing to open an option series "
+            f"whose symbol origin is undeclared."
+        )
     series = moc_engine.new_series(
         observation_type=observation_type,
         instrument=instrument_symbol,
         resolution=resolution,
     )
     return OptionObservationSeries(
-        series=series, strike=strike, expiry=expiry, option_type=option_type, underlying=underlying
+        series=series, strike=strike, expiry=expiry, option_type=option_type,
+        underlying=underlying, symbol_provenance=symbol_provenance,
     )
 
 
@@ -171,6 +196,17 @@ def append_option_observation(
     delegating ordering/gap logic entirely to MOC's own
     `engine.append_observation` -- never re-implemented here.
     """
+    # A series whose rows disagree about where their symbols came from has
+    # no honest series-level provenance, and query.py/observations() would
+    # then stamp every rebuilt wrapper with a value true of only some rows.
+    # Refuse at append time, where the caller still knows which row is wrong.
+    if option_observation.symbol_provenance != option_series.symbol_provenance:
+        raise ValueError(
+            f"cannot append an observation with symbol_provenance="
+            f"{option_observation.symbol_provenance!r} to a series with "
+            f"symbol_provenance={option_series.symbol_provenance!r} -- one series "
+            f"cannot describe two different symbol origins."
+        )
     new_series = moc_engine.append_observation(option_series.series, option_observation.observation)
     return OptionObservationSeries(
         series=new_series,
@@ -178,6 +214,7 @@ def append_option_observation(
         expiry=option_series.expiry,
         option_type=option_series.option_type,
         underlying=option_series.underlying,
+        symbol_provenance=option_series.symbol_provenance,
     )
 
 
@@ -206,6 +243,8 @@ def validate_option_observation(
         reasons.append("MISSING_UNDERLYING")
     if not option_observation.instrument_symbol:
         reasons.append("MISSING_INSTRUMENT_SYMBOL")
+    if option_observation.symbol_provenance not in taxonomy.ALL_SYMBOL_PROVENANCES:
+        reasons.append("UNKNOWN_SYMBOL_PROVENANCE")
 
     if reasons:
         return ValidationResult(is_valid=False, status=moc_taxonomy.VALIDATION_INVALID, reasons=tuple(reasons))

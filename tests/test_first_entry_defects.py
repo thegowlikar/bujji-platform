@@ -51,7 +51,10 @@ def _chain_row(strike=24500.0, option_type="CE", symbol="NSE:NIFTY26AUG24500CE")
         timestamp="T", resolution="SNAPSHOT", open_=None, high=None, low=None,
         close=26.0, settlement=None, volume=1, open_interest=1,
         change_in_open_interest=0, underlying_price=24000.0, origin="test",
-        acquisition_timestamp="T", normalization_timestamp="T", bid=25.5, ask=26.5)
+        acquisition_timestamp="T", normalization_timestamp="T", bid=25.5, ask=26.5,
+        # "NSE:NIFTY26AUG24500CE" is the FYERS form -- this fixture exists
+        # precisely to stand for the BROKER's own symbol.
+        symbol_provenance="BROKER_AUTHORITATIVE")
 
 
 class TestTheSymbolTrap:
