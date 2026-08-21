@@ -2609,6 +2609,21 @@ class OptionsOSRunner:
         """
         import asyncio as _asyncio
 
+        # PositionHealthThresholds is imported function-locally throughout this
+        # runner, and _run_one_management_pass has its own copy. This method is
+        # a DIFFERENT function, so that import was never in scope here.
+        #
+        # It failed live on 2026-08-21 at 09:54:35: the blind-cycle brake fired
+        # correctly ("3 consecutive unpriced cycles with an open position --
+        # cannot see, will not hold") and then raised NameError instead of
+        # placing the exit. The position stayed open. Every surrounding safety
+        # behaviour held -- the exception was caught, the broker was read,
+        # flat=False was reported with both legs named, and
+        # CRITICAL_UNFLATTENED_POSITION was raised rather than a clean close --
+        # but the close itself did not happen.
+        from bujji.trading_brain.risk_governor.position_lifecycle_intelligence import (
+            PositionHealthThresholds)
+
         selected = self._governor_result_summary.get("strategy_selected")
         result = None
         try:

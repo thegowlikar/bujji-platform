@@ -226,3 +226,93 @@ class TestCloseSequenceIsIdempotent:
         """The misreading that caused the defect."""
         from bujji.production_runtime.trading_brain_runtime import TradingBrainRuntime
         assert "PLACES NO ORDER" in (TradingBrainRuntime.run_market_close_sequence.__doc__ or "")
+
+
+class TestEveryLazyImportIsInScope:
+    """FOUND LIVE 2026-08-21 09:54:35, in my own code.
+
+    The blind-cycle brake fired correctly -- "3 consecutive unpriced cycles
+    with an open position -- cannot see, will not hold" -- and then raised
+    `NameError: name 'PositionHealthThresholds' is not defined` instead of
+    placing the exit. The position stayed open.
+
+    Cause: this runner imports function-locally (118 such imports).
+    _run_one_management_pass has its own PositionHealthThresholds import;
+    _execute_emergency_close is a DIFFERENT function and never had one. Every
+    surrounding safety behaviour held -- the exception was caught, the broker
+    was read, flat=False was reported with both legs named, and
+    CRITICAL_UNFLATTENED_POSITION was raised rather than a clean close -- but
+    the close itself did not happen.
+
+    A unit test of the brake's WIRING could not catch this; only executing the
+    body does. These tests execute it.
+    """
+
+    @staticmethod
+    def _names_used_but_not_bound(func_name: str):
+        """Names a method references that it neither imports, assigns, nor
+        receives as a parameter -- and which are not module-level or builtins."""
+        import ast
+        import builtins
+
+        src = (REPO_ROOT / "bujji_options_os_runner.py").read_text()
+        tree = ast.parse(src)
+        module_level = set()
+        for node in tree.body:
+            if isinstance(node, (ast.Import, ast.ImportFrom)):
+                module_level |= {a.asname or a.name.split(".")[0] for a in node.names}
+            elif isinstance(node, (ast.FunctionDef, ast.ClassDef)):
+                module_level.add(node.name)
+            elif isinstance(node, ast.Assign):
+                module_level |= {t.id for t in node.targets if isinstance(t, ast.Name)}
+
+        fn = next(n for n in ast.walk(tree)
+                  if isinstance(n, ast.FunctionDef) and n.name == func_name)
+        bound = {a.arg for a in fn.args.args}
+        for n in ast.walk(fn):
+            if isinstance(n, (ast.Import, ast.ImportFrom)):
+                bound |= {a.asname or a.name.split(".")[-1] for a in n.names}
+            elif isinstance(n, ast.Assign):
+                # TARGETS ONLY. Walking the whole Assign also collects names
+                # from the VALUE, which made this test count
+                # `PositionHealthThresholds` as bound merely because it
+                # appeared on the right-hand side -- so the first version of
+                # this test passed against the very bug it was written for.
+                # The negative control caught that.
+                for tgt in n.targets:
+                    bound |= {x.id for x in ast.walk(tgt) if isinstance(x, ast.Name)}
+            elif isinstance(n, (ast.AugAssign, ast.AnnAssign)):
+                bound |= {x.id for x in ast.walk(n.target) if isinstance(x, ast.Name)}
+            elif isinstance(n, ast.withitem) and n.optional_vars is not None:
+                bound |= {x.id for x in ast.walk(n.optional_vars) if isinstance(x, ast.Name)}
+            elif isinstance(n, ast.For):
+                bound |= {x.id for x in ast.walk(n.target) if isinstance(x, ast.Name)}
+            elif isinstance(n, (ast.comprehension,)):
+                bound |= {t.id for t in ast.walk(n.target) if isinstance(t, ast.Name)}
+            elif isinstance(n, ast.ExceptHandler) and n.name:
+                bound.add(n.name)
+            elif isinstance(n, (ast.FunctionDef, ast.Lambda)) and n is not fn:
+                bound |= {a.arg for a in n.args.args}
+
+        used = {n.id for n in ast.walk(fn)
+                if isinstance(n, ast.Name) and isinstance(n.ctx, ast.Load)}
+        return sorted(used - bound - module_level - set(dir(builtins)))
+
+    def test_the_emergency_close_has_no_unbound_names(self):
+        """THE regression. This returned ['PositionHealthThresholds']."""
+        assert self._names_used_but_not_bound("_execute_emergency_close") == []
+
+    def test_the_broker_flat_check_has_no_unbound_names(self):
+        assert self._names_used_but_not_bound("_broker_reports_flat") == []
+
+    def test_the_eod_closure_has_no_unbound_names(self):
+        assert self._names_used_but_not_bound("_run_eod_closure") == []
+
+    def test_the_reconciler_has_no_unbound_names(self):
+        assert self._names_used_but_not_bound("_reconcile_broker_positions") == []
+
+    def test_the_management_pass_has_no_unbound_names(self):
+        assert self._names_used_but_not_bound("_run_one_management_pass") == []
+
+    def test_orphan_registration_has_no_unbound_names(self):
+        assert self._names_used_but_not_bound("_register_orphaned_legs") == []
