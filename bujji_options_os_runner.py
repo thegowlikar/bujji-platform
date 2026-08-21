@@ -2473,6 +2473,56 @@ class OptionsOSRunner:
         except Exception as exc:  # noqa: BLE001 -- see docstring.
             self._logger.exception("canonical lifecycle entry failed (session continues): %s", exc)
 
+    def _session_realized_pnl(self):
+        """Realized P&L so far this session, or None if it cannot be read.
+
+        This was `getattr(self._broker, "realized_pnl", 0.0)`. NO broker
+        defines that attribute -- PaperBroker keeps a private `_realized_pnl`
+        dict behind a `get_realized_pnl()` method, and FyersBroker has
+        neither -- so the getattr default was taken on EVERY call and the
+        realized half of the daily-loss brake was permanently 0.0.
+
+        The brake computes `realized + unrealized <= -daily_loss_limit`.
+        With realized pinned at zero, a session that banks a large loss on a
+        closed leg and then opens another is measured only on the new
+        position's unrealized loss: with a 25000 limit, realized -20000 plus
+        unrealized -10000 is a 30000 breach that the brake scored as -10000
+        and held.
+
+        Returns None rather than 0.0 when it cannot be determined. Zero is a
+        claim that nothing was realized; None says we could not ask, and the
+        caller discloses that rather than silently trading on it.
+        """
+        getter = getattr(self._broker, "get_realized_pnl", None)
+        if callable(getter):
+            try:
+                value = getter()
+            except Exception as exc:  # noqa: BLE001 -- a P&L read must not end a session
+                self._logger.warning(
+                    "realized P&L read failed (%s); the daily-loss brake will "
+                    "see UNREALIZED P&L only this cycle.", exc)
+                return None
+            if value is not None:
+                return float(value)
+        value = getattr(self._broker, "realized_pnl", None)
+        if value is not None:
+            return float(value)
+
+        # Disclosed ONCE per session: an alarm on every cycle trains the
+        # operator to ignore it, and this is a standing property of the
+        # broker, not a per-cycle event.
+        if not getattr(self, "_realized_pnl_gap_disclosed", False):
+            self._realized_pnl_gap_disclosed = True
+            self._governor_result_summary["daily_loss_brake_realized_source"] = (
+                f"UNAVAILABLE ({type(self._broker).__name__} exposes neither "
+                f"get_realized_pnl() nor realized_pnl)")
+            self._logger.warning(
+                "DAILY-LOSS BRAKE IS INCOMPLETE: %s exposes no realized P&L, so "
+                "the brake measures UNREALIZED P&L only. A loss already banked "
+                "this session does not count toward the daily loss limit.",
+                type(self._broker).__name__)
+        return None
+
     def _run_one_management_pass(self, stage_label: str) -> None:
         # RECONCILE BEFORE ANY EARLY RETURN (defect in d6fbfaf, mine).
         #
@@ -2575,7 +2625,7 @@ class OptionsOSRunner:
         # allowed to call itself closed.
         brake_reason = _emergency_brake(
             unrealized_pnl=getattr(valuation, "total_unrealized_pnl", None),
-            realized_pnl=getattr(self._broker, "realized_pnl", 0.0),
+            realized_pnl=self._session_realized_pnl(),
             daily_loss_limit=self._config.get("capital_snapshot", {}).get("daily_loss_limit"),
             consecutive_blind_cycles=getattr(self, "_consecutive_blind_cycles", 0),
             max_consecutive_blind_cycles=self._config.get("position_management", {}).get(
