@@ -78,6 +78,12 @@ REPO_ROOT = Path(__file__).resolve().parent
 EXIT_OK = 0
 EXIT_CONFIG_ERROR = 1
 EXIT_RUNTIME_ERROR = 2
+# A session that RAN but cannot prove its position is closed. Distinct from
+# EXIT_RUNTIME_ERROR on purpose: nothing crashed, the machinery worked, and
+# the answer it produced is "the book may still be open". systemd treats any
+# non-zero exit as a unit failure, which is what fires OnFailure= ->
+# bujji-alert@ -> ALERTS.jsonl + the operator's phone.
+EXIT_UNSAFE_SESSION = 3
 
 
 class ConfigurationError(Exception):
@@ -3623,6 +3629,28 @@ def _run_session(args, as_of_date: str) -> int:
         runner = OptionsOSRunner(config=config, as_of_date=as_of_date, session_id=session_id, logger=logger)
         summary = runner.run()
         logger.info("Session complete: %s", summary)
+
+        # THE SESSION'S OWN VERDICT MUST REACH THE PROCESS EXIT CODE.
+        #
+        # Every fact below was already computed and already logged CRITICAL.
+        # What was missing was any path from those facts to systemd. Without
+        # it a session could end CRITICAL_UNFLATTENED_POSITION and still exit
+        # 0, so OnFailure= never fired and the alarm that exists reached
+        # nobody. On 2026-08-21 the alert fired only because an unrelated
+        # websocket hang got the process SIGTERM-killed; a clean exit that
+        # day would have been silent.
+        from bujji.production_runtime.session_safety_verdict import (
+            evaluate_session_safety,
+        )
+
+        verdict = evaluate_session_safety(summary)
+        if not verdict.safe:
+            logger.critical(
+                "SESSION ENDED UNSAFE (%d reason(s)) -- exiting %d so systemd "
+                "fails this unit and OnFailure= alerts the operator: %s",
+                len(verdict.reasons), EXIT_UNSAFE_SESSION,
+                " | ".join(verdict.reasons))
+            return EXIT_UNSAFE_SESSION
         return EXIT_OK
     except (ConfigurationError, MissingRegimeInputError, MarketDataUnavailableError) as exc:
         logging.getLogger("bujji-options-os-shadow").error("Configuration/input failure: %s", exc)
