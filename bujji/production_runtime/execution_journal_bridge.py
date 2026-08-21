@@ -371,9 +371,25 @@ def contain_partial_entry(
                          "target_contract_id": f"C{i}",
                          "reduced_quantity_delta": result.filled_quantity})
                     journal.append_linked_events([fill_spec, reduction_spec], clock=clock)
-                unwound.append(coid)
-                logger.warning("PARTIAL ENTRY CONTAINED -- %s unwound at %.2f (qty %d).",
-                               coid, result.average_price, result.filled_quantity)
+                # GAP 2: a SHORT unwind is not a contained unwind. This
+                # counted any fill as full containment, without comparing the
+                # unwind quantity to what the entry actually filled. An entry
+                # that filled 75 and an unwind that filled 25 was reported
+                # CONTAINED -- so the runner saw PARTIAL_CONTAINED, registered
+                # nothing, and 50 lots stayed live and invisible.
+                unwound_qty = int(getattr(result, "filled_quantity", 0) or 0)
+                opened_qty = int(getattr(fill_result, "filled_quantity", 0) or 0)
+                if opened_qty and unwound_qty < opened_qty:
+                    orphaned.append(coid)
+                    logger.critical(
+                        "PARTIAL ENTRY ORPHAN -- unwind of %s filled only %d of %d. "
+                        "The residual %d IS a live position and MUST be registered "
+                        "for management.",
+                        coid, unwound_qty, opened_qty, opened_qty - unwound_qty)
+                else:
+                    unwound.append(coid)
+                    logger.warning("PARTIAL ENTRY CONTAINED -- %s unwound at %.2f (qty %d).",
+                                   coid, result.average_price, unwound_qty)
             else:
                 orphaned.append(coid)
                 logger.critical(

@@ -1947,6 +1947,22 @@ class OptionsOSRunner:
             # model while remaining real at the broker.
             if isinstance(reason, str) and reason.startswith("PARTIAL_ORPHANED:"):
                 self._register_orphaned_legs(cycle_result, reason)
+            elif isinstance(reason, str) and reason.startswith("BROKER_TRUTH_UNKNOWN:"):
+                # GAP 1. An UNKNOWN leg may or may not be a live position --
+                # that is exactly what UNKNOWN means -- and this branch used
+                # to register nothing, so if it HAD filled it became a
+                # position nothing owned: unvalued, unstopped, and surfacing
+                # only as a BROKER_ONLY reconciliation finding hours later.
+                #
+                # Registering is safe in both worlds. It is a MEMORY WRITE
+                # that places no order, and PositionGroupReality.is_open is
+                # derived from a live broker read -- so a leg that does not
+                # exist at the broker simply never reads open and costs
+                # nothing. A leg that DOES exist is now managed. Refusing to
+                # register because we are unsure is the one choice that is
+                # wrong in both worlds.
+                self._register_orphaned_legs(cycle_result, reason,
+                                             label="BROKER_TRUTH_UNKNOWN")
             self._logger.info("Entry did not fill (reason=%s).", reason)
             return False
 
@@ -1982,12 +1998,24 @@ class OptionsOSRunner:
 
         return True
 
-    def _register_orphaned_legs(self, cycle_result, reason: str) -> None:
-        """Register the filled-but-not-unwound legs of a partial entry so
-        position management owns them. Never raises: failing to register
-        must not also lose the CRITICAL log that names the orphans."""
+    def _register_orphaned_legs(self, cycle_result, reason: str,
+                                label: str = "PARTIAL_ORPHANED") -> None:
+        """Register legs that may be live positions, so management owns them.
+
+        THE PRINCIPLE: register a SUPERSET and let broker truth filter it.
+        Registration places no order and `PositionGroupReality.is_open` is
+        derived from a live `get_open_positions()` read, so a symbol that does
+        not exist at the broker never reads open. Registering a leg we are
+        unsure about therefore costs nothing, while declining to register one
+        that turns out to be real costs an unmanaged naked position. The
+        asymmetry only points one way.
+
+        Never raises: failing to register must not also lose the CRITICAL log
+        that names the orphans.
+        """
         try:
-            orphan_coids = set(reason.split(":", 1)[1].split(","))
+            orphan_coids = set(
+                c for c in reason.split(":", 1)[1].split(",") if c)
             from bujji.trading_brain.risk_governor.msi_entry_bridge import _leg_to_core_contract
 
             contracts = {}
@@ -1999,12 +2027,36 @@ class OptionsOSRunner:
                     contracts[contract.symbol] = contract
                     entry_prices[contract.symbol] = order_result.average_price
             if not contracts:
+                # GAP 3. This logged CRITICAL and returned, registering
+                # nothing -- so the legs it had just declared unaccounted-for
+                # stayed invisible to management, which is the state the log
+                # was warning about.
+                #
+                # Fall back to EVERY leg of the proposal. It is a superset:
+                # some of these may never have reached the broker, and those
+                # simply never read open. What it guarantees is that no leg
+                # that IS live is left unowned because we could not match a
+                # client order id.
                 self._logger.critical(
-                    "ORPHAN REGISTRATION FAILED -- reason named %s but no matching "
-                    "order results were found. The broker book must be inspected "
-                    "manually NOW.", sorted(orphan_coids))
+                    "ORPHAN REGISTRATION -- reason named %s but no matching order "
+                    "results were found. Falling back to registering ALL %d "
+                    "proposal leg(s); broker truth filters the ones that do not "
+                    "exist. Inspect the broker book.",
+                    sorted(orphan_coids), len(cycle_result.proposal.legs))
+                for leg in cycle_result.proposal.legs:
+                    contract = _leg_to_core_contract(leg, self._root.underlying,
+                                                     self._root.exchange_lot_size)
+                    contracts[contract.symbol] = contract
+                    entry_prices.setdefault(contract.symbol, None)
+            if not contracts:
+                self._logger.critical(
+                    "ORPHAN REGISTRATION IMPOSSIBLE -- the proposal carries no legs. "
+                    "The broker book must be inspected manually NOW.")
                 return
-            pg_id = f"{cycle_result.proposal.assessment_id}-ORPHAN"
+            # Label-qualified: BROKER_TRUTH_UNKNOWN and PARTIAL_ORPHANED can
+            # both fire for one assessment, and register_entry refuses a
+            # duplicate group id (registration is one-time by design).
+            pg_id = f"{cycle_result.proposal.assessment_id}-{label}"
             self._registry.register_entry(
                 pg_id, cycle_result.proposal.strategy_family, list(contracts.keys()),
                 0.0, self._clock, contracts=contracts)
@@ -2036,10 +2088,27 @@ class OptionsOSRunner:
                 "this session as an incident regardless.",
                 sorted(orphan_coids), pg_id, list(contracts.keys()))
         except Exception as exc:  # noqa: BLE001
+            # GAP 4: this handler logged and returned, so a leg that may be a
+            # live position was lost entirely -- no registration, and the
+            # management loop never started because _orphan_position_live was
+            # never set. A log alone does not stop a naked short.
+            #
+            # Whatever failed above, force the two things that keep the
+            # position VISIBLE: management runs, and reconciliation therefore
+            # performs its unfiltered broker read every pass. Both cost
+            # nothing if the position turns out not to exist, and are the
+            # difference between a contained problem and an invisible one if
+            # it does.
+            self._orphan_position_live = True
+            self._governor_result_summary["orphan_registration_failed"] = {
+                "reason": reason, "label": label,
+                "error": f"{type(exc).__name__}: {exc}",
+            }
             self._logger.critical(
-                "ORPHAN REGISTRATION RAISED %s: %s -- the broker book holds live "
-                "legs this runner is NOT managing. Manual intervention required NOW.",
-                type(exc).__name__, exc)
+                "ORPHAN REGISTRATION RAISED %s: %s -- the broker book may hold live "
+                "legs this runner is NOT managing. Management is forced ON so "
+                "reconciliation still reads the broker every pass, but inspect the "
+                "broker book NOW.", type(exc).__name__, exc)
 
     def _record_iv_divergence(self, chain, spot) -> None:
         """Measure the two IV derivations against each other, at the exact
