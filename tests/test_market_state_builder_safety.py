@@ -235,6 +235,65 @@ _phase17e_layer0_exception = ("bujji/market_observation/taxonomy.py",)
 # partly invented evidence. Coverage: tests/test_scalar_field_fabrication.py.
 _scalar_fabrication_fix_exception = ("bujji/live_market_events/engine.py",)
 
+# OPERATOR AUTHORIZATION 2026-08-21 -- option symbol PROVENANCE.
+#
+# WHY THE OPTIONS DOMAIN HAD TO CHANGE AT ALL. `instrument_symbol` is typed
+# `str`, validated non-empty, and hashed into `observation_id` through MOC's
+# ObservationIdentity.instrument. A provider holding no real symbol could not
+# SAY so -- the contract forced it to supply something -- so StoreChainProvider
+# built `f"{underlying}{expiry}{strike}{type}"`. That string is shaped exactly
+# like a real one, and nothing downstream could tell it from the broker's own.
+# On 2026-08-20 a live session handed FYERS "NIFTY2026-08-2524500CE", FYERS
+# could not resolve it, and Gate B vetoed every entry with
+# MARGIN_NOT_CERTIFIED. Nothing was broken except that a symbol's ORIGIN was
+# unknowable.
+#
+# Shape cannot distinguish a good fake from the real thing, so the fix is not
+# a validator -- it is recording what the builder actually knew, at the moment
+# it knew it. Four values, no default: BROKER_AUTHORITATIVE (the venue
+# returned this exact string), SOURCE_AUTHORITATIVE (real at its source, e.g.
+# NSE FinInstrmNm, unproven at the venue), SYNTHETIC, ABSENT.
+#
+# WHY THIS DOES NOT DISTURB THE OBSERVATION LINEAGE, which is the whole point
+# of this guard. `symbol_provenance` lives on the OptionObservation WRAPPER
+# and is attached only AFTER moc_engine.build_observation() has already
+# returned -- so it cannot reach `observation_id` even in principle, not
+# merely by convention. That matters concretely: every historical option row
+# in the observation store is addressed by that hash, and a field that
+# touched it would silently orphan all of them. A test asserts the exclusion
+# over the AST of build_option_observation itself, so an edit that moved the
+# field inside would fail rather than quietly re-key the store.
+#
+#   taxonomy.py       the four-value closed vocabulary + the non-tradable
+#                     UNRESOLVED| sentinel builder
+#   models.py         the wrapper field (identity-free, by construction)
+#   engine.py         keyword-only, REQUIRED, no default -- a defaulted
+#                     provenance is how SYNTHETIC becomes BROKER_AUTHORITATIVE
+#                     six months later; also refuses to mix origins in a series
+#   query.py          the four re-wrap sites carry it through
+#   serialization.py  round-trips it and REFUSES an artifact that lacks it
+#                     rather than defaulting -- any of the four values would
+#                     be a fabricated fact about a real recording
+#   runner.py         the bhavcopy path declares SOURCE_AUTHORITATIVE: NSE's
+#                     FinInstrmNm is real, but nothing has shown FYERS accepts
+#                     it, so it is never claimed as broker-authoritative
+#
+# No observation VALUE changes. No identity changes. The only producer whose
+# output differs is StoreChainProvider, authorized separately as part of
+# _SYMBOL_VOCABULARY_AUTHORIZED, and it changes by refusing to invent.
+# Coverage: tests/test_symbol_provenance.py (36 tests) including a test that
+# two observations differing ONLY in provenance share one observation_id, a
+# negative control proving the id is not simply insensitive to everything,
+# and a repo-wide sweep with its own positive control.
+_OPTION_PROVENANCE_AUTHORIZED = (
+    "bujji/options_observation/taxonomy.py",
+    "bujji/options_observation/models.py",
+    "bujji/options_observation/engine.py",
+    "bujji/options_observation/query.py",
+    "bujji/options_observation/serialization.py",
+    "bujji/options_observation/runner.py",
+)
+
 
 def test_market_observation_live_market_events_market_episode_unmodified():
     result = subprocess.run(
@@ -246,7 +305,8 @@ def test_market_observation_live_market_events_market_episode_unmodified():
     )
     changed = [l for l in result.stdout.strip().splitlines() if l]
     changed = [l for l in changed if l not in _PAPERBROKER_V2_AUTHORIZED]
-    _authorised = _phase17e_layer0_exception + _scalar_fabrication_fix_exception
+    _authorised = (_phase17e_layer0_exception + _scalar_fabrication_fix_exception
+                   + _OPTION_PROVENANCE_AUTHORIZED)
     violations = [l for l in changed if l not in _authorised]
     assert violations == [], f"a reused engine package was modified: {violations}"
 
