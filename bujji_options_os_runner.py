@@ -532,10 +532,65 @@ class OptionsOSRunner:
                 self._entry_window()
                 self._position_management()
             self._eod_close()
+            # Only after it RETURNED. If _eod_close raises partway, the abort
+            # path below re-runs it deliberately: run_eod_closure discovers
+            # broker positions before it submits anything, so a retry exits
+            # only what is STILL open. Re-entering is therefore safe, and
+            # skipping the retry would strand exactly the position this whole
+            # path exists to catch.
+            self._eod_close_completed = True
             self._session_archive()
+        except BaseException:
+            # _eod_close() IS THE ONLY BROKER-TRUTH FLATTEN, and it sat in
+            # this try body. Any exception raised by the session -- from the
+            # entry window, either management loop, the continuous loop, or
+            # _eod_close itself -- jumped straight past it to `finally`, and
+            # `_shutdown()` deliberately does not flatten ("this method only
+            # logs and releases whatever was constructed in _startup()").
+            #
+            # So an unhandled exception at 11:00 with a naked short open left
+            # the position at the broker with NO flatten ever attempted. The
+            # unit did fail and the operator was alerted -- but an autonomous
+            # system's answer to "I crashed while short" cannot be to leave it
+            # and send a message.
+            #
+            # Attempting is strictly better than not attempting, and this
+            # cannot make anything worse: it is idempotent (guarded on
+            # _eod_close_completed), it never runs when no position was
+            # opened, and it never masks the original exception.
+            self._flatten_on_abort()
+            raise
         finally:
             self._shutdown()
         return self._governor_result_summary
+
+    def _flatten_on_abort(self) -> None:
+        """Last-resort broker-truth flatten when the session is dying.
+
+        Never raises: it is called from an except block that is about to
+        re-raise the real failure, and a secondary exception here would
+        replace the diagnosis with its own.
+        """
+        if getattr(self, "_eod_close_completed", False):
+            return  # the ordinary close already ran; nothing to redo
+        opened = bool(getattr(self, "_entry_prices", None)) or bool(
+            getattr(self, "_canonical_position_id", None))
+        if not opened:
+            return  # nothing was ever opened, so nothing can be left open
+
+        self._governor_result_summary["aborted_before_eod_close"] = True
+        self._logger.critical(
+            "SESSION ABORTED WITH A POSITION OPEN -- attempting the broker-truth "
+            "flatten that the normal EOD path never reached.")
+        try:
+            self._eod_close()
+        except BaseException as exc:  # noqa: BLE001 -- must not replace the real failure
+            self._governor_result_summary["abort_flatten_error"] = (
+                f"{type(exc).__name__}: {exc}")
+            self._logger.critical(
+                "ABORT FLATTEN FAILED (%s: %s). THE POSITION MAY STILL BE OPEN "
+                "AT THE BROKER. Operator intervention required.",
+                type(exc).__name__, exc)
 
     def _startup(self) -> None:
         self._stage = RunnerStage.STARTUP
