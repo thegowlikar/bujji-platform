@@ -383,7 +383,7 @@ def test_end_to_end_entry_to_lifecycle_evaluation(tmp_path, chain, spot):
     registry = PositionRealityRegistry(root.broker)
     # Derive symbols honestly from the proposal's own legs (same bridge F.1 uses).
     from bujji.trading_brain.risk_governor.msi_entry_bridge import _leg_to_core_contract
-    symbols = [_leg_to_core_contract(leg, "NIFTY", 75).symbol for leg in cycle_result.proposal.legs]
+    symbols = [c.symbol for _, c in cycle_result.order_contracts]
     registry.register_entry(cycle_result.proposal.assessment_id, cycle_result.proposal.strategy_family,
                              symbols, 5000.0, clock)
 

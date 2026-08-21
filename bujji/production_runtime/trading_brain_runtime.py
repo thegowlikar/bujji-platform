@@ -62,7 +62,8 @@ from typing import Any, Dict, Optional, Sequence, Tuple
 
 from bujji.core.enums import Side as CoreSide
 from bujji.core.event_bus import Event, EventType
-from bujji.core.models import OrderRequest as CoreOrderRequest, OrderResult as CoreOrderResult
+from bujji.core.models import (OptionContract as CoreOptionContract,
+                               OrderRequest as CoreOrderRequest, OrderResult as CoreOrderResult)
 
 from bujji.msi_trade_construction.engine import construct_trade
 from bujji.msi_trade_construction.models import TradeConstructionAssessment
@@ -72,7 +73,9 @@ from bujji.trading_brain.risk_governor.risk_governor_pipeline import (
     GovernorPipelineResult, PIPELINE_APPROVED, run_risk_governor_pipeline,
 )
 from bujji.trading_brain.risk_governor.live_risk_context_provider import ContextUnavailable
-from bujji.trading_brain.risk_governor.msi_entry_bridge import _leg_to_core_contract, _to_core_side
+from bujji.production_runtime.option_symbol_resolver import (
+    OptionSymbolUnresolvable, SymbolIndex, build_symbol_index)
+from bujji.trading_brain.risk_governor.msi_entry_bridge import _to_core_side
 from bujji.trading_brain.risk_governor.capital_check import assess_capital
 from bujji.trading_brain.risk_governor.whole_book_margin_provider import (
     MarginLegRequest,
@@ -305,24 +308,34 @@ class TradingBrainRuntime:
         # The chain row that produced each leg carries the real symbol, so it
         # is looked up rather than rebuilt: a second string-builder would be a
         # second thing to drift.
-        symbol_by_leg = {}
-        for row in chain:
-            row_strike = getattr(row, "strike", None)
-            row_type = getattr(row, "option_type", None)
-            row_symbol = getattr(row, "instrument_symbol", None)
-            if row_strike is not None and row_type and row_symbol:
-                symbol_by_leg[(float(row_strike), row_type)] = row_symbol
+        #
+        # ONE INDEX, BUILT ONCE, SHARED WITH ORDER CONSTRUCTION (2026-08-21).
+        # This block used to keep its own map, `symbol_by_leg[(strike, type)]`,
+        # and it was wrong in two ways that only a calendar would expose:
+        # it dropped EXPIRY from the key, so a CALENDAR's two legs (same
+        # strike, both CE, different expiries -- msi_trade_construction.py:
+        # 474-487) collapsed onto one entry and this gate would have priced
+        # two legs of a single contract; and it was last-wins, so duplicate
+        # rows overwrote silently. It also filtered symbol-less rows away
+        # uncounted, making an all-dropped chain indistinguishable from an
+        # empty one.
+        #
+        # `symbol_index` is handed to _build_order_requests() below, so the
+        # symbol this gate margins and the symbol the broker is sent are the
+        # same string BY CONSTRUCTION, not by two implementations agreeing.
+        symbol_index = build_symbol_index(chain)
 
         try:
             margin_legs = []
             unresolved = []
             for leg in proposal.legs:
-                broker_symbol = symbol_by_leg.get((float(leg.strike), leg.option_type))
-                if not broker_symbol:
+                try:
+                    broker_symbol = symbol_index.resolve_leg(leg)
+                except OptionSymbolUnresolvable as exc:
                     # FAIL CLOSED AND LOUDLY. Falling back to the internal
                     # symbol is exactly the defect above, and it would be
                     # invisible: the call simply returns nothing usable.
-                    unresolved.append(f"{leg.option_type}{int(leg.strike)}")
+                    unresolved.append(f"{leg.option_type}{int(leg.strike)} [{exc.reason}: {exc}]")
                     continue
                 margin_legs.append(MarginLegRequest(
                     symbol=broker_symbol,
@@ -417,7 +430,9 @@ class TradingBrainRuntime:
             )
 
         # -- Execution Layer bridge (owns CoreOptionContract/CoreOrderRequest) --
-        order_requests = self._build_order_requests(proposal, governor_result.final_quantity)
+        # Same index Gate B just margined against -- see _build_order_requests.
+        order_requests = self._build_order_requests(
+            proposal, governor_result.final_quantity, symbol_index)
         root.event_bus.publish_nowait(Event(
             type=EventType.DECISION_MADE,
             payload={"stage": STAGE_ORDER_SUBMITTED, "assessment_id": proposal.assessment_id,
@@ -541,14 +556,39 @@ class TradingBrainRuntime:
 
     def _build_order_requests(
         self, proposal: TradeConstructionAssessment, approved_lots: int,
+        symbol_index: SymbolIndex,
     ) -> Tuple[CoreOrderRequest, ...]:
-        """Reuses msi_entry_bridge.py's own leg-to-contract/side
-        translation verbatim -- see module docstring for quantity
-        semantics (leg.ratio * exchange_lot_size * approved_lots)."""
+        """The ONLY place a production OrderRequest is built.
+
+        `symbol_index` is REQUIRED, not optional and with no fallback. It is
+        the same index Gate B resolved against moments earlier, over the same
+        chain object, so the margined symbol and the ordered symbol cannot
+        differ.
+
+        This used to call `_leg_to_core_contract(leg, ...)`, which BUILT
+        `f"{underlying}{leg.expiry}{int(leg.strike)}{leg.option_type}"` --
+        an internal identity FYERS cannot price. That was the last production
+        site synthesising a broker symbol.
+
+        FAIL CLOSED IS CORRECT HERE, and cheap: this runs BEFORE any order
+        exists, so refusing costs one missed trade. Constructing a symbol the
+        venue cannot resolve costs a blind position. Quantity semantics
+        (leg.ratio * exchange_lot_size * approved_lots) unchanged.
+        """
+        from bujji.core.enums import OptionType
+
         root = self._root
         requests = []
         for index, leg in enumerate(proposal.legs):
-            contract = _leg_to_core_contract(leg, root.underlying, root.exchange_lot_size)
+            # Raises OptionSymbolUnresolvable -- deliberately NOT caught. A
+            # proposal whose legs cannot be named is not an order to place
+            # partially; it is not an order at all.
+            symbol = symbol_index.resolve_leg(leg)
+            contract = CoreOptionContract(
+                symbol=symbol, underlying=root.underlying, strike=int(leg.strike),
+                option_type=OptionType.CE if leg.option_type == "CE" else OptionType.PE,
+                expiry=leg.expiry, lot_size=root.exchange_lot_size,
+            )
             quantity = leg.ratio * root.exchange_lot_size * approved_lots
             client_order_id = f"{proposal.assessment_id}-LEG-{index}"
             requests.append(CoreOrderRequest(

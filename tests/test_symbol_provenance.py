@@ -260,16 +260,50 @@ class TestProductionProvidersDeclareHonestly:
 
 
 class TestNothingTreatsTheSentinelAsTradable:
+    @staticmethod
+    def _sentinel_code_references(source: str):
+        """Sentinel references in EXECUTABLE code, ignoring docstrings.
+
+        The first version of this matched raw text and fired on
+        option_symbol_resolver's docstring, which merely EXPLAINS the
+        sentinel. A module is allowed to describe it; what it must not do is
+        test for it, strip it, or rebuild it -- so this looks at what the
+        code does, not at what the prose says.
+        """
+        tree = ast.parse(source)
+        docstrings = set()
+        for node in ast.walk(tree):
+            if isinstance(node, (ast.Module, ast.ClassDef, ast.FunctionDef, ast.AsyncFunctionDef)):
+                body = getattr(node, "body", None) or []
+                if body and isinstance(body[0], ast.Expr) and isinstance(body[0].value, ast.Constant) \
+                        and isinstance(body[0].value.value, str):
+                    docstrings.add(id(body[0].value))
+        hits = []
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Constant) and isinstance(node.value, str) \
+                    and id(node) not in docstrings and "UNRESOLVED|" in node.value:
+                hits.append(f"literal {node.value!r}")
+            if isinstance(node, ast.Attribute) and node.attr == "UNRESOLVED_SYMBOL_PREFIX":
+                hits.append("UNRESOLVED_SYMBOL_PREFIX reference")
+            if isinstance(node, ast.Name) and node.id == "UNRESOLVED_SYMBOL_PREFIX":
+                hits.append("UNRESOLVED_SYMBOL_PREFIX reference")
+        return hits
+
     def test_no_production_module_special_cases_the_prefix_into_a_symbol(self):
-        offenders = []
+        offenders = {}
         for path in sorted(REPO_ROOT.joinpath("bujji").rglob("*.py")):
             if path.name == "taxonomy.py":
-                continue
-            text = path.read_text()
-            if "UNRESOLVED_SYMBOL_PREFIX" in text or "UNRESOLVED|" in text:
-                if "unresolved_symbol(" not in text:
-                    offenders.append(str(path.relative_to(REPO_ROOT)))
-        assert not offenders, f"modules touching the sentinel outside its own builder: {offenders}"
+                continue  # the sentinel's own definition and builder live here
+            hits = self._sentinel_code_references(path.read_text())
+            if hits:
+                offenders[str(path.relative_to(REPO_ROOT))] = hits
+        assert not offenders, f"modules acting on the sentinel: {offenders}"
+
+    def test_that_check_can_actually_fail(self):
+        """Positive control -- and it must not fire on prose."""
+        assert self._sentinel_code_references(
+            'if symbol.startswith("UNRESOLVED|"): symbol = symbol.split("|")[1]')
+        assert self._sentinel_code_references('"""A row carries UNRESOLVED|x."""') == []
 
     def test_the_sentinel_never_claims_broker_authority(self):
         rows = TestStoreChainProviderNoLongerFabricates()._chain()

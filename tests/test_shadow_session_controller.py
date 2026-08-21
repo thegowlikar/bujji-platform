@@ -228,8 +228,9 @@ def test_full_simulated_day(tmp_path, chain, spot):
     assert root.runtime_state_machine.state == RuntimeState.POSITION_ACTIVE
 
     contracts = {
-        _leg_to_core_contract(leg, "NIFTY", 75).symbol: _leg_to_core_contract(leg, "NIFTY", 75)
-        for leg in cycle_result.proposal.legs
+        # Keyed by the symbol the ORDER actually carries -- the chain row's
+        # own string -- not by a second builder that has to be kept in step.
+        c.symbol: c for _, c in cycle_result.order_contracts
     }
     symbols = list(contracts.keys())
     controller.register_filled_entry(

@@ -309,8 +309,9 @@ def test_full_simulated_session_captures_every_major_event(tmp_path, chain, spot
     assert cycle_result.filled is True
 
     contracts = {
-        _leg_to_core_contract(leg, "NIFTY", 75).symbol: _leg_to_core_contract(leg, "NIFTY", 75)
-        for leg in cycle_result.proposal.legs
+        # Keyed by the symbol the ORDER actually carries -- the chain row's
+        # own string -- not by a second builder that has to be kept in step.
+        c.symbol: c for _, c in cycle_result.order_contracts
     }
     symbols = list(contracts.keys())
     controller.register_filled_entry(

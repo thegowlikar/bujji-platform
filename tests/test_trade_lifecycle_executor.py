@@ -465,8 +465,9 @@ def test_end_to_end_entry_through_lifecycle_execution(tmp_path, chain, spot):
     # 3. Position reality created (with contracts, needed by F.4).
     registry = PositionRealityRegistry(root.broker)
     contracts = {
-        _leg_to_core_contract(leg, "NIFTY", 75).symbol: _leg_to_core_contract(leg, "NIFTY", 75)
-        for leg in cycle_result.proposal.legs
+        # Keyed by the symbol the ORDER actually carries -- the chain row's
+        # own string -- not by a second builder that has to be kept in step.
+        c.symbol: c for _, c in cycle_result.order_contracts
     }
     symbols = list(contracts.keys())
     registry.register_entry(cycle_result.proposal.assessment_id, cycle_result.proposal.strategy_family,

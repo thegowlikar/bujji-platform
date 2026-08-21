@@ -11,14 +11,33 @@ and a simulation of a frictionless market.
 
 THREE DELIBERATE LIMITS, stated rather than papered over:
 
-1. SYMBOL KEYING. The chain's own `instrument_symbol` is FYERS-encoded
-   ("NSE:NIFTY2681824100CE") while PaperBroker keys on the contract symbol
-   built by `msi_entry_bridge._leg_to_core_contract`
-   ("NIFTY26818241 00CE" form). Keying by the chain's symbol would set
-   quotes under names no order ever looks up -- a silent no-op that still
-   logs "quotes applied". This module rebuilds the key with the SAME
-   formula the bridge uses, and a test pins the two together so a change to
-   either fails loudly instead of quietly restoring frictionless fills.
+1. SYMBOL KEYING -- SOLVED AT THE SOURCE (2026-08-21). This module used to
+   REBUILD the quote key with the same formula `_leg_to_core_contract` used,
+   because orders carried that internal vocabulary while the chain spoke the
+   broker's. Two builders, one contract, and a test pinning them together --
+   which is a drift alarm, not an absence of drift.
+
+   Orders now carry `chain_row.instrument_symbol` verbatim
+   (option_symbol_resolver), so this module writes that same field, also
+   verbatim. ONE ORIGIN, reached two ways: the resolver looks it up per
+   selected leg, this sweeps the whole chain. Neither constructs, so they
+   cannot disagree.
+
+   ELIGIBILITY IS WIDER HERE THAN AT THE RESOLVER, deliberately (operator
+   decision (a)). A quote key never leaves the simulation -- it only has to
+   match what an order carries against the same PaperBroker -- so
+   SOURCE_AUTHORITATIVE rows (NSE bhavcopy `FinInstrmNm`) DO key quotes, and
+   a replay keeps paying a real spread. The resolver still refuses that same
+   symbol for a real margin call, because nothing has shown FYERS accepts
+   it. ABSENT and SYNTHETIC rows are skipped on both sides: keying a quote
+   under a sentinel is a silent no-op that still reports coverage.
+
+   COVERAGE IS NOT A SUPERSET, and is not claimed to be. A row needs BOTH a
+   bid and an ask to be applied here, while `msi_trade_construction._premium_
+   for` will price a leg off settlement or close alone. So a legitimately
+   selected leg can be absent from the book. That gap is real, measured
+   (`quotes_applied`/`rows_seen`), and surfaced by PaperBroker's
+   `quote_lookup_misses` -- never papered over by relaxing this filter.
 
 2. DEPTH IS CONSUMED ONLY WHERE IT IS REAL. `set_depth` wants the real
    top-of-book QUANTITY. The observation schema HAS `bid_quantity`/
@@ -49,14 +68,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any, Dict, Optional, Sequence, Tuple
 
-
-def contract_symbol_for(underlying: str, expiry: Any, strike: Any, option_type: str) -> str:
-    """The key PaperBroker will actually look up at fill time.
-
-    MUST stay identical to msi_entry_bridge._leg_to_core_contract's own
-    construction -- tests/test_paper_market_sync.py pins them together.
-    """
-    return f"{underlying}{expiry}{int(float(strike))}{option_type}"
+from bujji.production_runtime.option_symbol_resolver import quote_sync_eligible
 
 
 @dataclass(frozen=True)
@@ -69,6 +81,7 @@ class QuoteSyncReport:
     skipped_no_bid: int = 0
     skipped_no_ask: int = 0
     skipped_unusable_key: int = 0
+    skipped_not_authoritative: int = 0
     depth_applied: int = 0
     depth_source: str = "observation.bid_quantity/ask_quantity (min); absent when the source omits them"
     capital_applied: bool = False
@@ -79,6 +92,7 @@ class QuoteSyncReport:
             "quotes_applied": self.quotes_applied, "rows_seen": self.rows_seen,
             "skipped_no_bid": self.skipped_no_bid, "skipped_no_ask": self.skipped_no_ask,
             "skipped_unusable_key": self.skipped_unusable_key,
+            "skipped_not_authoritative": self.skipped_not_authoritative,
             "depth_applied": self.depth_applied, "depth_source": self.depth_source,
             "capital_applied": self.capital_applied,
         }
@@ -92,7 +106,7 @@ def _positive(value: Any) -> Optional[float]:
     return number if number > 0 else None
 
 
-def sync_quotes_from_chain(broker: Any, chain: Sequence[Any], underlying: str) -> QuoteSyncReport:
+def sync_quotes_from_chain(broker: Any, chain: Sequence[Any]) -> QuoteSyncReport:
     """Push every REAL observed bid/ask in `chain` into `broker`.
 
     A row missing either side is skipped and counted, never half-applied:
@@ -104,9 +118,15 @@ def sync_quotes_from_chain(broker: Any, chain: Sequence[Any], underlying: str) -
         return QuoteSyncReport(rows_seen=len(chain))
 
     applied = depth = 0
-    no_bid = no_ask = bad_key = 0
+    no_bid = no_ask = bad_key = not_authoritative = 0
     symbols = []
     for row in chain:
+        if not quote_sync_eligible(row):
+            # ABSENT/SYNTHETIC/undeclared. Its symbol is not a name any
+            # order will ever look up, so a quote under it is coverage that
+            # does not exist. Counted, never silently dropped.
+            not_authoritative += 1
+            continue
         bid = _positive(getattr(row, "bid", None))
         ask = _positive(getattr(row, "ask", None))
         if bid is None and ask is None:
@@ -119,15 +139,10 @@ def sync_quotes_from_chain(broker: Any, chain: Sequence[Any], underlying: str) -
         if ask is None:
             no_ask += 1
             continue
-        strike = getattr(row, "strike", None)
-        option_type = getattr(row, "option_type", None)
-        expiry = getattr(row, "expiry", None)
-        if strike is None or option_type not in ("CE", "PE") or expiry is None:
-            bad_key += 1
-            continue
-        try:
-            symbol = contract_symbol_for(underlying, expiry, strike, option_type)
-        except (TypeError, ValueError):
+        # The row's OWN symbol, verbatim -- the exact string the resolver
+        # will hand the order for this same contract. Nothing is built here.
+        symbol = getattr(row, "instrument_symbol", None)
+        if not symbol or not str(symbol).strip():
             bad_key += 1
             continue
         broker.set_quote(symbol, bid, ask)
@@ -145,7 +160,8 @@ def sync_quotes_from_chain(broker: Any, chain: Sequence[Any], underlying: str) -
 
     return QuoteSyncReport(
         quotes_applied=applied, rows_seen=len(chain), skipped_no_bid=no_bid,
-        skipped_no_ask=no_ask, skipped_unusable_key=bad_key, depth_applied=depth,
+        skipped_no_ask=no_ask, skipped_unusable_key=bad_key,
+        skipped_not_authoritative=not_authoritative, depth_applied=depth,
         symbols=tuple(symbols),
     )
 

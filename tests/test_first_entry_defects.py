@@ -76,14 +76,16 @@ class TestTheSymbolTrap:
         assert "symbol=contract.symbol" not in GATE_B_SRC
 
     def test_gate_b_looks_the_symbol_up_from_the_chain(self):
-        assert "instrument_symbol" in GATE_B_SRC
-        assert "symbol_by_leg" in GATE_B_SRC
+        """The lookup moved into option_symbol_resolver (2026-08-21) and is
+        now SHARED with order construction, so this asserts the delegation
+        rather than the old inline map -- the invariant is unchanged."""
+        assert "symbol_index.resolve_leg(leg)" in GATE_B_SRC
         assert "symbol=broker_symbol" in GATE_B_SRC
 
     def test_gate_b_fails_closed_when_a_leg_cannot_be_resolved(self):
         """Falling back to the internal symbol is exactly the defect, and it
         would be invisible: the call simply returns nothing usable."""
-        assert "no broker symbol in the chain for leg(s)" in GATE_B_SRC
+        assert "OptionSymbolUnresolvable" in GATE_B_SRC
         assert "unresolved" in GATE_B_SRC
 
 

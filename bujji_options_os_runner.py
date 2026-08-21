@@ -240,6 +240,56 @@ def _make_capital_snapshot_provider(capital_cfg: dict, clock, log=None):
         f"capital_snapshot.source={source!r} is not one of: static, fyers_funds")
 
 
+_REAL_BROKER_MARGIN_MODES = ("fyers_uncertified", "fyers_certified")
+
+# market_data types whose chain rows are NOT the execution venue's own
+# symbols. Keyed on the config value, not on a provenance read at runtime:
+# this must fail at STARTUP, before a chain is ever fetched.
+_NON_BROKER_VOCABULARY_MARKET_DATA = {
+    "replay_chain": "NSE bhavcopy FinInstrmNm (SOURCE_AUTHORITATIVE) -- real at NSE, "
+                    "never shown valid at the FYERS execution venue",
+    "observation_store": "no captured broker symbol at all (ABSENT) -- the store keys "
+                         "options as 'NIFTY|<expiry>|<strike>|<type>'",
+}
+
+
+def _guard_provider_vocabulary(providers_cfg: dict, log=None) -> None:
+    """Refuse a session that would send a non-broker symbol to a real FYERS
+    endpoint.
+
+    FOUND 2026-08-21, read-only audit. `providers.market_data` and
+    `providers.margin` are selected INDEPENDENTLY -- nothing coupled them --
+    and `config/options_os_shadow.yaml` ships `market_data: replay_chain`
+    together with `margin: fyers_certified`. Gate B is provider-agnostic: it
+    takes whatever chain it is handed and sends those symbols to the live
+    SPAN endpoint. So a shadow session was one `--bhavcopy-path` away from
+    quoting NSE-form symbols at FYERS.
+
+    It has not caused a visible incident, and that is the uncomfortable part:
+    FYERS almost certainly rejects the un-prefixed form, so the path fails
+    closed BY ACCIDENT (verified=False -> MARGIN_NOT_CERTIFIED -> VETO)
+    rather than by design. That is precisely how the original vocabulary
+    split survived for months.
+
+    The resolver already refuses the symbol (operator decision (a)). This
+    refuses the SESSION, at startup, with the pairing named -- because an
+    entry blocked leg-by-leg deep inside Gate B reads like a market
+    condition, while a config that cannot start reads like what it is.
+    """
+    market_data = str((providers_cfg.get("market_data") or {}).get("type") or "replay_chain").strip().lower()
+    margin_block = providers_cfg.get("margin", {"type": "simulated"})
+    margin = str((margin_block or {}).get("type", "simulated")).strip().lower() \
+        if isinstance(margin_block, dict) else ""
+    if margin in _REAL_BROKER_MARGIN_MODES and market_data in _NON_BROKER_VOCABULARY_MARKET_DATA:
+        raise ConfigurationError(
+            f"providers.market_data.type={market_data!r} with providers.margin.type={margin!r} "
+            f"would send non-broker symbols to the live FYERS SPAN endpoint: "
+            f"{_NON_BROKER_VOCABULARY_MARKET_DATA[market_data]}. "
+            f"Use providers.margin: simulated for this market_data type, or "
+            f"providers.market_data: fyers_live for real margin. Refusing to start."
+        )
+
+
 def _make_margin_provider(providers_cfg: dict, log=None):
     """The margin provider the session's risk context will consult.
 
@@ -504,6 +554,8 @@ class OptionsOSRunner:
 
         session_cfg = self._config.get("session", {})
         providers_cfg = self._config.get("providers", {})
+        # Before ANY provider is constructed -- see _guard_provider_vocabulary.
+        _guard_provider_vocabulary(providers_cfg, self._logger)
         capital_cfg = self._config.get("capital_snapshot", {})
         exit_cfg = self._config.get("exit_policy", {})
         artifacts_cfg = self._config.get("artifacts", {})
@@ -2290,7 +2342,7 @@ class OptionsOSRunner:
         from bujji.production_runtime.paper_market_sync import sync_capital, sync_quotes_from_chain
 
         try:
-            report = sync_quotes_from_chain(self._broker, chain, self._root.underlying)
+            report = sync_quotes_from_chain(self._broker, chain)
             capital_applied = False
             snapshot = None
             provider = getattr(self._root, "capital_snapshot_provider", None)
