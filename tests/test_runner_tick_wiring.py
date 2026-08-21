@@ -208,3 +208,60 @@ class TestManagementLoopIsBounded:
         r._run_one_management_pass = close_after_two
         r._position_management()
         assert len(calls) == 2
+
+
+class TestTickProviderDiagnosticsReachTheJournal:
+    """A component that cannot explain itself fails silently.
+
+    2026-08-21: the feed priced 0 of 2 legs for three consecutive cycles,
+    producing blind cycles where the stop-loss cannot fire, and then the
+    emergency brake. The provider's OWN explanation of why -- "websocket
+    subscribe failed (...); REST fallback covers ..." at
+    intraday_price_provider.py:230, and "websocket priced 0/2 legs; falling
+    back to REST for ..." -- never reached the journal.
+
+    Cause: WebsocketTickProvider defaults to
+    logging.getLogger("bujji.websocket_tick_provider"), which the session
+    never configures. The TickSilenceWatchdog constructed one line above was
+    already given the session logger; the provider was not.
+    """
+
+    @staticmethod
+    def _call_kwargs(callee: str):
+        import ast
+        import pathlib as _pathlib
+
+        src = (_pathlib.Path(__file__).resolve().parent.parent
+               / "bujji_options_os_runner.py").read_text()
+        for n in ast.walk(ast.parse(src)):
+            if (isinstance(n, ast.Call) and isinstance(n.func, ast.Name)
+                    and n.func.id == callee):
+                return {k.arg for k in n.keywords}
+        raise AssertionError(f"{callee}(...) not constructed in the runner")
+
+    def test_the_provider_is_given_the_session_logger(self):
+        assert "logger" in self._call_kwargs("WebsocketTickProvider")
+
+    def test_the_watchdog_still_is_too(self):
+        """It always was -- the inconsistency between the two is what made
+        the gap invisible."""
+        assert "logger" in self._call_kwargs("TickSilenceWatchdog")
+
+    def test_the_provider_would_otherwise_use_an_unconfigured_logger(self):
+        """Pins WHY this matters. If the provider ever gains a sensible
+        default this test should be re-read, not deleted."""
+        import inspect
+
+        from bujji.production_runtime.intraday_price_provider import WebsocketTickProvider
+        src = inspect.getsource(WebsocketTickProvider.__init__)
+        assert 'getLogger("bujji.websocket_tick_provider")' in src
+
+    def test_the_provider_actually_logs_its_fallback(self):
+        """The message that was swallowed. If it stops existing, this test
+        is protecting nothing."""
+        import inspect
+
+        from bujji.production_runtime.intraday_price_provider import WebsocketTickProvider
+        src = inspect.getsource(WebsocketTickProvider)
+        assert "falling back to REST" in src
+        assert "websocket subscribe failed" in src

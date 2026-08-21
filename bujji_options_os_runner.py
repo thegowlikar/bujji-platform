@@ -939,6 +939,24 @@ class OptionsOSRunner:
                 self._tick_feed, watchdog,
                 LiveTickProvider(data_broker, _asyncio.run),
                 max_tick_age_seconds=float(tick_cfg.get("max_tick_age_seconds", 90.0)),
+                # THE SESSION LOGGER, not the provider's private default.
+                #
+                # WebsocketTickProvider falls back to
+                # logging.getLogger("bujji.websocket_tick_provider"), which
+                # this session never configures -- so everything it says goes
+                # nowhere. The watchdog on the line above was already given
+                # the session logger; the provider was not, and that
+                # inconsistency was invisible until it mattered.
+                #
+                # It mattered on 2026-08-21. The feed priced 0 of 2 legs for
+                # three consecutive cycles and the provider's own explanation
+                # -- "websocket subscribe failed (...); REST fallback covers
+                # ..." (intraday_price_provider.py:230) and "websocket priced
+                # 0/2 legs; falling back to REST for ..." -- never reached the
+                # journal. Three blind cycles and an emergency brake, with the
+                # diagnosis sitting in an unrouted logger. A component that
+                # cannot explain itself fails silently.
+                logger=self._logger,
             )
             self._logger.info(
                 "Tick source: FYERS WEBSOCKET (certified ~2.4 ticks/s) with "
