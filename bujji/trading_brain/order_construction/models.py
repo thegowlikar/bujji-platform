@@ -53,6 +53,12 @@ class OrderRequest:
     creation_trace: str
     timestamp: str
     version: str
+    # Live Shadow Real-Time Paper Execution sprint: the contract's own
+    # last_price, carried forward verbatim (never re-derived here) so a
+    # downstream simulated/paper fill can use the real observed market
+    # price instead of a synthetic default. None when the upstream
+    # chain/contract carried no observed price -- never defaulted here.
+    reference_price: Optional[float] = None
 
 
 @dataclass(frozen=True)

@@ -25,7 +25,11 @@ one still-unresolved limitation (ATM option contract resolution — see
 from __future__ import annotations
 
 import asyncio
+import datetime
 import logging
+import os
+import threading
+import time
 from pathlib import Path
 from typing import Any, Optional
 
@@ -87,7 +91,187 @@ def _index_symbol(underlying: str) -> str:
     return _INDEX_SYMBOL.get(underlying, f"NSE:{underlying}-INDEX")
 
 
+def _futures_symbol(underlying: str, now: Optional[datetime.datetime] = None) -> str:
+    """Best-effort near-month futures symbol construction, following
+    FYERS's documented convention NSE:{UNDERLYING}{YY}{MON}FUT (e.g.
+    NSE:NIFTY26AUGFUT). Unlike _index_symbol()/get_quote()/get_vix()/
+    get_option_chain() (each carrying a live-verified date in their own
+    docstrings), this has NOT been live-verified against a real FYERS
+    response this session -- no futures quote call has been made yet.
+    Treat as provisional until confirmed against a real response."""
+    dt = now or datetime.datetime.now(datetime.timezone.utc)
+    return f"NSE:{underlying}{dt.strftime('%y')}{dt.strftime('%b').upper()}FUT"
+
+
+# --- Transport pacing ---------------------------------------------------
+# FYERS enforces a per-account request-rate ceiling and answers a burst with
+# {"s": "error", "code": 429, ...} -- already classified by
+# _raise_if_error() below, which deliberately raises rather than letting a
+# starved caller fall through to an empty result.
+#
+# Measured live on 2026-08-17: a single MarketDataAdapter.build_snapshot()
+# issues 85 calls in 2.98s (peak 31 within a 1s window), because the option
+# chain adapter quotes each contract individually -- 82 contracts, one call
+# each. The NEXT history call was then refused with 429 and the trading
+# session died during startup, before it could form a regime.
+#
+# The ceiling is per ACCOUNT, not per object, and a session constructs more
+# than one FyersBroker against the same credentials (one for the chain, one
+# for the intelligence cycle). This state is therefore deliberately MODULE
+# level, and guarded by a threading.Lock rather than an asyncio.Lock:
+# the runner calls asyncio.run() repeatedly, and a lock bound to one
+# event loop is invalid in the next.
+_MIN_SECONDS_BETWEEN_CALLS = 0.12  # ~8.3/s, under the documented 10/s ceiling.
+from .rate_budget import DEFAULT_BUDGET_PATH
+
+_pacing_lock = threading.Lock()
+_next_call_allowed_at = 0.0
+
+
+# CP-D: the ceiling is per ACCOUNT, and Bujji now runs FOUR processes against
+# one account (spot/VIX capture, option chain, depth poller, trading session
+# -- three of them waking together at 09:14). Each pacing itself to ~8.3/s
+# presented the account with up to ~33/s. Schedule separation was standing in
+# for a resource budget, which is why the trading unit's fire time carried a
+# rate-limit offset for months. The budget below is HOST-WIDE and applied
+# FIRST; the module-level pacer stays behind it as a second layer, so a
+# budget that cannot be reached degrades to exactly the old behaviour rather
+# than to no pacing at all.
+_rate_budget = None
+_rate_budget_warned = False
+
+
+def _host_rate_budget():
+    global _rate_budget
+    if _rate_budget is None:
+        from .rate_budget import CrossProcessRateBudget
+
+        _rate_budget = CrossProcessRateBudget(
+            path=os.environ.get("BUJJI_FYERS_RATE_BUDGET_PATH", DEFAULT_BUDGET_PATH),
+            min_interval_seconds=_MIN_SECONDS_BETWEEN_CALLS,
+        )
+    return _rate_budget
+
+
+def _wait_for_slot() -> None:
+    """Block the CALLING THREAD until this ACCOUNT may issue another call.
+
+    Two layers, in order:
+      1. the host-wide budget -- every Bujji process on this box shares it;
+      2. this interpreter's own pacer -- unchanged, and the fallback when
+         the shared budget is unreachable.
+
+    In both layers the slot is reserved under a lock and the wait happens
+    OUTSIDE it, so concurrent callers queue behind one another instead of
+    all waking against the same timestamp and bursting together.
+    """
+    global _next_call_allowed_at, _rate_budget_warned
+
+    outcome = _host_rate_budget().reserve()
+    if not outcome.shared and not _rate_budget_warned:
+        # Once per process: a rate ceiling is a throughput protection, not a
+        # safety guard, so this degrades rather than refusing -- but it must
+        # not degrade silently, or the account is over-driven invisibly.
+        _rate_budget_warned = True
+        logging.getLogger(__name__).warning(
+            "FYERS host-wide rate budget unavailable (%s) -- falling back to this process's "
+            "own pacer only. Concurrent Bujji processes can now exceed the account ceiling.",
+            outcome.reason)
+
+    with _pacing_lock:
+        slot = max(time.monotonic(), _next_call_allowed_at)
+        _next_call_allowed_at = slot + _MIN_SECONDS_BETWEEN_CALLS
+    delay = slot - time.monotonic()
+    if delay > 0:
+        time.sleep(delay)
+
+
+# --- Rate-limit retry -----------------------------------------------------
+# Pacing lowers the ODDS of a refusal; it cannot remove them. The ceiling is
+# per ACCOUNT and this pacer is per interpreter, so a second Bujji process --
+# a capture session, an operator running a script by hand -- can push the
+# account over on its own. A refusal is also the one error class where
+# "wait, then ask again" is unambiguously the right answer, so it is retried
+# here rather than ending a trading session.
+#
+# ONLY READ ACTIONS ARE RETRIED, as an allowlist. A refused write must NOT be
+# repeated automatically: this codebase cannot prove from a refusal alone
+# whether the exchange rejected the instruction or accepted it and refused
+# only the acknowledgement, and repeating it under the second reading would
+# duplicate it. An action absent from this set is therefore never retried,
+# including any added later -- the safe default is the automatic one.
+_RETRYABLE_ACTIONS = frozenset({
+    "profile", "positions", "orders", "funds", "holdings",
+    "ltp", "historical", "optionchain", "depth",
+})
+
+_RATE_LIMIT_CODE = 429
+# Two ceilings exist, verified live on 2026-08-17 against the real account:
+# a per-SECOND one answering {"code": 429, "message": "Bad request"}, which a
+# short wait clears, and a per-MINUTE one answering {"code": 429, "message":
+# "request limit reached"}, which needs most of a minute. Hence one short
+# wait, then progressively longer -- at most ~40s added, against a 300s
+# management cadence.
+_RATE_LIMIT_BACKOFF_SECONDS = (2.0, 8.0, 30.0)
+
+
+def _is_rate_limited(data) -> bool:
+    """True only for a rate-limit refusal. Every other failure -- auth,
+    bad symbol, malformed request -- is left alone: retrying those just
+    repeats the same failure more slowly."""
+    if not isinstance(data, dict):
+        return False
+    try:
+        return int(data.get("code")) == _RATE_LIMIT_CODE
+    except (TypeError, ValueError):
+        return False
+
+
+def _paced(method):
+    """Wrap an SDK method so the pacing wait runs in the worker thread.
+
+    Pacing must not happen on the event loop: these calls are dispatched via
+    asyncio.to_thread, and sleeping on the loop would stall every other
+    coroutine rather than just the caller waiting for its slot.
+    """
+    def call(*args):
+        _wait_for_slot()
+        return method(*args)
+    return call
+
+
+# THE RAW POSITION SCHEMA IS NOT VERIFIED (Rule 13, 2026-08-21).
+#
+# get_open_positions() normalizes FYERS rows to {symbol, side, qty, avg_price}
+# by reading `netQty` and `netAvg` off each row of `netPositions`. The
+# top-level shape was confirmed live against an EMPTY position book; the
+# per-row field names were carried over from an earlier implementation and
+# have never been seen against a real open position, as that method's own
+# comment states.
+#
+# EVERY safety property built on top of it -- EOD flat verification, residual
+# sizing, orphan detection, emergency-close verification -- depends on those
+# two names being right. If `netQty` were actually named something else, each
+# row would read as qty 0, every position would be filtered out as flat, and
+# the account would look EMPTY. That failure is silent and points the wrong
+# way: it manufactures flatness.
+#
+# This flag exists so that fact is a gate rather than a comment. It must not
+# be flipped by reasoning; only by an operator observing a REAL open position
+# and confirming the field names against the live payload.
+FYERS_POSITION_SCHEMA_VERIFIED = False
+
+
 class FyersBroker(Broker):
+    # The EXCHANGE holds the order book, not this process. A not-found from
+    # here is real evidence about the order's fate, so startup recovery may
+    # treat it as authoritative.
+    order_book_survives_restart = True
+
+    # Mirrors the module-level gate above so callers can read it off the
+    # broker instance they already hold.
+    position_schema_verified = FYERS_POSITION_SCHEMA_VERIFIED
+
     name = "fyers"
 
     def __init__(self, config: BrokerConfig, logger: logging.Logger) -> None:
@@ -144,6 +328,7 @@ class FyersBroker(Broker):
         "place_order": "place_order",
         "cancel_order": "cancel_order",
         "optionchain": "optionchain",
+        "depth": "depth",
     }
 
     async def _call(self, action: str, **params: Any) -> dict:
@@ -153,14 +338,37 @@ class FyersBroker(Broker):
         doesn't block the event loop. Every response MUST be passed through
         :meth:`_raise_if_auth_error` before being used (every call site below
         already does this) — do not bypass it for a "quick" new call site.
+
+        Retries a rate-limit refusal on READ actions only (see
+        ``_RETRYABLE_ACTIONS``). ERROR SEMANTICS ARE UNCHANGED: once the
+        retries are spent the final response is returned exactly as received,
+        so the caller's own ``_raise_if_error`` still raises as it always
+        has. Nothing is swallowed, and no caller needs to know this happens.
         """
+        for wait_seconds in _RATE_LIMIT_BACKOFF_SECONDS:
+            data = await self._invoke_once(action, **params)
+            if action not in _RETRYABLE_ACTIONS or not _is_rate_limited(data):
+                return data
+            self._log.warning(
+                "fyers_rate_limited_retrying",
+                extra={"data": {"action": action, "wait_seconds": wait_seconds,
+                                "message": data.get("message")}},
+            )
+            # asyncio.sleep, not time.sleep: this waits on the event loop so
+            # other coroutines keep running, unlike the pacer's wait which
+            # deliberately blocks its own worker thread.
+            await asyncio.sleep(wait_seconds)
+        return await self._invoke_once(action, **params)
+
+    async def _invoke_once(self, action: str, **params: Any) -> dict:
+        """One paced SDK round-trip. No retry logic lives here."""
         client = self._get_client()
         if action in self._NO_ARG_ACTIONS:
             method = getattr(client, self._NO_ARG_ACTIONS[action])
-            return await asyncio.to_thread(method)
+            return await asyncio.to_thread(_paced(method))
         if action in self._DATA_ARG_ACTIONS:
             method = getattr(client, self._DATA_ARG_ACTIONS[action])
-            return await asyncio.to_thread(method, params)
+            return await asyncio.to_thread(_paced(method), params)
         raise ValueError(f"Unknown FYERS action: {action}")
 
     def _raise_if_auth_error(self, data: dict,
@@ -265,6 +473,27 @@ class FyersBroker(Broker):
             if row.get("n") == symbol:
                 return float(row["v"]["lp"])
         raise KeyError(f"symbol {symbol} not found in quotes response: {data}")
+
+    async def get_spot_raw(self, underlying: str) -> dict:
+        """Phase 17I.6.1 — raw pass-through of the FYERS 'ltp' action's full
+        response for the spot index, mirroring `get_option_chain_raw()`'s
+        and `get_depth()`'s own discipline: no extraction, no renaming, no
+        discarding.
+
+        DIAGNOSTIC / SOURCE DISCOVERY ONLY. Unlike `get_spot()`/`_quote()`
+        (which extract only `lp` and raise `KeyError` if the symbol isn't
+        found), this returns whatever FYERS actually sent, untouched, so a
+        human can inspect it for fields `_quote()` has never looked at --
+        this project has never verified whether the real `v` dict carries
+        any timestamp beyond `lp`. Must NOT be used to construct a
+        `RawObservation` directly -- that remains `get_spot()`'s job,
+        through the existing certified capture path.
+        """
+        symbol = _index_symbol(underlying)
+        data = await self._call("ltp", symbols=symbol)
+        self._raise_if_auth_error(data)
+        self._raise_if_error(data, "ltp")
+        return data
 
     async def get_recent_candles(
         self, underlying: str, minutes: int, count: int
@@ -427,6 +656,53 @@ class FyersBroker(Broker):
                 return result
         return None
 
+    async def get_vix_raw(self) -> dict:
+        """Phase 17I.6.1 — raw pass-through of the FYERS 'ltp' action's full
+        response for India VIX, mirroring `get_option_chain_raw()`'s and
+        `get_depth()`'s own discipline.
+
+        DIAGNOSTIC / SOURCE DISCOVERY ONLY. Unlike `get_vix()` (which
+        extracts only `lp`/`prev_close_price` and returns `None` on a
+        missing/invalid level), this returns whatever FYERS actually sent,
+        untouched -- including any field `get_vix()` has never looked at.
+        Must NOT be used to construct a `RawObservation` directly -- that
+        remains `get_vix()`'s job, through the existing certified capture
+        path.
+        """
+        data = await self._call("ltp", symbols="NSE:INDIAVIX-INDEX")
+        self._raise_if_auth_error(data)
+        self._raise_if_error(data, "ltp")
+        return data
+
+    async def get_option_chain_raw(self, underlying: str, strike_count: int = 5) -> Optional[dict]:
+        """Raw pass-through of the FYERS 'optionchain' action's full
+        response -- deliberately does NOT extract/rename/discard any
+        field, unlike get_option_chain() below (which only ever reads
+        strike_price/option_type/oi and drops the rest).
+
+        This exists for the same reason get_depth() does (Phase 17F.1.2):
+        get_option_chain()'s narrow extraction was written for one
+        purpose (OI reconciliation) and has never been proof that OTHER
+        fields (LTP, bid, ask, volume, greeks-if-any) are absent from the
+        real response -- only that this codebase has never looked. A
+        caller needing the full row shape (e.g. building a real
+        OptionObservation with a premium price, Phase 17F.7) must not
+        guess field names; this method returns the response exactly as
+        FYERS sent it so those names can be read from a real, dated
+        capture instead.
+
+        Returns None if the response carries no "data" key at all
+        (mirrors this file's other raw-passthrough methods' handling of
+        a missing/invalid result).
+        """
+        data = await self._call(
+            "optionchain", symbol=_index_symbol(underlying),
+            strikecount=strike_count, timestamp="",
+        )
+        self._raise_if_auth_error(data)
+        self._raise_if_error(data, "optionchain")
+        return data if "data" in data else None
+
     async def get_option_chain(
         self, underlying: str, spot: float, strike_count: int = 5
     ) -> Optional[list[tuple[float, float, float]]]:
@@ -461,6 +737,105 @@ class FyersBroker(Broker):
             (strike, values.get("ce_oi", 0.0), values.get("pe_oi", 0.0))
             for strike, values in sorted(by_strike.items())
         ]
+
+    async def get_futures_quote(self, underlying: str) -> Optional[dict]:
+        """Mirrors _quote()'s response-shape handling for the 'ltp' quotes
+        endpoint for ltp/volume. LIVE-VERIFIED (2026-08-12, Phase 17B
+        certification investigation): the 'ltp'/'quotes' v-dict has NO 'oi'
+        key at all for futures symbols (confirmed on real NSE:NIFTY26AUGFUT
+        data) -- volume IS present there and is used as before. OI is
+        fetched via a second call to the 'depth' action (FYERS's market-depth
+        endpoint, `client.depth()`), which DOES carry real, live OI
+        (`oi`/`pdoi`/`oipercent`) for futures on this same account --
+        confirmed live: oi=12645685 against the same symbol/session that had
+        no oi field via 'ltp'. The depth call is best-effort: if it fails or
+        returns no usable oi, "oi" is simply None (matching this method's
+        prior behavior when oi was never obtainable at all), and the ltp-derived
+        fields (symbol/ltp/volume) are still returned -- a depth-call failure
+        must never turn a valid quote into None.
+        Returns None on any missing/invalid ltp, exactly like
+        get_vix()/get_quote() do for their own required fields."""
+        symbol = _futures_symbol(underlying)
+        data = await self._call("ltp", symbols=symbol)
+        self._raise_if_auth_error(data)
+        for row in data.get("d", []):
+            if row.get("n") == symbol:
+                v = row.get("v", {})
+                lp = v.get("lp")
+                if lp is None or lp <= 0:
+                    return None
+                result = {
+                    "symbol": symbol, "ltp": float(lp),
+                    "volume": v.get("volume"), "oi": None,
+                }
+                try:
+                    depth_data = await self._call("depth", symbol=symbol, ohlcv_flag=1)
+                    self._raise_if_auth_error(depth_data)
+                    depth_row = (depth_data or {}).get("d", {}).get(symbol)
+                    if depth_row and depth_row.get("oi") is not None:
+                        result["oi"] = depth_row["oi"]
+                except AuthenticationError:
+                    raise  # A dead token is a real signal -- must not be swallowed.
+                except Exception as e:  # noqa: BLE001
+                    self._log.warning(
+                        "get_futures_quote: depth() OI cross-check failed for %s "
+                        "(quote itself is still valid, oi stays None): %s",
+                        symbol, e,
+                    )
+                return result
+        return None
+
+    async def get_futures_quote_raw(self, underlying: str) -> dict:
+        """Phase 17I.6.1 — raw pass-through of BOTH legs
+        `get_futures_quote()` internally calls (the 'ltp' quote and the
+        'depth' OI cross-check), mirroring `get_option_chain_raw()`'s and
+        `get_depth()`'s own discipline: no extraction, no renaming, no
+        discarding, and -- unlike `get_futures_quote()` -- the depth leg's
+        failure is NOT swallowed here. `get_futures_quote()` treats a
+        failed depth call as best-effort (OI is optional for a valid
+        quote); this diagnostic method exists purely to inspect what FYERS
+        actually sends, so both legs must succeed or the caller finds out.
+
+        DIAGNOSTIC / SOURCE DISCOVERY ONLY. Must NOT be used to construct a
+        `RawObservation` directly -- that remains `get_futures_quote()`'s
+        job, through the existing certified capture path.
+
+        Returns `{"symbol": ..., "ltp_response": <raw ltp dict>,
+        "depth_response": <raw depth dict>}` -- both legs preserved
+        untouched, including OI/depth-related and any unknown fields.
+        """
+        symbol = _futures_symbol(underlying)
+        ltp_data = await self._call("ltp", symbols=symbol)
+        self._raise_if_auth_error(ltp_data)
+        self._raise_if_error(ltp_data, "ltp")
+        depth_data = await self._call("depth", symbol=symbol, ohlcv_flag=1)
+        self._raise_if_auth_error(depth_data)
+        self._raise_if_error(depth_data, "depth")
+        return {"symbol": symbol, "ltp_response": ltp_data, "depth_response": depth_data}
+
+    async def get_depth(self, symbol: str) -> Optional[dict]:
+        """Raw pass-through of the FYERS 'depth' action's per-symbol row.
+
+        UNVERIFIED beyond `oi`/`pdoi`/`ltp` (see `get_futures_quote`'s
+        docstring, which cross-checks exactly those three fields live,
+        2026-08-12). This method does NOT rename, restructure, wrap, or
+        invent a "bids"/"asks" shape -- it returns the depth row exactly
+        as FYERS sent it. A caller needing Layer 0's MARKET_DEPTH payload
+        shape (`taxonomy.REQUIRED_PAYLOAD_FIELDS[KIND_MARKET_DEPTH] =
+        ("bids", "asks")`) MUST NOT assume this row already has those
+        exact keys -- confirm the real field names against a live response
+        first (see `scripts/discover_futures_depth_fields.py`) and map
+        explicitly. Fabricating that shape from an unverified guess would
+        be exactly the kind of invented field this codebase's Layer 0
+        discipline forbids.
+
+        Returns None if the symbol has no row in the response (mirrors
+        every other broker read here for a missing/invalid result).
+        """
+        data = await self._call("depth", symbol=symbol, ohlcv_flag=1)
+        self._raise_if_auth_error(data)
+        row = (data or {}).get("d", {}).get(symbol)
+        return dict(row) if row else None
 
     async def place_order(self, request: OrderRequest) -> OrderResult:
         # C3 IDEMPOTENCY REQUIREMENT: the ExecutionEngine guarantees at-most-once

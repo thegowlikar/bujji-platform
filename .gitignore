@@ -5,3 +5,15 @@ logs/
 data/
 .pytest_cache/
 .env
+.env*
+
+# Runtime outputs -- session artifacts and raw observation streams. These are
+# DATA, produced by every run, and are backed up by scripts/backup_observation_stores.py
+# (16:30 daily, /opt/bujji/backups). They are deliberately not version control:
+# a git add -A during a hotfix would otherwise sweep in a days worth of live
+# session output alongside a two-line code change.
+layer0_data/
+shadow_sessions/
+paper_intelligence_sessions/
+data/fyers_rate_budget
+data/price_levels/

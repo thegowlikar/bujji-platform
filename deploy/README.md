@@ -1,5 +1,12 @@
 # Process supervision (F2)
 
+> **[DEPRECATED / LEGACY]** This directory supervises the legacy Bujji
+> ORB-VWAP ATM Seller bot only. It is unrelated to, and not used by, Bujji
+> Options OS. See [docs/SYSTEM_OWNERSHIP.md](../docs/SYSTEM_OWNERSHIP.md)
+> for the full ownership map. The unit is intentionally **not** installed as
+> `bujji.service` — that bare name is reserved to avoid any future collision
+> with a Bujji Options OS deployment service.
+
 This directory contains the systemd unit that makes the bot auto-restart after
 a crash or VPS reboot. Without this, Tier 1's crash-recovery (C1) and
 single-instance lock (F4) guarantees only matter if the process is actually
@@ -9,19 +16,19 @@ its position exactly like the original audit finding described.
 ## Install
 
 ```bash
-sudo cp deploy/bujji.service /etc/systemd/system/bujji.service
-sudo nano /etc/systemd/system/bujji.service   # edit User/WorkingDirectory/paths
+sudo cp deploy/bujji-orb-vwap-legacy.service /etc/systemd/system/bujji-orb-vwap-legacy.service
+sudo nano /etc/systemd/system/bujji-orb-vwap-legacy.service   # edit User/WorkingDirectory/paths
 sudo systemctl daemon-reload
-sudo systemctl enable --now bujji.service
+sudo systemctl enable --now bujji-orb-vwap-legacy.service
 ```
 
 ## Operate
 
 ```bash
-systemctl status bujji          # current state
-journalctl -u bujji -f          # follow logs
-sudo systemctl restart bujji    # manual restart (e.g. after a token refresh)
-sudo systemctl stop bujji       # graceful stop (SIGTERM -> releases F4 lock)
+systemctl status bujji-orb-vwap-legacy          # current state
+journalctl -u bujji-orb-vwap-legacy -f          # follow logs
+sudo systemctl restart bujji-orb-vwap-legacy    # manual restart (e.g. after a token refresh)
+sudo systemctl stop bujji-orb-vwap-legacy       # graceful stop (SIGTERM -> releases F4 lock)
 ```
 
 ## What this does and does not guarantee
@@ -37,7 +44,7 @@ sudo systemctl stop bujji       # graceful stop (SIGTERM -> releases F4 lock)
   itself expires (~15 days), token expiry is still detection + fail-fast
   alerting only (E1/E2): the process restarts, fails auth again at startup,
   and keeps restarting on `RestartSec=5` until a human completes the
-  interactive login again. Watch `journalctl -u bujji` for
+  interactive login again. Watch `journalctl -u bujji-orb-vwap-legacy` for
   `startup_blocked_auth_failure` (not configured / refresh_token expired) vs.
   `fyers_token_refreshed_automatically` (working as intended).
 - **Does not:** fix the underlying cause of a crash, or bootstrap the
@@ -57,6 +64,6 @@ verify it operationally once, in paper-trading mode, before relying on it:
 1. Start the service with a paper-trading config, let it open a position.
 2. `sudo reboot` the VPS.
 3. After it comes back, confirm `systemctl status bujji` shows it running and
-   `journalctl -u bujji` shows a `recovery_resumed` (or `recovery_orphan_position` /
+   `journalctl -u bujji-orb-vwap-legacy` shows a `recovery_resumed` (or `recovery_orphan_position` /
    `position_already_closed`) log line — i.e., C1 fired and the position was
    not abandoned.

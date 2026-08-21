@@ -7,9 +7,12 @@ import pytest
 
 from bujji.core.clock import IST
 from bujji.core.enums import OptionType
+from bujji.intelligence.context import IntelligenceContext
 from bujji.intelligence.greeks_brain import GreeksBrain, _bs_delta, _bs_gamma, _bs_theta
 from bujji.intelligence.models import DataQuality, GreeksExposure
 from bujji.intelligence.volatility_brain import _bs_price, _bs_vega
+
+TEST_CONTEXT = IntelligenceContext(as_of_time=datetime(2026, 7, 20, 9, 20, tzinfo=IST))
 
 SPOT, STRIKE, T_YEARS, R, SIGMA = 24000.0, 24000.0, 5 / 365, 0.065, 0.15
 EXPOSURE_THRESHOLD_SANITY = 0.15
@@ -75,19 +78,19 @@ def test_vega_matches_finite_difference():
 # Known ATM sanity: call delta ~ +0.5, put delta ~ -0.5, gamma positive.
 # ---------------------------------------------------------------------- #
 def test_atm_deltas_are_near_half(brain):
-    reading = brain.analyze(spot=SPOT, strike=STRIKE, t_years=T_YEARS, iv_ce=SIGMA, iv_pe=SIGMA)
+    reading = brain.analyze(spot=SPOT, strike=STRIKE, t_years=T_YEARS, iv_ce=SIGMA, iv_pe=SIGMA, context=TEST_CONTEXT)
     assert 0.45 < reading.delta_ce < 0.55
     assert -0.55 < reading.delta_pe < -0.45
 
 
 def test_gammas_are_positive_and_equal_for_same_iv(brain):
-    reading = brain.analyze(spot=SPOT, strike=STRIKE, t_years=T_YEARS, iv_ce=SIGMA, iv_pe=SIGMA)
+    reading = brain.analyze(spot=SPOT, strike=STRIKE, t_years=T_YEARS, iv_ce=SIGMA, iv_pe=SIGMA, context=TEST_CONTEXT)
     assert reading.gamma_ce > 0
     assert reading.gamma_pe == pytest.approx(reading.gamma_ce, abs=1e-9)
 
 
 def test_per_leg_theta_is_negative_long_position_decays(brain):
-    reading = brain.analyze(spot=SPOT, strike=STRIKE, t_years=T_YEARS, iv_ce=SIGMA, iv_pe=SIGMA)
+    reading = brain.analyze(spot=SPOT, strike=STRIKE, t_years=T_YEARS, iv_ce=SIGMA, iv_pe=SIGMA, context=TEST_CONTEXT)
     assert reading.theta_ce_per_day < 0
     assert reading.theta_pe_per_day < 0
 
@@ -96,25 +99,25 @@ def test_position_theta_is_positive_seller_collects_decay(brain):
     """The SHORT straddle is the mirror image of the per-leg long
     Greeks -- position theta must be positive (seller earns from time
     passing), matching the entire premise of this strategy."""
-    reading = brain.analyze(spot=SPOT, strike=STRIKE, t_years=T_YEARS, iv_ce=SIGMA, iv_pe=SIGMA)
+    reading = brain.analyze(spot=SPOT, strike=STRIKE, t_years=T_YEARS, iv_ce=SIGMA, iv_pe=SIGMA, context=TEST_CONTEXT)
     assert reading.position_theta_per_day > 0
 
 
 def test_atm_straddle_is_near_delta_neutral(brain):
-    reading = brain.analyze(spot=SPOT, strike=STRIKE, t_years=T_YEARS, iv_ce=SIGMA, iv_pe=SIGMA)
+    reading = brain.analyze(spot=SPOT, strike=STRIKE, t_years=T_YEARS, iv_ce=SIGMA, iv_pe=SIGMA, context=TEST_CONTEXT)
     assert reading.exposure is GreeksExposure.DELTA_NEUTRAL
 
 
 def test_spot_well_above_strike_gives_net_short_exposure(brain):
     """Spot has run well above the strike -- the short straddle now
     behaves like a net short call, i.e. hurt further by more upside."""
-    reading = brain.analyze(spot=24500, strike=24000, t_years=T_YEARS, iv_ce=SIGMA, iv_pe=SIGMA)
+    reading = brain.analyze(spot=24500, strike=24000, t_years=T_YEARS, iv_ce=SIGMA, iv_pe=SIGMA, context=TEST_CONTEXT)
     assert reading.position_delta < -EXPOSURE_THRESHOLD_SANITY
     assert reading.exposure is GreeksExposure.NET_SHORT_EXPOSURE
 
 
 def test_spot_well_below_strike_gives_net_long_exposure(brain):
-    reading = brain.analyze(spot=23500, strike=24000, t_years=T_YEARS, iv_ce=SIGMA, iv_pe=SIGMA)
+    reading = brain.analyze(spot=23500, strike=24000, t_years=T_YEARS, iv_ce=SIGMA, iv_pe=SIGMA, context=TEST_CONTEXT)
     assert reading.position_delta > EXPOSURE_THRESHOLD_SANITY
     assert reading.exposure is GreeksExposure.NET_LONG_EXPOSURE
 
@@ -123,33 +126,33 @@ def test_spot_well_below_strike_gives_net_long_exposure(brain):
 # Data-quality gates -- never guess
 # ---------------------------------------------------------------------- #
 def test_missing_iv_returns_unknown(brain):
-    reading = brain.analyze(spot=SPOT, strike=STRIKE, t_years=T_YEARS, iv_ce=None, iv_pe=SIGMA)
+    reading = brain.analyze(spot=SPOT, strike=STRIKE, t_years=T_YEARS, iv_ce=None, iv_pe=SIGMA, context=TEST_CONTEXT)
     assert reading.exposure is GreeksExposure.UNKNOWN
     assert reading.data_quality is DataQuality.INSUFFICIENT
     assert "missing_iv" in reading.reason
 
 
 def test_nonpositive_time_returns_unknown(brain):
-    reading = brain.analyze(spot=SPOT, strike=STRIKE, t_years=0.0, iv_ce=SIGMA, iv_pe=SIGMA)
+    reading = brain.analyze(spot=SPOT, strike=STRIKE, t_years=0.0, iv_ce=SIGMA, iv_pe=SIGMA, context=TEST_CONTEXT)
     assert reading.exposure is GreeksExposure.UNKNOWN
     assert "invalid_time" in reading.reason
 
 
 def test_nonpositive_iv_returns_unknown(brain):
-    reading = brain.analyze(spot=SPOT, strike=STRIKE, t_years=T_YEARS, iv_ce=0.0, iv_pe=SIGMA)
+    reading = brain.analyze(spot=SPOT, strike=STRIKE, t_years=T_YEARS, iv_ce=0.0, iv_pe=SIGMA, context=TEST_CONTEXT)
     assert reading.exposure is GreeksExposure.UNKNOWN
     assert "invalid_iv" in reading.reason
 
 
 def test_render_and_to_log_do_not_raise(brain):
-    reading = brain.analyze(spot=SPOT, strike=STRIKE, t_years=T_YEARS, iv_ce=SIGMA, iv_pe=SIGMA)
+    reading = brain.analyze(spot=SPOT, strike=STRIKE, t_years=T_YEARS, iv_ce=SIGMA, iv_pe=SIGMA, context=TEST_CONTEXT)
     assert "GREEKS BRAIN" in reading.render()
     log = reading.to_log()
     assert log["brain"] == "greeks"
 
 
 def test_render_handles_unknown_reading_without_raising(brain):
-    reading = brain.analyze(spot=SPOT, strike=STRIKE, t_years=T_YEARS, iv_ce=None, iv_pe=SIGMA)
+    reading = brain.analyze(spot=SPOT, strike=STRIKE, t_years=T_YEARS, iv_ce=None, iv_pe=SIGMA, context=TEST_CONTEXT)
     assert "NOT AVAILABLE" in reading.render()
 
 
@@ -170,7 +173,7 @@ def test_real_day_2026_07_13_09_20_entry_greeks():
     reading = brain.analyze(
         spot=24027.45, strike=24000, t_years=t_years_entry,
         iv_ce=0.11675046927166245, iv_pe=0.14388979761542006,
-    )
+     context=TEST_CONTEXT)
     assert reading.data_quality is DataQuality.SUFFICIENT
     assert reading.exposure is GreeksExposure.DELTA_NEUTRAL
     assert reading.position_theta_per_day > 0

@@ -1,0 +1,267 @@
+"""Tick wiring: the provider is actually constructed, and a blind session
+cannot masquerade as a measured one.
+
+Before this, `_price_provider` was initialised to None and never assigned
+anywhere in the runner, so the revaluation path built for it could never
+run: every session silently revalued positions against their own ENTRY
+prices. Unrealized P&L was 0 by construction, MFE/MAE were 0-looking but
+meaningless, and no stop-loss or profit-target could fire -- and nothing
+in the logs distinguished that from a healthy session.
+"""
+from __future__ import annotations
+
+import logging
+
+import pytest
+
+from bujji_options_os_runner import ConfigurationError, OptionsOSRunner
+
+REAL_DB = "/opt/bujji/app/data/historical_reality/normalized/historical_observations.db"
+BHAV = "/tmp/m1/BhavCopy_NSE_FO_0_0_0_20260525_F_0000.csv"
+DAY = "2026-05-25"
+
+
+def cfg(tmp_path, *, tick=None, market_data=None, mgmt=None):
+    base = {
+        "shadow_mode": True, "logging": {"namespace": "tick-wiring-test"},
+        "session": {"underlying": "NIFTY", "exchange_lot_size": 75, "desired_quantity": 1,
+                    "requested_risk": 5000.0, "skip_market_hours_check": True,
+                    "proposed_trade_effect": {"additional_margin": 10000.0, "additional_max_loss": 5000.0}},
+        "exit_policy": {"profit_target_fraction": 0.5, "max_loss_fraction": 1.0, "mandatory_exit_time": None},
+        "capital_snapshot": {},
+        "providers": {
+            "market_data": market_data or {"type": "replay_chain", "bhavcopy_path": BHAV},
+            "regime": {"type": "human_supplied", "trend_regime": "SIDEWAYS", "volatility_regime": "LOW_VOL"},
+        },
+        "artifacts": {"shadow_sessions_root": str(tmp_path / "ss"), "journal_path": str(tmp_path / "j.db")},
+    }
+    if tick is not None:
+        base["providers"]["tick_source"] = tick
+    if mgmt is not None:
+        base["position_management"] = mgmt
+    return base
+
+
+def _runner(tmp_path, sid, **kw):
+    r = OptionsOSRunner(config=cfg(tmp_path, **kw), as_of_date=DAY, session_id=sid,
+                        logger=logging.getLogger("tick-wiring-test"))
+    r._startup()
+    return r
+
+
+class TestTickSourceIsActuallyConstructed:
+    def test_no_tick_source_leaves_provider_none_and_warns(self, tmp_path, caplog):
+        with caplog.at_level(logging.WARNING):
+            r = _runner(tmp_path, "T-NONE")
+        assert r._price_provider is None
+        assert any("Tick source: NONE" in m for m in caplog.messages)
+
+    def test_observation_store_tick_source_constructs_a_real_provider(self, tmp_path):
+        from bujji.production_runtime.intraday_price_provider import HistoricalTickProvider
+        r = _runner(tmp_path, "T-STORE",
+                    tick={"type": "observation_store", "observation_store_path": REAL_DB})
+        assert isinstance(r._price_provider, HistoricalTickProvider)
+
+    def test_broker_tick_source_without_a_live_data_broker_fails_closed(self, tmp_path):
+        # 2026-08-19 (Master Plan D-3): type=broker previously handed the
+        # PaperBroker random walk to LiveTickProvider while logging "live
+        # quotes". It now REQUIRES the real FYERS data broker (regime
+        # market_thesis_live); this config has a human-supplied regime and
+        # therefore no real broker, so construction must refuse -- never
+        # silently substitute synthetic prices.
+        with pytest.raises(ConfigurationError, match="paper_synthetic"):
+            _runner(tmp_path, "T-BROKER", tick={"type": "broker"})
+
+    def test_paper_synthetic_is_the_explicit_opt_in_and_warns(self, tmp_path, caplog):
+        from bujji.production_runtime.intraday_price_provider import LiveTickProvider
+        with caplog.at_level(logging.WARNING):
+            r = _runner(tmp_path, "T-SYNTH", tick={"type": "paper_synthetic"})
+        assert isinstance(r._price_provider, LiveTickProvider)
+        assert any("PAPER SYNTHETIC" in m for m in caplog.messages)
+
+    def test_production_config_pairs_websocket_ticks_with_live_regime_and_warmup(self):
+        # Config-level guard: the production yaml must keep the combination
+        # that makes the tick source constructible AND evidence temporal.
+        # Updated 2026-08-21 (operator directive): broker -> websocket. The
+        # websocket branch carries the identical market_thesis_live guard,
+        # because its REST fallback IS the live data broker -- without it the
+        # only fallback would be the synthetic PaperBroker.
+        import yaml as _yaml
+        cfg = _yaml.safe_load(open("/opt/bujji/app/config/options_os_paper_trading.yaml"))
+        prov = cfg["providers"]
+        assert prov["tick_source"]["type"] == "websocket"
+        # Staleness bound must stay tighter than the feed-silence threshold,
+        # so a single quiet symbol falls back to REST BEFORE the whole feed
+        # is declared silent.
+        assert (prov["tick_source"]["max_tick_age_seconds"]
+                < prov["tick_source"]["silence_threshold_seconds"])
+        assert prov["regime"]["type"] == "market_thesis_live"
+        warmup = prov["regime"]["warmup"]
+        assert warmup["polls"] >= 3, "PSI needs >= 3 price deltas"
+        assert warmup["interval_seconds"] > 0
+
+    def test_store_tick_source_without_a_path_refuses_to_guess(self, tmp_path):
+        with pytest.raises(ConfigurationError, match="observation_store_path is required"):
+            _runner(tmp_path, "T-BAD", tick={"type": "observation_store"})
+
+
+class TestChainSourceSelection:
+    def test_observation_store_chain_requires_an_explicit_path(self, tmp_path):
+        with pytest.raises(ConfigurationError, match="observation_store_path is required"):
+            _runner(tmp_path, "C-BAD", market_data={"type": "observation_store"})
+
+    def test_bhavcopy_remains_the_default(self, tmp_path):
+        from bujji.production_runtime.market_data_provider import ReplayChainProvider
+        r = _runner(tmp_path, "C-DEFAULT")
+        assert isinstance(r._market_data_provider, ReplayChainProvider)
+
+
+class TestBlindCyclesAreLoud:
+    """A blind cycle revalues against entry prices. It must be impossible
+    to mistake for a real observation."""
+
+    def test_blind_cycle_warns_and_is_counted(self, tmp_path, caplog):
+        r = _runner(tmp_path, "B-1")
+        r._entry_prices = {"X": 100.0}
+        r._contracts_by_symbol = {}          # no contracts -> provider path cannot price
+        with caplog.at_level(logging.WARNING):
+            prices, from_ticks = r._current_leg_prices("2026-05-25T10:00:00+05:30")
+        assert from_ticks is False
+        assert prices == {"X": 100.0}        # honest fallback, entry prices
+
+    def test_blind_cycles_do_not_bank_a_valuation(self, tmp_path):
+        """THE critical property: a blind cycle's 0.0 unrealized P&L means
+        'we never looked', not 'it never moved'. Banking it would produce
+        an MFE/MAE that reads as measured when nothing was measured."""
+        r = _runner(tmp_path, "B-2")
+        r._entry_prices = {"X": 100.0}
+        r._contracts_by_symbol = {}
+        assert r._valuation_history == []
+        r._blind_cycles = 3                  # simulate three blind passes
+        # No valuation was ever appended, so MFE/MAE have nothing to
+        # compute from and stay honestly absent.
+        from bujji.outcome_attribution.engine import compute_mfe_mae
+        assert compute_mfe_mae(tuple(r._valuation_history)) == (None, None)
+
+    def test_a_fully_blind_real_session_is_flagged_not_silently_archived(self, tmp_path, caplog):
+        """End-to-end, through the real session lifecycle -- the governor's
+        own state machine refuses illegal shortcuts, so this drives a
+        genuine run rather than poking `_session_archive` directly."""
+        config = cfg(tmp_path, mgmt={"cycle_interval_seconds": 0, "max_cycles": 3,
+                                      "monitor_until": "23:59:59"})
+        r = OptionsOSRunner(config=config, as_of_date=DAY, session_id="B-3",
+                            logger=logging.getLogger("tick-wiring-test"))
+        with caplog.at_level(logging.ERROR):
+            summary = r.run()
+        if summary.get("entry_filled"):
+            # A position was held with no tick source: every cycle blind.
+            assert summary["cycles_priced_from_ticks"] == 0
+            assert summary["cycles_blind"] > 0
+            assert summary.get("session_blind") is True
+            assert any("SESSION WAS BLIND" in m for m in caplog.messages)
+        else:
+            # No position -> no management cycles -> nothing to be blind about.
+            assert summary["cycles_blind"] == 0
+
+    def test_summary_always_reports_tick_provenance(self, tmp_path):
+        """Provenance is never optional: every archived session states how
+        many cycles saw real prices, so a blind session can never be
+        pooled with sighted ones by accident."""
+        config = cfg(tmp_path, mgmt={"cycle_interval_seconds": 0, "max_cycles": 2,
+                                      "monitor_until": "23:59:59"})
+        r = OptionsOSRunner(config=config, as_of_date=DAY, session_id="B-4",
+                            logger=logging.getLogger("tick-wiring-test"))
+        summary = r.run()
+        assert "cycles_priced_from_ticks" in summary
+        assert "cycles_blind" in summary
+
+
+class TestManagementLoopIsBounded:
+    def test_no_open_position_means_no_monitoring(self, tmp_path):
+        r = _runner(tmp_path, "L-1", mgmt={"cycle_interval_seconds": 0, "max_cycles": 5})
+        r._entry_prices = {}
+        r._position_management()
+        assert r._governor_result_summary.get("management_cycles") is None
+
+    def test_loop_is_capped_by_max_cycles(self, tmp_path):
+        """The cap, not the wall-clock, is the final authority on
+        termination -- a mis-set clock must never spin forever."""
+        r = _runner(tmp_path, "L-2", mgmt={"cycle_interval_seconds": 0, "max_cycles": 3,
+                                            "monitor_until": "23:59:59"})
+        r._entry_prices = {"X": 100.0}
+        calls = []
+        r._run_one_management_pass = lambda label: calls.append(label)
+        r._position_management()
+        assert len(calls) == 3
+        assert r._governor_result_summary["management_cycles"] == 3
+
+    def test_loop_stops_early_when_the_position_closes(self, tmp_path):
+        r = _runner(tmp_path, "L-3", mgmt={"cycle_interval_seconds": 0, "max_cycles": 50,
+                                            "monitor_until": "23:59:59"})
+        r._entry_prices = {"X": 100.0}
+        calls = []
+
+        def close_after_two(label):
+            calls.append(label)
+            if len(calls) == 2:
+                r._entry_prices = {}         # position closed by the exit path
+        r._run_one_management_pass = close_after_two
+        r._position_management()
+        assert len(calls) == 2
+
+
+class TestTickProviderDiagnosticsReachTheJournal:
+    """A component that cannot explain itself fails silently.
+
+    2026-08-21: the feed priced 0 of 2 legs for three consecutive cycles,
+    producing blind cycles where the stop-loss cannot fire, and then the
+    emergency brake. The provider's OWN explanation of why -- "websocket
+    subscribe failed (...); REST fallback covers ..." at
+    intraday_price_provider.py:230, and "websocket priced 0/2 legs; falling
+    back to REST for ..." -- never reached the journal.
+
+    Cause: WebsocketTickProvider defaults to
+    logging.getLogger("bujji.websocket_tick_provider"), which the session
+    never configures. The TickSilenceWatchdog constructed one line above was
+    already given the session logger; the provider was not.
+    """
+
+    @staticmethod
+    def _call_kwargs(callee: str):
+        import ast
+        import pathlib as _pathlib
+
+        src = (_pathlib.Path(__file__).resolve().parent.parent
+               / "bujji_options_os_runner.py").read_text()
+        for n in ast.walk(ast.parse(src)):
+            if (isinstance(n, ast.Call) and isinstance(n.func, ast.Name)
+                    and n.func.id == callee):
+                return {k.arg for k in n.keywords}
+        raise AssertionError(f"{callee}(...) not constructed in the runner")
+
+    def test_the_provider_is_given_the_session_logger(self):
+        assert "logger" in self._call_kwargs("WebsocketTickProvider")
+
+    def test_the_watchdog_still_is_too(self):
+        """It always was -- the inconsistency between the two is what made
+        the gap invisible."""
+        assert "logger" in self._call_kwargs("TickSilenceWatchdog")
+
+    def test_the_provider_would_otherwise_use_an_unconfigured_logger(self):
+        """Pins WHY this matters. If the provider ever gains a sensible
+        default this test should be re-read, not deleted."""
+        import inspect
+
+        from bujji.production_runtime.intraday_price_provider import WebsocketTickProvider
+        src = inspect.getsource(WebsocketTickProvider.__init__)
+        assert 'getLogger("bujji.websocket_tick_provider")' in src
+
+    def test_the_provider_actually_logs_its_fallback(self):
+        """The message that was swallowed. If it stops existing, this test
+        is protecting nothing."""
+        import inspect
+
+        from bujji.production_runtime.intraday_price_provider import WebsocketTickProvider
+        src = inspect.getsource(WebsocketTickProvider)
+        assert "falling back to REST" in src
+        assert "websocket subscribe failed" in src

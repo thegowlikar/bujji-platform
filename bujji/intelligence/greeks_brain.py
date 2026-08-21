@@ -33,8 +33,9 @@ from __future__ import annotations
 import math
 from typing import Optional
 
-from ..core.clock import now_ist
 from ..core.enums import OptionType
+from .context import IntelligenceContext
+from .evidence import wrap_evidence
 from .models import DataQuality, GreeksExposure, GreeksReading
 from .volatility_brain import _bs_vega, _norm_cdf, _norm_pdf
 
@@ -77,8 +78,10 @@ class GreeksBrain:
         iv_ce: Optional[float],
         iv_pe: Optional[float],
         risk_free_rate: float = 0.065,
+        *,
+        context: IntelligenceContext,
     ) -> GreeksReading:
-        as_of = now_ist()
+        as_of = context.as_of_time
 
         if t_years <= 0:
             return self._unknown(as_of, "invalid_time: t_years must be positive")
@@ -119,7 +122,7 @@ class GreeksBrain:
             position_theta_per_day=round(position_theta, 3),
             position_vega_per_pct=round(position_vega, 3),
             exposure=exposure, confidence=1.0, data_quality=DataQuality.SUFFICIENT,
-            evidence=evidence,
+            evidence=evidence, evidence_lineage=wrap_evidence(evidence, context=context),
             reason=f"position_delta {position_delta:.4f} -> {exposure.value}",
             as_of=as_of,
         )

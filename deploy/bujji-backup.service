@@ -1,0 +1,8 @@
+[Unit]
+Description=Bujji nightly backup of unrecreatable observation stores
+[Service]
+Type=oneshot
+User=bujji
+Group=bujji
+WorkingDirectory=/opt/bujji/app
+ExecStart=/opt/bujji/.venv/bin/python scripts/backup_observation_stores.py

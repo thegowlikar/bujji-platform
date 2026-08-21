@@ -59,6 +59,7 @@ def at_or_before(os_: OptionObservationSeries, timestamp: str) -> Optional[Optio
         expiry=os_.expiry,
         option_type=os_.option_type,
         underlying=os_.underlying,
+        symbol_provenance=os_.symbol_provenance,
     )
 
 
@@ -71,6 +72,7 @@ def in_window(os_: OptionObservationSeries, start: str, end: str) -> Tuple[Optio
             expiry=os_.expiry,
             option_type=os_.option_type,
             underlying=os_.underlying,
+            symbol_provenance=os_.symbol_provenance,
         )
         for o in matched
     )
@@ -86,6 +88,7 @@ def latest(os_: OptionObservationSeries) -> Optional[OptionObservation]:
         expiry=os_.expiry,
         option_type=os_.option_type,
         underlying=os_.underlying,
+        symbol_provenance=os_.symbol_provenance,
     )
 
 
@@ -99,6 +102,7 @@ def earliest(os_: OptionObservationSeries) -> Optional[OptionObservation]:
         expiry=os_.expiry,
         option_type=os_.option_type,
         underlying=os_.underlying,
+        symbol_provenance=os_.symbol_provenance,
     )
 
 

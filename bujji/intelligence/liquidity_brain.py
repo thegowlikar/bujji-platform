@@ -51,7 +51,8 @@ from __future__ import annotations
 
 from typing import Optional
 
-from ..core.clock import now_ist
+from .context import IntelligenceContext
+from .evidence import wrap_evidence
 from .models import DataQuality, LiquidityReading, SpreadTightness
 
 SPREAD_TIGHT_THRESHOLD_PCT = 0.50   # Combined spread <= this % of mid -> TIGHT.
@@ -69,8 +70,9 @@ class LiquidityBrain:
         ce_ask: float,
         pe_bid: float,
         pe_ask: float,
+        context: IntelligenceContext,
     ) -> LiquidityReading:
-        as_of = now_ist()
+        as_of = context.as_of_time
 
         for label, value in (("ce_bid", ce_bid), ("ce_ask", ce_ask),
                               ("pe_bid", pe_bid), ("pe_ask", pe_ask)):
@@ -106,7 +108,8 @@ class LiquidityBrain:
             ce_spread_pct=round(ce_spread_pct, 4), pe_spread_pct=round(pe_spread_pct, 4),
             combined_spread=round(combined_spread, 2), combined_spread_pct=round(combined_spread_pct, 4),
             tightness=tightness, confidence=confidence, data_quality=DataQuality.SUFFICIENT,
-            evidence=evidence, reason=reason, as_of=as_of,
+            evidence=evidence, evidence_lineage=wrap_evidence(evidence, context=context),
+            reason=reason, as_of=as_of,
         )
 
     @staticmethod

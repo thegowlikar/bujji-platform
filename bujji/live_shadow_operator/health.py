@@ -60,6 +60,13 @@ class HealthSnapshot:
     disk_free_pct: Optional[float] = None
     overall_status: str = STATUS_GREEN
     status_reasons: Tuple[str, ...] = field(default_factory=tuple)
+    # --- Sprint P1 additions (all defaulted -- backward compatible):
+    # real, disclosed TickSilenceWatchdog metrics. Purely observational --
+    # never consumed by any decision function. ---------------------------
+    watchdog_state: Optional[str] = None
+    watchdog_reconnect_attempt: int = 0
+    watchdog_reconnect_reason: Optional[str] = None
+    subscription_state: Optional[str] = None
 
 
 def build_health_snapshot(
@@ -68,6 +75,9 @@ def build_health_snapshot(
     freshness: Optional[FreshnessReport] = None,
     api_retry_count: int = 0, api_dropped_requests: int = 0,
     journal_path: Optional[str] = None, disk_check_path: str = ".",
+    journal_failed_writes: int = 0,
+    watchdog_state: Optional[str] = None, watchdog_reconnect_attempt: int = 0,
+    watchdog_reconnect_reason: Optional[str] = None, subscription_state: Optional[str] = None,
 ) -> HealthSnapshot:
     usage = resource.getrusage(resource.RUSAGE_SELF)
     websocket_status = "CONNECTED" if result.observations else "IDLE"
@@ -78,10 +88,19 @@ def build_health_snapshot(
             f"{r.source}={r.state}: {r.reason}" for r in freshness.readings.values() if r.state in (WARNING, STALE)
         )
 
+    # Deep audit finding (2026-07-28): file EXISTENCE alone never proves
+    # writes are actually succeeding -- a disk-full/permissions failure
+    # mid-session would keep this HEALTHY forever. `journal_failed_writes`
+    # is the real signal, sourced from `OperatorJournal.failed_writes`.
     journal_health = "UNKNOWN"
     if journal_path is not None:
         import os
-        journal_health = "HEALTHY" if os.path.exists(journal_path) else "MISSING"
+        if not os.path.exists(journal_path):
+            journal_health = "MISSING"
+        elif journal_failed_writes > 0:
+            journal_health = "DEGRADED"
+        else:
+            journal_health = "HEALTHY"
 
     disk_free_pct = None
     try:
@@ -112,6 +131,18 @@ def build_health_snapshot(
         reasons.append(f"disk_free_pct={disk_free_pct:.1f} <= DISK_WARNING_FREE_PCT={DISK_WARNING_FREE_PCT}")
     if journal_health == "MISSING":
         status, reasons = STATUS_RED, reasons + ["journal file is missing"]
+    elif journal_health == "DEGRADED":
+        status, reasons = STATUS_RED, reasons + [f"journal has {journal_failed_writes} failed write(s) -- real data may be lost"]
+    # Sprint P1: a watchdog that has given up (CRITICAL_FAILURE) means the
+    # real tick feed is silently dead and no further automatic recovery
+    # will be attempted -- escalate exactly like journal_health's own
+    # DEGRADED/MISSING escalation, same fail-closed-and-disclose
+    # convention already used throughout this project.
+    if watchdog_state == "CRITICAL_FAILURE":
+        status, reasons = STATUS_RED, reasons + [
+            f"tick-silence watchdog reached CRITICAL_FAILURE after {watchdog_reconnect_attempt} "
+            f"failed reconnect attempt(s) -- real market data is silently dead, no further automatic recovery"
+        ]
     if not reasons:
         reasons = ["all monitored inputs within tolerance"]
 
@@ -134,6 +165,8 @@ def build_health_snapshot(
         api_retry_count=api_retry_count, api_dropped_requests=api_dropped_requests,
         stale_warnings=stale_warnings, journal_health=journal_health, disk_free_pct=disk_free_pct,
         overall_status=status, status_reasons=tuple(reasons),
+        watchdog_state=watchdog_state, watchdog_reconnect_attempt=watchdog_reconnect_attempt,
+        watchdog_reconnect_reason=watchdog_reconnect_reason, subscription_state=subscription_state,
     )
 
 
@@ -152,6 +185,13 @@ def render_health_dashboard(snapshot: HealthSnapshot) -> str:
         f"  api_dropped_requests:      {snapshot.api_dropped_requests}",
         f"  journal_health:            {snapshot.journal_health}",
     ]
+    if snapshot.watchdog_state is not None:
+        lines.append(f"  watchdog_state:            {snapshot.watchdog_state}")
+        lines.append(f"  watchdog_reconnect_attempt: {snapshot.watchdog_reconnect_attempt}")
+        if snapshot.watchdog_reconnect_reason:
+            lines.append(f"  watchdog_reconnect_reason: {snapshot.watchdog_reconnect_reason}")
+    if snapshot.subscription_state is not None:
+        lines.append(f"  subscription_state:        {snapshot.subscription_state}")
     if snapshot.quote_latency_seconds is not None:
         lines.append(f"  quote_latency_seconds:     {snapshot.quote_latency_seconds:.6f}")
     if snapshot.token_expires_in_seconds is not None:

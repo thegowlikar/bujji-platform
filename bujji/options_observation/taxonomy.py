@@ -35,6 +35,82 @@ ALL_OPTION_TYPES = (
 )
 
 # ---------------------------------------------------------------------------
+# SymbolProvenance -- WHERE `instrument_symbol` CAME FROM. Closed set.
+#
+# WHY THIS EXISTS. `instrument_symbol` is typed `str`, is validated
+# non-empty, and is hashed into `observation_id` via MOC's
+# ObservationIdentity.instrument. A provider that has no real symbol
+# therefore CANNOT express that fact -- the type contract forces it to
+# supply something. StoreChainProvider did exactly what the contract
+# forced it to do: it built `f"{underlying}{expiry}{strike}{type}"`, a
+# string indistinguishable, by shape alone, from a real one. Downstream
+# code could not tell a broker's own symbol from a manufactured one,
+# and on 2026-08-20 that cost a live session every entry: FYERS was
+# handed "NIFTY2026-08-2524500CE", could not resolve it, and Gate B
+# vetoed with MARGIN_NOT_CERTIFIED. The API was never broken.
+#
+# The fix is NOT to guess from string shape -- a well-formed fake is
+# still a fake. It is to record, at construction time, what the builder
+# actually knew. This is quality/provenance metadata in exactly MOC's
+# own sense: it describes the recording, never the fact recorded, so it
+# does NOT participate in identity (see models.py -- it lives on the
+# OptionObservation WRAPPER, structurally outside anything
+# build_observation() hashes).
+#
+# There is deliberately NO default. A defaulted provenance is how
+# SYNTHETIC silently becomes BROKER_AUTHORITATIVE six months later:
+# every construction path must say what it knows, out loud.
+# ---------------------------------------------------------------------------
+
+# The execution venue itself returned this exact string (FYERS
+# optionchain `symbol`, FYERS instrument master). This is the ONLY
+# provenance a real-broker order path may ever accept.
+SYMBOL_PROVENANCE_BROKER_AUTHORITATIVE = "BROKER_AUTHORITATIVE"
+
+# A real, source-native instrument identity (e.g. NSE Bhavcopy
+# `FinInstrmNm`) -- genuinely observed, not manufactured. But Bujji has
+# NOT established that this string is valid at the broker execution
+# venue, and it is not assumed to be. Usable for replay, research and
+# PaperBroker; never sufficient on its own for a real-broker order.
+SYMBOL_PROVENANCE_SOURCE_AUTHORITATIVE = "SOURCE_AUTHORITATIVE"
+
+# The builder manufactured the string from expiry/strike/type. Recorded
+# so it can be refused; never produced by any path in this codebase.
+SYMBOL_PROVENANCE_SYNTHETIC = "SYNTHETIC"
+
+# No symbol was available. The identity field still carries the
+# UNRESOLVED_SYMBOL_PREFIX sentinel below, because the model cannot
+# represent an empty instrument -- the sentinel exists ONLY to satisfy
+# that constraint and is never a broker symbol.
+SYMBOL_PROVENANCE_ABSENT = "ABSENT"
+
+ALL_SYMBOL_PROVENANCES = (
+    SYMBOL_PROVENANCE_BROKER_AUTHORITATIVE,
+    SYMBOL_PROVENANCE_SOURCE_AUTHORITATIVE,
+    SYMBOL_PROVENANCE_SYNTHETIC,
+    SYMBOL_PROVENANCE_ABSENT,
+)
+
+# The sentinel a provenance=ABSENT row carries in `instrument_symbol`.
+# Pipe-delimited on purpose: no exchange symbol vocabulary in use here
+# (FYERS "NSE:NIFTY2681824100CE", NSE "NIFTY26AUG24000CE") contains a
+# "|", so a sentinel can never be confused with, or accidentally
+# matched against, a tradable identity -- by any reader, including one
+# written after this comment.
+UNRESOLVED_SYMBOL_PREFIX = "UNRESOLVED|"
+
+
+def unresolved_symbol(underlying: str, expiry: str, strike, option_type: str) -> str:
+    """The deterministic non-tradable identity for a row whose source
+    supplied no broker symbol.
+
+    Deterministic for a given contract so the observation keeps a
+    STABLE `observation_id` across rebuilds -- content-addressing must
+    keep working for rows that simply have no symbol.
+    """
+    return f"{UNRESOLVED_SYMBOL_PREFIX}{underlying}|{expiry}|{strike}|{option_type}"
+
+# ---------------------------------------------------------------------------
 # OptionsObservationField -- the closed set of raw option fields this
 # domain records. Reuses bujji.market_observation.taxonomy's existing
 # TYPE_OPTION_CHAIN / TYPE_OPTION_OPEN_INTEREST / TYPE_OPTION_VOLUME /

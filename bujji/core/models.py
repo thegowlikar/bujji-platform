@@ -110,13 +110,28 @@ class OrderRequest:
     """Instruction handed to the Execution Engine.
 
     Trade logic lives entirely outside this object; it is a pure directive.
+
+    `limit_price` and `reference_price` are DELIBERATELY separate fields
+    with distinct, non-overlapping meanings (Semantic Cleanup Sprint):
+
+    `limit_price`: a real execution instruction -- "the trader explicitly
+    wants a LIMIT order." Read by FyersBroker.place_order() to select the
+    real SDK order type (None => MARKET, populated => LIMIT) and the
+    limit price sent to the exchange. Never touched by, or derived from,
+    an observed market price.
+
+    `reference_price`: the last observed market price at decision time --
+    used ONLY for PaperBroker's own simulated fill price, journaling,
+    replay, and analytics. FyersBroker.place_order() never reads this
+    field; it has zero effect on real order type or real execution.
     """
 
     contract: OptionContract
     side: Side
     quantity: int          # Total quantity (lots * lot_size).
     client_order_id: str    # Idempotency key for retries/reconciliation.
-    limit_price: Optional[float] = None  # None => market order.
+    limit_price: Optional[float] = None  # None => market order. Real broker execution instruction ONLY.
+    reference_price: Optional[float] = None  # Observed market price -- simulation/journaling/replay ONLY, never an execution instruction.
     tag: str = ""
 
 

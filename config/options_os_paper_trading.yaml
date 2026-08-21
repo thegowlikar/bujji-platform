@@ -1,0 +1,184 @@
+# Bujji Options OS -- PAPER TRADING session config.
+#
+# Used by deploy/bujji-options-os-trading.service. PaperBroker only: no
+# real capital can be committed by this configuration. The FYERS
+# connection below supplies market DATA for the intelligence stack and is
+# execution-neutered by bujji.broker.guard.disable_live_execution().
+
+shadow_mode: true
+
+logging:
+  namespace: bujji-options-os-trading
+
+session:
+  underlying: NIFTY
+  # Bujji goes LIVE with the market, not after it (operator directive
+  # 2026-08-19). The unit's timer now fires pre-open and the runner's own
+  # market-hours gate (_await_market_open) waits for THIS instant before the
+  # broker connects -- so the first decision-grade observation lands with the
+  # first tick at 09:15:01, exactly like the capture units. Far-from-open
+  # starts are refused by that gate, not by the schedule.
+  market_open: "09:15:00"
+  # Startup slot inside the opening seconds. The three 09:14 units release
+  # together at the open; the capture scripts take +0s (spot/vix/futures),
+  # +2s (option chain) and +5s (depth), so this one -- the heaviest starter,
+  # broker connect plus a full chain pull -- takes +8s. First observation
+  # still lands in the opening seconds; the bursts never stack against the
+  # shared 10/s FYERS account ceiling.
+  market_open_offset_seconds: 8
+  # CONTINUOUS SESSION (operator directive 2026-08-19): Bujji runs through
+  # the whole market day. Rolling 30s spot polls, regime re-derived every
+  # 5-min decision cycle from the trailing 16-poll window, entry attempted
+  # WHENEVER the stability gate passes (one strategy/day unchanged), and
+  # after any position close the organism keeps observing to 15:30.
+  # Mandatory close remains a POSITION rule (exit_policy), never a lifetime.
+  continuous:
+    evidence_poll_interval_seconds: 30
+    decision_interval_seconds: 300
+    evidence_window_polls: 16
+    entry_cutoff: "14:30"
+    observe_until: "15:30"
+    max_cycles: 96
+    # Burst separation from the shadow campaign's :15/:20/:25 beat, moved
+    # off the START time and onto the DECISION cadence: cycle 1 runs 150s
+    # longer, so decisions land on :22:30/:27:30... as before while evidence
+    # collection begins at the open. Needed because the FYERS pacer is
+    # per-interpreter -- schedule separation is still the only cross-process
+    # rate control (CP-D owns the real fix).
+    decision_phase_offset_seconds: 150
+  # Cross-check only -- the runner reads the authoritative lot size from
+  # the FYERS instrument master and warns if this disagrees (audit
+  # 2026-07-19: master said 65 while this file said 75).
+  exchange_lot_size: 65
+  desired_quantity: 1
+  # THE THREE RUPEE FIGURES BELOW ARE PER LOT (corrected 2026-08-20). They
+  # used to be flat per-position totals configured beside a separate size,
+  # and nothing related them: raising desired_quantity to 5 quintupled the
+  # real risk while the stop stayed at Rs 5,000 -- firing on noise, with the
+  # risk-budget and capital checks sized for a position one fifth as large.
+  # The runner multiplies each by desired_quantity in _risk_budget(). At
+  # desired_quantity: 1 every value is unchanged from before.
+  requested_risk: 5000.0            # per lot -> initial_risk, i.e. where the stop sits
+  proposed_trade_effect:
+    additional_margin: 10000.0      # per lot -> capital check
+    additional_max_loss: 5000.0     # per lot -> risk budget governor
+
+exit_policy:
+  profit_target_fraction: 0.5
+  max_loss_fraction: 1.0
+  # Hard EOD square-off. With the management loop and a live tick source
+  # this can genuinely fire intraday; before those it could not.
+  mandatory_exit_time: "15:15:00"
+
+capital_snapshot:
+  # OPERATOR DECLARATION 2026-08-18: this paper campaign simulates Rs 5,00,000
+  # of capital, declared by the operator -- not a hidden default (the old
+  # `capital_snapshot: {}` silently fabricated Rs 1cr) and not broker reality
+  # (a live get_funds() probe the same day showed the real account holds
+  # Rs 0.00; `source: fyers_funds` remains available and becomes the right
+  # setting the day real money funds the account). Margin stays REAL
+  # (providers.margin: fyers_certified) -- real exchange margin sized against
+  # declared simulated capital is exactly what paper trading claims to be.
+  #
+  # daily_loss_limit preserves the pre-existing 5% ratio (was 5L on the old
+  # 1cr fabrication); max_allowed_drawdown unchanged at 0.20. Both are
+  # operator-owned -- adjust deliberately, never by default.
+  source: static
+  total_capital: 500000.0
+  available_capital: 500000.0
+  peak_capital: 500000.0
+  used_margin: 0.0        # true at session start: PaperBroker opens flat
+  open_risk: 0.0          # true at session start: no open positions
+  reserved_risk: 0.0
+  daily_pnl: 0.0
+  consecutive_losses: 0
+  daily_loss_limit: 25000.0
+  max_allowed_drawdown: 0.20
+
+position_management:
+  # Revalue every 5 minutes across the session. Two passes per day (the
+  # prior behaviour) cannot express an excursion, so stop-loss and
+  # profit-target were unreachable no matter how they were configured.
+  cycle_interval_seconds: 300
+  # NAKED POSITIONS GET A TIGHTER LOOP (operator decision 2026-08-20). The
+  # interval is the width of the window in which an unbounded loss runs
+  # unchecked -- stop-loss, daily loss limit and emergency brake are all
+  # evaluated once per pass. A defined-risk shape keeps 300s: its wings cap
+  # the loss whatever happens between passes. 60s is the floor worth asking
+  # for, because the tick source itself polls at 60s.
+  undefined_risk_cycle_interval_seconds: 60
+  monitor_until: "15:15:00"
+  max_cycles: 78          # safety cap; the clock normally ends the loop first.
+
+providers:
+  # Margin provider for the risk context (Gate C). Three honest states:
+  #   simulated         -- test-fixture margin, margin_verified=True with NO
+  #                        broker behind it (how every session before
+  #                        2026-08-18 ran, disclosed here rather than implied).
+  #   fyers_uncertified -- real whole-book SPAN quotes from the live-certified
+  #                        endpoint (2026-07-19, docs/CAPITAL_MANAGEMENT_ENGINE.md),
+  #                        margin_verified=False -> capital_check VETOes entries.
+  #   fyers_certified   -- same real quotes, verified=True. OPERATOR DECISION:
+  #                        flip only after reviewing
+  #                        data_certification/fyers_whole_book_span_margin_discovery_*.json
+  margin:
+    # OPERATOR DECISION 2026-08-18: flipped to fyers_certified by the operator
+    # after reviewing the live whole-book evidence in
+    # data_certification/fyers_whole_book_span_margin_discovery_20260818.json
+    # (request shape accepted; parser interprets the real response; span/expo/
+    # benefit figures real; back-to-back calls deterministic). This satisfies
+    # CertifiedWholeBookMarginProvider's human-confirmation contract.
+    # margin_verified=True now carries REAL broker-quoted SPAN margin into
+    # capital_check -- revert to fyers_uncertified to halt entries honestly.
+    type: fyers_certified
+
+  # Live chain for entry. Falls back to nothing: if FYERS is unreachable
+  # the session refuses rather than trading on stale data.
+  market_data:
+    type: fyers_live
+    # Strikes each side of ATM. Wider than the 5 used for OI
+    # reconciliation: construction needs both short legs and both wings.
+    strike_count: 20
+
+  # Live per-leg prices for revaluation. Without this every cycle is
+  # BLIND (revalued from entry prices) and the runner says so loudly.
+  tick_source:
+    # websocket = FyersTickFeed (certified live ~2.4 ticks/s, silence
+    # watchdog, generation-safe reconnect) with per-symbol REST fallback via
+    # the execution-neutered live data broker. Same fail-closed guard as
+    # type=broker: requires regime market_thesis_live, or refuses to start.
+    #
+    # WHY (2026-08-21, Layer 1/2 audit): the management pass evaluates the
+    # stop-loss once per interval, so the tick source's freshness bounds the
+    # window an unbounded loss can run unchecked. 60-second REST polling left
+    # a measured worst case of ~Rs 39,764 inside one interval on a real
+    # straddle credit. The websocket closes most of that window; the REST
+    # fallback keeps every leg priceable when the socket is quiet.
+    type: websocket
+    # A tick older than this is treated as NO tick for that leg (REST covers
+    # it). Tighter than the 120s feed-silence threshold, so a single quiet
+    # symbol falls back before the whole feed is declared silent.
+    max_tick_age_seconds: 90
+    silence_threshold_seconds: 120
+
+  # Bujji derives its OWN regime from live market evidence. No human
+  # types a regime; if the evidence is too thin, the session honestly
+  # declines to trade.
+  regime:
+    type: market_thesis_live
+    # WARM-UP (enabled 2026-08-19, Master Plan D-4). 16 real spot polls, 30s
+    # apart (~8 min; entry decision lands ~09:31). Without this the thesis
+    # saw exactly ONE snapshot: PSI needs >=3 price deltas, so trend was
+    # structurally UNKNOWN and every session was NO_TRADE regardless of the
+    # market (proven live 2026-08-18 and -19). The stability gate demands
+    # stride-unanimity over these polls (~8% pass rate on real data), so
+    # NO_TRADE remains the EXPECTED majority verdict -- that is the gate
+    # reading the market honestly, not a defect. Do not tune this to force
+    # entries.
+    warmup:
+      polls: 16
+      interval_seconds: 30
+
+artifacts:
+  shadow_sessions_root: /opt/bujji/app/shadow_sessions
+  journal_path: /opt/bujji/app/data/options_os_trading_journal.db

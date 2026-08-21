@@ -46,7 +46,8 @@ from __future__ import annotations
 from datetime import date
 from typing import Optional
 
-from ..core.clock import now_ist
+from .context import IntelligenceContext
+from .evidence import wrap_evidence
 from .models import DataQuality, EventReading, ExpiryProximity, VixRegime
 
 VIX_LOW_THRESHOLD = 13.0       # VIX <= this -> LOW.
@@ -65,8 +66,10 @@ class EventBrain:
         today: date,
         vix_level: Optional[float],
         vix_prev_close: Optional[float] = None,
+        *,
+        context: IntelligenceContext,
     ) -> EventReading:
-        as_of = now_ist()
+        as_of = context.as_of_time
 
         days_to_expiry = None
         expiry_proximity = ExpiryProximity.UNKNOWN
@@ -114,7 +117,8 @@ class EventBrain:
             days_to_expiry=days_to_expiry, expiry_proximity=expiry_proximity,
             vix_level=vix_level, vix_change_pct=round(vix_change_pct, 3) if vix_change_pct is not None else None,
             vix_regime=vix_regime, confidence=confidence, data_quality=data_quality,
-            evidence=evidence, reason=f"{expiry_reason}; {vix_reason}", as_of=as_of,
+            evidence=evidence, evidence_lineage=wrap_evidence(evidence, context=context),
+            reason=f"{expiry_reason}; {vix_reason}", as_of=as_of,
         )
 
     @staticmethod

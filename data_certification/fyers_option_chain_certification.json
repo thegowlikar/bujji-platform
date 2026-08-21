@@ -1,0 +1,18 @@
+{
+  "timestamp": "2026-08-12T09:27:14.807499+00:00",
+  "broker": "fyers",
+  "access_method": "direct_sdk_fyers_broker_py",
+  "instrument": "NIFTY_OPTION_CE",
+  "symbol_requested": "NSE:NIFTY2681824350CE",
+  "symbol_returned": "NSE:NIFTY2681824350CE",
+  "quote_status": "OK",
+  "historical_status": "OK",
+  "volume_available": true,
+  "oi_available": true,
+  "timestamp_valid": true,
+  "validation_result": "CERTIFIED_AVAILABLE",
+  "limitations": [
+    "strike resolved live from spot=24355.2 (was a hardcoded, since-drifted strike in the prior version of this script) \u2014 resolved contract: NSE:NIFTY2681824350CE, expiry=2026-08-18.",
+    "quote OK, historical OK, symbol match confirmed, integrity checks passed, required fields present."
+  ]
+}

@@ -29,6 +29,7 @@ def option_observation_to_dict(oo: OptionObservation) -> Dict[str, Any]:
         "expiry": oo.expiry,
         "option_type": oo.option_type,
         "underlying": oo.underlying,
+        "symbol_provenance": oo.symbol_provenance,
         "observation": observation_to_dict(oo.observation),
     }
 
@@ -40,6 +41,15 @@ def option_observation_from_dict(d: Dict[str, Any]) -> OptionObservation:
         expiry=d["expiry"],
         option_type=d["option_type"],
         underlying=d["underlying"],
+        # REQUIRED, never defaulted. An artifact written before provenance
+        # existed genuinely does not record where its symbol came from, and
+        # picking any of the four values for it would be a fabricated fact
+        # about a real recording. A KeyError naming the field is the honest
+        # outcome: re-ingest the source. Verified 2026-08-21 that no such
+        # artifact exists on the VPS (no data/ or shadow_sessions/ file
+        # contains an "option_observation"/"option_series" payload), so this
+        # requirement breaks nothing today.
+        symbol_provenance=d["symbol_provenance"],
     )
 
 
@@ -57,6 +67,7 @@ def option_series_to_dict(os_: OptionObservationSeries) -> Dict[str, Any]:
         "expiry": os_.expiry,
         "option_type": os_.option_type,
         "underlying": os_.underlying,
+        "symbol_provenance": os_.symbol_provenance,
         "series": series_to_dict(os_.series),
     }
 
@@ -68,6 +79,7 @@ def option_series_from_dict(d: Dict[str, Any]) -> OptionObservationSeries:
         expiry=d["expiry"],
         option_type=d["option_type"],
         underlying=d["underlying"],
+        symbol_provenance=d["symbol_provenance"],  # required -- see above
     )
 
 

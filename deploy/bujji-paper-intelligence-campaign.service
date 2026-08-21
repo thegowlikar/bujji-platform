@@ -1,0 +1,92 @@
+[Unit]
+# =========================================================================
+# BUJJI PAPER INTELLIGENCE CAMPAIGN — Phase 6
+#
+# Owns ONE thing: the live intraday multi-cycle Paper Intelligence
+# runner (scripts/run_paper_intelligence_campaign.py, itself just a
+# thin launcher for the ALREADY-EXISTING, canonical
+# bujji.shadow_runtime.shadow_session_runner.ShadowSessionRunner with
+# its own market_perception_enabled/intelligence_cycle_enabled/
+# intelligence_pipeline_enabled flags on, plus Phase 5/6's own additive
+# on_cycle_evidence hook). Produces one real DecisionArtifact per
+# cycle via bujji.paper_intelligence_mode.run_cycle(), journaled --
+# NOTHING else. This is NOT a trading system: it never places an
+# order, never modifies a position, never touches PaperBroker or
+# TradingSessionGovernor's own stateful session/lock lifecycle. Every
+# broker call is read-only and passes through
+# bujji.broker.guard.disable_live_execution().
+#
+# Deliberately a SEPARATE unit from bujji-daily-intelligence.service
+# (Phase 19.x capture + intelligence composition, one cycle/day),
+# bujji-shadow-decision-campaign.service (Cycle 1's own unrelated
+# decision lineage), and the reserved bujji-options-os.service (real
+# execution, not yet created) -- this unit owns Phase 6's Paper
+# Intelligence Campaign only, per docs/SYSTEM_OWNERSHIP.md's disclosed-
+# collision naming discipline. See PHASE_6_PAPER_INTELLIGENCE_CAMPAIGN
+# report for the full architecture and boundary.
+#
+# Type=oneshot: the launcher script itself runs the full intraday
+# multi-cycle loop internally (bounded by market close, via
+# ShadowSessionRunner's own max_cycles) and exits -- not a
+# Restart=always daemon, same "bounded daily session" discipline every
+# other unit in this project already follows.
+# Never start/enable this unit directly for recurring operation; enable
+# the .timer instead.
+# =========================================================================
+Description=Bujji Paper Intelligence Campaign — live intraday observation + reasoning, Decision Artifacts only (no trading)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+
+# --- EDIT THESE FOR YOUR DEPLOYMENT -----------------------------------
+User=bujji
+Group=bujji
+WorkingDirectory=/opt/bujji/app
+ExecStart=/opt/bujji/.venv/bin/python scripts/run_paper_intelligence_campaign.py --lock-path /opt/bujji/app/data/paper_intelligence_campaign.lock --fyers-env-file /opt/bujji/.env
+# Real broker credentials -- see docs/FYERS_TOKEN_LIFECYCLE.md. FYERS
+# access-token renewal is NOT automatable (SEBI-driven restriction) --
+# a human must refresh FYERS_ACCESS_TOKEN in /opt/bujji/.env before
+# each trading day's timer fire. Uses /opt/bujji/.env deliberately
+# (already bujji:bujji-owned, mode 600), not /tmp/local_fyers.env (that
+# file's own manual/interactive-smoke-test-only convention).
+EnvironmentFile=/opt/bujji/.env
+# ------------------------------------------------------------------------
+
+# No Restart= directive: a oneshot's job is to run once and stop. A
+# genuine mid-run crash is NOT auto-retried today (same trading day) --
+# the ProcessLock releases on crash and the NEXT day's timer fire is
+# the retry -- same deliberate, disclosed choice every other unit in
+# this project already makes.
+
+# Give the process time to run its graceful shutdown (release the
+# ProcessLock, stop issuing new cycles, let the current cycle's
+# DecisionArtifact finish writing) on SIGTERM before systemd escalates
+# to SIGKILL. See scripts/run_paper_intelligence_campaign.py's own
+# SIGTERM/SIGINT handling.
+TimeoutStopSec=30
+KillSignal=SIGTERM
+
+# Hygiene: keep failures visible in `journalctl -u bujji-paper-intelligence-campaign`, not lost.
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=bujji-paper-intelligence-campaign
+
+# --- Security hardening ------------------------------------------------
+# This service holds a live broker READ credential (quotes/option-chain
+# data only -- structurally never an order-placing credential path, per
+# the broker.guard boundary every real broker instance in this project
+# already inherits). Lock down what it can touch: only its own lock
+# file, session artifacts, and logs under WorkingDirectory.
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+ReadWritePaths=/opt/bujji/app/logs /opt/bujji/app/data /opt/bujji/app/paper_intelligence_sessions /opt/bujji/.env
+# ------------------------------------------------------------------------
+
+# Deliberately NO [Install] section here -- a oneshot triggered by a
+# timer is enabled via the TIMER's own [Install] section, not this
+# service's. Do not `systemctl enable bujji-paper-intelligence-campaign.service`
+# directly; enable bujji-paper-intelligence-campaign.timer instead.

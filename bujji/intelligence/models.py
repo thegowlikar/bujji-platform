@@ -4,7 +4,9 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from datetime import datetime
 from enum import Enum
-from typing import Any, Optional
+from typing import Any, Dict, Optional
+
+from .evidence import IntelligenceEvidence
 
 
 class RegimeType(str, Enum):
@@ -38,6 +40,7 @@ class RegimeReading:
     confidence: float
     data_quality: DataQuality
     evidence: dict[str, Any] = field(default_factory=dict)
+    evidence_lineage: Dict[str, IntelligenceEvidence] = field(default_factory=dict)
     reason: str = ""
     candles_used: int = 0
     as_of: Optional[datetime] = None
@@ -107,6 +110,7 @@ class VolatilityReading:
     confidence: float = 0.0
     data_quality: DataQuality = DataQuality.INSUFFICIENT
     evidence: dict[str, Any] = field(default_factory=dict)
+    evidence_lineage: Dict[str, IntelligenceEvidence] = field(default_factory=dict)
     reason: str = ""
     as_of: Optional[datetime] = None
 
@@ -317,6 +321,7 @@ class GreeksReading:
     confidence: float = 0.0
     data_quality: DataQuality = DataQuality.INSUFFICIENT
     evidence: dict[str, Any] = field(default_factory=dict)
+    evidence_lineage: Dict[str, IntelligenceEvidence] = field(default_factory=dict)
     reason: str = ""
     as_of: Optional[datetime] = None
 
@@ -423,6 +428,7 @@ class LiquidityReading:
     confidence: float = 0.0
     data_quality: DataQuality = DataQuality.INSUFFICIENT
     evidence: dict[str, Any] = field(default_factory=dict)
+    evidence_lineage: Dict[str, IntelligenceEvidence] = field(default_factory=dict)
     reason: str = ""
     as_of: Optional[datetime] = None
 
@@ -521,6 +527,7 @@ class StructureReading:
     confidence: float = 0.0
     data_quality: DataQuality = DataQuality.INSUFFICIENT
     evidence: dict[str, Any] = field(default_factory=dict)
+    evidence_lineage: Dict[str, IntelligenceEvidence] = field(default_factory=dict)
     reason: str = ""
     as_of: Optional[datetime] = None
 
@@ -634,6 +641,7 @@ class EventReading:
     confidence: float = 0.0
     data_quality: DataQuality = DataQuality.INSUFFICIENT
     evidence: dict[str, Any] = field(default_factory=dict)
+    evidence_lineage: Dict[str, IntelligenceEvidence] = field(default_factory=dict)
     reason: str = ""
     as_of: Optional[datetime] = None
 

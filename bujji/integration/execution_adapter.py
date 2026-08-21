@@ -91,13 +91,26 @@ def _translate_order_request(
     42) does not itself carry a lot size and this adapter never
     fabricates or infers one.
 
-    `limit_price` is always `None` in this v1 adapter: Order
-    Construction (Series 44) never persists a numeric price onto the
-    final `OrderRequest` object (only the finite `execution_policy`
-    name), so a price-bearing policy (`LIMIT`/`STOP`/`STOP_LIMIT`)
-    cannot yet carry a real price through to production -- a disclosed
-    v1 limitation, not a silent gap. Only `MARKET` orders are fully
-    supported end-to-end this sprint.
+    `limit_price` and `reference_price` are DELIBERATELY separate here
+    (Semantic Cleanup Sprint, correcting a real issue found in the prior
+    Live Shadow Real-Time Paper Execution sprint's own micro-review):
+
+    `limit_price` is always `None` -- this pipeline has no path today
+    that produces a real, trader-specified LIMIT order (Order
+    Construction's own `ExecutionPolicy.limit_price` is not even
+    threaded into this function's signature; only `MARKET` orders are
+    supported end-to-end, unchanged, disclosed limitation). `None` here
+    means exactly one thing to production's own broker layer: submit a
+    real MARKET instruction. It is never populated from an observed
+    price.
+
+    `reference_price` carries `runtime_order.reference_price` verbatim
+    -- the contract's own last observed price, from whatever
+    chain/tick snapshot Contract Construction was given. Production's
+    real broker layer never reads this field (confirmed: it has zero
+    effect on real order type or execution); the paper simulator reads
+    it as its own simulated fill price. `None` when no observed price
+    was available upstream -- never fabricated by this adapter.
     """
     contract = OptionContract(
         symbol=runtime_order.contract.contract_symbol,
@@ -114,6 +127,7 @@ def _translate_order_request(
         quantity=runtime_order.quantity,
         client_order_id=runtime_order.client_order_id,
         limit_price=None,
+        reference_price=runtime_order.reference_price,
         tag=tag,
     )
 

@@ -1,0 +1,11 @@
+[Unit]
+Description=Bujji failure alert for %i — appends to the alarm journal
+
+[Service]
+Type=oneshot
+# Append a machine-readable alarm line. DISCLOSED LIMITATION: this reaches a
+# FILE plus the journal, not a phone — a push channel (Telegram/ntfy/mail)
+# needs operator-provided credentials and is an open item in the Master Plan
+# risk register. Before this unit existed, failures reached nothing at all
+# (three units failed on the morning of 2026-08-19, observed only by luck).
+ExecStart=/bin/sh -c "printf \x27{\"ts\":\"%%s\",\"unit\":\"%i\",\"event\":\"FAILED\"}\n\x27 \"$(date -Is)\" >> /opt/bujji/app/data/ALERTS.jsonl && chown bujji:bujji /opt/bujji/app/data/ALERTS.jsonl"

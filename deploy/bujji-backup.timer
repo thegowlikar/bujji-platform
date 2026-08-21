@@ -1,0 +1,10 @@
+[Unit]
+Description=Nightly trigger for the Bujji store backup (post-EOD)
+[Timer]
+# 16:30 IST: after the daily-intelligence EOD pass (~15:35) has finished
+# writing the day into the stores this job snapshots.
+OnCalendar=Mon..Fri 16:30 Asia/Kolkata
+AccuracySec=5min
+Persistent=true
+[Install]
+WantedBy=timers.target

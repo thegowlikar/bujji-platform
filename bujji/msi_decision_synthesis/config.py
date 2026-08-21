@@ -26,6 +26,41 @@ DEFAULT_PROVENANCE = "msi_decision_synthesis.engine.synthesize"
 # `_lean_for_signal`). Extending this table for a newly-built real
 # brain is expected and safe: it never changes engine.py's logic,
 # exactly like taxonomy extension elsewhere in this project.
+#
+# PHASE 14B-P1 (forensic finding): the placeholder keys below (Title
+# Case: "Trending", "Range", ...) were written before any real MSI
+# brain existed and NEVER matched any real domain's actual output --
+# `psi.structure_state`/`mssi.structure_location`/`mdi.overall_direction`/
+# `mppi.positioning_bias`/`vsb.volatility_regime` all use ALL_CAPS_WITH_
+# UNDERSCORES values that share zero keys with this table (confirmed by
+# exhaustive comparison against a real live session: 174/174 cycles
+# resolved to MONITOR purely from this string mismatch, never from
+# genuine evidence absence). The block below ADDS the real domains'
+# actual taxonomy values as new keys -- purely additive, old placeholder
+# keys kept unchanged for anything still relying on them, engine.py
+# untouched. Semantics for each new mapping are derived from each
+# domain's own taxonomy docstring (msi_price_structure/msi_market_structure/
+# msi_market_direction/msi_participant_positioning/msi_volatility_structure),
+# not guessed:
+#   PSI structure_state: TRENDING -> directional edge; BALANCE -> neutral
+#     (range-bound); CORRECTING -> a pullback within a structure, i.e. a
+#     reversion read; TRANSITIONING/UNKNOWN -> genuinely ambiguous, never
+#     forced either way.
+#   MSSI structure_location: INSIDE_RANGE/NEAR_SUPPORT/NEAR_RESISTANCE ->
+#     classic mean-reversion setups (price still bounded); ABOVE_RESISTANCE/
+#     BELOW_SUPPORT -> a real structural break, i.e. breakout; AT_RETEST/
+#     UNKNOWN -> ambiguous (a retest is inherently undecided).
+#   MDI overall_direction: any real bullish/bearish band -> directional;
+#     NEUTRAL -> neutral; MIXED/UNKNOWN -> ambiguous (MIXED is genuine
+#     cross-lens disagreement, never averaged into NEUTRAL -- see
+#     msi_market_direction.taxonomy's own docstring).
+#   MPPI positioning_bias: BULLISH/BEARISH_POSITIONING -> directional;
+#     NEUTRAL_POSITIONING -> neutral; MIXED/UNKNOWN_POSITIONING -> ambiguous.
+#   VSB volatility_regime: COMPRESSED/HIGH_VOLATILITY -> both real
+#     volatility-type opportunities (compression anticipates expansion,
+#     already-elevated vol supports a volatility read -- mirrors Phase 9's
+#     own VOLATILITY_EXPANSION/COMPRESSION suitability rules); STABLE ->
+#     neutral; TRANSITIONING/UNKNOWN -> ambiguous.
 # ---------------------------------------------------------------------------
 LEAN_OPPORTUNITY_FORMING = "OPPORTUNITY_FORMING"
 LEAN_NEUTRAL_FORMING = "NEUTRAL_FORMING"
@@ -48,6 +83,40 @@ STATE_LEAN_MAP = {
     "Strong": (LEAN_AMBIGUOUS, None),
     "Adequate": (LEAN_AMBIGUOUS, None),
     "Thin": (LEAN_AMBIGUOUS, None),
+    # --- Phase 14B-P1 additions: real MSI brain vocabulary ------------
+    # PSI structure_state (msi_price_structure.taxonomy.ALL_STRUCTURE_STATES).
+    "TRENDING": (LEAN_OPPORTUNITY_FORMING, taxonomy.OPPORTUNITY_STATE_DIRECTIONAL),
+    "BALANCE": (LEAN_NEUTRAL_FORMING, taxonomy.OPPORTUNITY_STATE_NEUTRAL),
+    "CORRECTING": (LEAN_NEUTRAL_FORMING, taxonomy.OPPORTUNITY_STATE_MEAN_REVERSION),
+    "TRANSITIONING": (LEAN_AMBIGUOUS, None),
+    # MSSI structure_location (msi_market_structure.taxonomy).
+    "INSIDE_RANGE": (LEAN_NEUTRAL_FORMING, taxonomy.OPPORTUNITY_STATE_MEAN_REVERSION),
+    "NEAR_SUPPORT": (LEAN_NEUTRAL_FORMING, taxonomy.OPPORTUNITY_STATE_MEAN_REVERSION),
+    "NEAR_RESISTANCE": (LEAN_NEUTRAL_FORMING, taxonomy.OPPORTUNITY_STATE_MEAN_REVERSION),
+    "ABOVE_RESISTANCE": (LEAN_OPPORTUNITY_FORMING, taxonomy.OPPORTUNITY_STATE_BREAKOUT),
+    "BELOW_SUPPORT": (LEAN_OPPORTUNITY_FORMING, taxonomy.OPPORTUNITY_STATE_BREAKOUT),
+    "AT_RETEST": (LEAN_AMBIGUOUS, None),
+    # MDI overall_direction (msi_market_direction.taxonomy).
+    "STRONG_BULLISH": (LEAN_OPPORTUNITY_FORMING, taxonomy.OPPORTUNITY_STATE_DIRECTIONAL),
+    "BULLISH": (LEAN_OPPORTUNITY_FORMING, taxonomy.OPPORTUNITY_STATE_DIRECTIONAL),
+    "WEAK_BULLISH": (LEAN_OPPORTUNITY_FORMING, taxonomy.OPPORTUNITY_STATE_DIRECTIONAL),
+    "WEAK_BEARISH": (LEAN_OPPORTUNITY_FORMING, taxonomy.OPPORTUNITY_STATE_DIRECTIONAL),
+    "BEARISH": (LEAN_OPPORTUNITY_FORMING, taxonomy.OPPORTUNITY_STATE_DIRECTIONAL),
+    "STRONG_BEARISH": (LEAN_OPPORTUNITY_FORMING, taxonomy.OPPORTUNITY_STATE_DIRECTIONAL),
+    "MIXED": (LEAN_AMBIGUOUS, None),
+    # MPPI positioning_bias (msi_participant_positioning.taxonomy).
+    "BULLISH_POSITIONING": (LEAN_OPPORTUNITY_FORMING, taxonomy.OPPORTUNITY_STATE_DIRECTIONAL),
+    "BEARISH_POSITIONING": (LEAN_OPPORTUNITY_FORMING, taxonomy.OPPORTUNITY_STATE_DIRECTIONAL),
+    "NEUTRAL_POSITIONING": (LEAN_NEUTRAL_FORMING, taxonomy.OPPORTUNITY_STATE_NEUTRAL),
+    "MIXED_POSITIONING": (LEAN_AMBIGUOUS, None),
+    "UNKNOWN_POSITIONING": (LEAN_AMBIGUOUS, None),
+    # VSB volatility_regime (msi_volatility_structure.taxonomy).
+    "COMPRESSED": (LEAN_OPPORTUNITY_FORMING, taxonomy.OPPORTUNITY_STATE_VOLATILITY),
+    "HIGH_VOLATILITY": (LEAN_OPPORTUNITY_FORMING, taxonomy.OPPORTUNITY_STATE_VOLATILITY),
+    "STABLE": (LEAN_NEUTRAL_FORMING, taxonomy.OPPORTUNITY_STATE_NEUTRAL),
+    # "UNKNOWN" is shared by multiple domains as their honest no-evidence
+    # value -- correctly ambiguous for all of them, added once below.
+    "UNKNOWN": (LEAN_AMBIGUOUS, None),
     "Illiquid": (LEAN_AMBIGUOUS, None),
     "Weak": (LEAN_AMBIGUOUS, None),
 }

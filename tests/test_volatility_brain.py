@@ -9,6 +9,7 @@ import pytest
 from bujji.core.clock import IST
 from bujji.core.enums import OptionType
 from bujji.core.models import Candle
+from bujji.intelligence.context import IntelligenceContext
 from bujji.intelligence.models import DataQuality, Richness
 from bujji.intelligence.volatility_brain import (
     MIN_CANDLES_FOR_REALIZED_VOL,
@@ -16,6 +17,8 @@ from bujji.intelligence.volatility_brain import (
     _bs_price,
     solve_implied_volatility,
 )
+
+TEST_CONTEXT = IntelligenceContext(as_of_time=datetime(2026, 7, 20, 9, 20, tzinfo=IST))
 
 
 def _candles(closes: list[float], start_hour=9, start_min=15) -> list[Candle]:
@@ -66,7 +69,7 @@ def test_solver_returns_none_for_nonpositive_time_or_price():
 # ---------------------------------------------------------------------- #
 def test_insufficient_candles_returns_unknown_never_guesses(brain):
     candles = _candles([24000, 24005, 24010])  # Fewer than MIN_CANDLES.
-    reading = brain.analyze(candles, 24000, 24000, 5 / 365, 150.0, 150.0)
+    reading = brain.analyze(candles, 24000, 24000, 5 / 365, 150.0, 150.0, context=TEST_CONTEXT)
     assert reading.richness is Richness.UNKNOWN
     assert reading.confidence == 0.0
     assert reading.data_quality is DataQuality.INSUFFICIENT
@@ -79,7 +82,7 @@ def test_unsolvable_premium_produces_unknown_not_a_crash(brain):
     """A premium that can't be solved (e.g. below intrinsic) must degrade
     to UNKNOWN richness, not raise or fabricate a number."""
     candles = _candles([24000 + i for i in range(MIN_CANDLES_FOR_REALIZED_VOL)])
-    reading = brain.analyze(candles, 24500, 24000, 5 / 365, 1.0, 150.0)  # CE price impossible.
+    reading = brain.analyze(candles, 24500, 24000, 5 / 365, 1.0, 150.0, context=TEST_CONTEXT)  # CE price impossible.
     assert reading.iv_ce is None
     assert reading.richness is Richness.UNKNOWN
     assert reading.data_quality is DataQuality.INSUFFICIENT
@@ -91,7 +94,7 @@ def test_unsolvable_premium_produces_unknown_not_a_crash(brain):
 def test_iv_rank_and_percentile_are_always_none(brain):
     candles = _candles([24000 + i * 2 for i in range(10)])
     price = _bs_price(24000, 24000, 5 / 365, 0.065, 0.15, OptionType.CE)
-    reading = brain.analyze(candles, 24000, 24000, 5 / 365, price, price)
+    reading = brain.analyze(candles, 24000, 24000, 5 / 365, price, price, context=TEST_CONTEXT)
     assert reading.iv_rank is None
     assert reading.iv_percentile is None
 
@@ -105,7 +108,7 @@ def test_high_iv_relative_to_realized_vol_is_rich(brain):
     candles = _candles([24000.0, 24000.5, 24000.0, 24000.5, 24000.0, 24000.5])
     ce_price = _bs_price(24000, 24000, 5 / 365, 0.065, 0.20, OptionType.CE)
     pe_price = _bs_price(24000, 24000, 5 / 365, 0.065, 0.20, OptionType.PE)
-    reading = brain.analyze(candles, 24000, 24000, 5 / 365, ce_price, pe_price)
+    reading = brain.analyze(candles, 24000, 24000, 5 / 365, ce_price, pe_price, context=TEST_CONTEXT)
     assert reading.richness is Richness.IV_RICH
     assert reading.richness_ratio > 1.15
 
@@ -116,7 +119,7 @@ def test_low_iv_relative_to_realized_vol_is_cheap(brain):
     candles = _candles([24000, 24300, 23700, 24400, 23600, 24500])
     ce_price = _bs_price(24000, 24000, 5 / 365, 0.065, 0.05, OptionType.CE)
     pe_price = _bs_price(24000, 24000, 5 / 365, 0.065, 0.05, OptionType.PE)
-    reading = brain.analyze(candles, 24000, 24000, 5 / 365, ce_price, pe_price)
+    reading = brain.analyze(candles, 24000, 24000, 5 / 365, ce_price, pe_price, context=TEST_CONTEXT)
     assert reading.richness is Richness.IV_CHEAP
     assert reading.richness_ratio < 0.85
 
@@ -125,7 +128,7 @@ def test_expected_move_is_computed_and_positive(brain):
     candles = _candles([24000 + i for i in range(10)])
     ce_price = _bs_price(24000, 24000, 5 / 365, 0.065, 0.15, OptionType.CE)
     pe_price = _bs_price(24000, 24000, 5 / 365, 0.065, 0.15, OptionType.PE)
-    reading = brain.analyze(candles, 24000, 24000, 5 / 365, ce_price, pe_price)
+    reading = brain.analyze(candles, 24000, 24000, 5 / 365, ce_price, pe_price, context=TEST_CONTEXT)
     assert reading.expected_move_points is not None
     assert reading.expected_move_points > 0
     assert reading.expected_move_pct > 0
@@ -133,7 +136,7 @@ def test_expected_move_is_computed_and_positive(brain):
 
 def test_render_and_to_log_do_not_raise(brain):
     candles = _candles([24000 + i for i in range(10)])
-    reading = brain.analyze(candles, 24000, 24000, 5 / 365, 150.0, 150.0)
+    reading = brain.analyze(candles, 24000, 24000, 5 / 365, 150.0, 150.0, context=TEST_CONTEXT)
     assert "VOLATILITY BRAIN" in reading.render()
     log = reading.to_log()
     assert log["brain"] == "volatility"
@@ -160,7 +163,7 @@ def test_real_day_2026_07_13_classifies_as_iv_rich():
     reading = brain.analyze(
         candles, spot=24154.8, strike=24000, t_years=(21 - 13) * 86400 / (365 * 86400),
         ce_premium=282.85, pe_premium=135.5,
-    )
+     context=TEST_CONTEXT)
     assert reading.data_quality is DataQuality.SUFFICIENT
     assert reading.richness is Richness.IV_RICH
     assert reading.iv_average is not None and reading.iv_average > 0

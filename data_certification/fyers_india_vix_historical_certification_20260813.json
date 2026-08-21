@@ -1,0 +1,23 @@
+{
+  "timestamp": "2026-08-13T20:42:24.516340+05:30",
+  "broker": "fyers",
+  "access_method": "direct_sdk_fyers_historical_rest",
+  "instrument": "INDIA_VIX",
+  "symbol_requested": "NSE:INDIAVIX-INDEX",
+  "symbol_returned": "NSE:INDIAVIX-INDEX",
+  "resolution_tested": "D",
+  "range_tested": [
+    "2026-07-14",
+    "2026-08-13"
+  ],
+  "historical_status": "OK",
+  "earliest_date_confirmed": "2008-04-17",
+  "cont_flag_tested": true,
+  "volume_available": true,
+  "oi_available": false,
+  "integrity_checks_passed": true,
+  "validation_result": "CERTIFIED_AVAILABLE",
+  "limitations": [
+    "none observed"
+  ]
+}

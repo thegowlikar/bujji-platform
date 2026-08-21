@@ -5,6 +5,8 @@ specific real-world failure mode into the existing pipeline and verifies
 the system fails safely, recovers where designed, and never opens an
 unintended position.
 """
+import sqlite3
+
 import pytest
 
 from bujji.broker.paper import PaperBroker
@@ -147,7 +149,11 @@ async def test_journal_write_failure_does_not_block_the_trading_loop(config, log
     store = SessionStore(config.paths.state_file)
     try:
         journal = TradeJournal(config.paths.journal_csv, config.paths.database)
-    except (PermissionError, OSError):
+    except (PermissionError, OSError, sqlite3.OperationalError):
+        # sqlite3.OperationalError ("unable to open database file") is what
+        # actually surfaces here -- it is not an OSError subclass, so the
+        # permission denial (real, correctly enforced) was previously
+        # falling through this skip and failing the test instead.
         pytest.skip("environment does not enforce directory permissions (e.g. root) -- cannot simulate")
     orch = Orchestrator(config, logger, signal, trade, execn, journal, store, status)
     await orch.startup()

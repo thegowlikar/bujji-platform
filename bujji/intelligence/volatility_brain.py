@@ -42,9 +42,10 @@ from __future__ import annotations
 import math
 from typing import Optional
 
-from ..core.clock import now_ist
 from ..core.enums import OptionType
 from ..core.models import Candle
+from .context import IntelligenceContext
+from .evidence import wrap_evidence
 from .models import DataQuality, Richness, VolatilityReading
 
 MIN_CANDLES_FOR_REALIZED_VOL = 6  # Same floor as the Regime Brain.
@@ -160,8 +161,10 @@ class VolatilityBrain:
         ce_premium: float,
         pe_premium: float,
         risk_free_rate: float = 0.065,
+        *,
+        context: IntelligenceContext,
     ) -> VolatilityReading:
-        now = now_ist()
+        now = context.as_of_time
         n = len(spot_candles)
 
         if n < MIN_CANDLES_FOR_REALIZED_VOL:
@@ -207,7 +210,7 @@ class VolatilityBrain:
                 realized_vol=realized_vol, richness=Richness.UNKNOWN,
                 richness_ratio=None, expected_move_points=None, expected_move_pct=None,
                 confidence=0.0, data_quality=DataQuality.INSUFFICIENT,
-                evidence=evidence,
+                evidence=evidence, evidence_lineage=wrap_evidence(evidence, context=context),
                 reason="iv_or_realized_vol_unsolvable: cannot compute richness without both",
                 as_of=now,
             )
@@ -227,7 +230,8 @@ class VolatilityBrain:
             expected_move_points=round(expected_move_points, 2),
             expected_move_pct=round(expected_move_pct, 3) if expected_move_pct else None,
             confidence=confidence, data_quality=DataQuality.SUFFICIENT,
-            evidence=evidence, reason=reason, as_of=now,
+            evidence=evidence, evidence_lineage=wrap_evidence(evidence, context=context),
+            reason=reason, as_of=now,
         )
 
     @staticmethod

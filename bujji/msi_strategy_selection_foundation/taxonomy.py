@@ -1,6 +1,7 @@
 """Strategy Selection Foundation vocabulary — BUJJI Engineering Series
 87 (SSF v1), updated by the Series 88 follow-up ("Wire SSF to consume
-Volatility Structure evidence").
+Volatility Structure evidence") and the Phase 9 follow-up ("Liquidity
+Intelligence Bridge").
 
 Follows this project's established convention (plain string constants,
 not enum.Enum).
@@ -36,23 +37,36 @@ assumption:
   available" with "term structure available" would have been a real,
   disclosed mistake — CALENDAR genuinely needs the latter, not the
   former, and must stay gated.
-- Liquidity, Futures Positioning: still NOT AVAILABLE, unchanged from
-  Series 87.
+- Liquidity (Phase 9, Liquidity Intelligence Bridge): **NOW REAL AND
+  AVAILABLE** — `bujji.intelligence.liquidity_brain.LiquidityBrain`
+  already computes a real `LiquidityReading` every live cycle from
+  genuine ATM CE/PE top-of-book bid/ask (`market_perception.
+  intelligence_adapter._atm_bid_ask`, confirmed live-verified
+  2026-07-20). This taxonomy update moves `DOMAIN_LIQUIDITY` from
+  `UNAVAILABLE_DOMAINS` to `AVAILABLE_DOMAINS`, mirroring exactly the
+  Series 88 volatility precedent: a real per-call `Optional[
+  LiquidityReading]` parameter on `assess_strategy_suitability`, honest
+  INSUFFICIENT_EVIDENCE when the reading is absent or itself UNKNOWN
+  for this specific call (invalid/missing quote), never assumed.
+- Futures Positioning: still NOT AVAILABLE, unchanged from Series 87 —
+  no futures OI/positioning feed exists anywhere in this codebase.
 
-A strategy family whose REQUIRED evidence includes Liquidity, Futures
-Positioning, or Volatility Term Structure still cannot be assessed as
-SUITABLE — `assess_suitability` honestly returns INSUFFICIENT_EVIDENCE
-for it. Families requiring only Direction/Consensus/Positioning/Market
-Structure/Risk Profile/Volatility now receive a real SUITABLE/
-UNSUITABLE read, gated by real, disclosed volatility-condition rules
-in engine.py (`_VOLATILITY_RULES`), never a numeric score.
+A strategy family whose REQUIRED evidence includes Futures Positioning
+or Volatility Term Structure still cannot be assessed as SUITABLE —
+`assess_suitability` honestly returns INSUFFICIENT_EVIDENCE for it.
+Families requiring only Direction/Consensus/Positioning/Market
+Structure/Risk Profile/Volatility/Liquidity now receive a real
+SUITABLE/UNSUITABLE read, gated by real, disclosed condition rules in
+engine.py (`_VOLATILITY_RULES`/`_rule_liquidity`), never a numeric
+score.
 """
 from __future__ import annotations
 
-MSI_STRATEGY_SELECTION_FOUNDATION_VERSION = "1.1.0"
-# 1.1.0: Volatility wiring (this follow-up). 1.0.0 remains recognized
-# for backward-compatible reads of assessments produced before this change.
-RECOGNIZED_SCHEMA_VERSIONS = ("1.0.0", "1.1.0")
+MSI_STRATEGY_SELECTION_FOUNDATION_VERSION = "1.2.0"
+# 1.1.0: Volatility wiring. 1.2.0: Liquidity wiring (Phase 9 follow-up).
+# Earlier versions remain recognized for backward-compatible reads of
+# assessments produced before each change.
+RECOGNIZED_SCHEMA_VERSIONS = ("1.0.0", "1.1.0", "1.2.0")
 
 # ---------------------------------------------------------------------------
 # Suitability — Deliverable 3's core taxonomy. Mirrors the established
@@ -132,24 +146,28 @@ ALL_EVIDENCE_DOMAINS = (
 
 # Domains this codebase can genuinely supply real evidence for today.
 # DOMAIN_VOLATILITY moved here from UNAVAILABLE_DOMAINS (Series 88
-# Volatility Structure Bridge, now wired). DOMAIN_VOLATILITY_TERM_STRUCTURE
-# stays unavailable -- confirmed absent by Series 88's own audit.
+# Volatility Structure Bridge). DOMAIN_LIQUIDITY moved here from
+# UNAVAILABLE_DOMAINS (Phase 9 Liquidity Intelligence Bridge, now
+# wired). DOMAIN_VOLATILITY_TERM_STRUCTURE stays unavailable --
+# confirmed absent by Series 88's own audit; no code changed that.
 AVAILABLE_DOMAINS = (
     DOMAIN_DIRECTION, DOMAIN_CONSENSUS, DOMAIN_POSITIONING,
     DOMAIN_MARKET_STRUCTURE, DOMAIN_RISK_PROFILE, DOMAIN_VOLATILITY,
+    DOMAIN_LIQUIDITY,
 )
-UNAVAILABLE_DOMAINS = (DOMAIN_VOLATILITY_TERM_STRUCTURE, DOMAIN_LIQUIDITY, DOMAIN_FUTURES_POSITIONING)
+UNAVAILABLE_DOMAINS = (DOMAIN_VOLATILITY_TERM_STRUCTURE, DOMAIN_FUTURES_POSITIONING)
 
 # ---------------------------------------------------------------------------
-# Readiness — Deliverable 7. READY_AFTER_VOLATILITY_BRIDGE is now
-# obsolete as a FUTURE state (the bridge exists) but the constant is
-# kept, unused by any current family, for backward-compat with any
-# stored 1.0.0-schema assessment that referenced it.
+# Readiness — Deliverable 7. READY_AFTER_VOLATILITY_BRIDGE and
+# REQUIRES_LIQUIDITY are now obsolete as FUTURE states (both bridges
+# exist) but the constants are kept, unused by any current family, for
+# backward-compat with any stored 1.0.0/1.1.0-schema assessment that
+# referenced them.
 # ---------------------------------------------------------------------------
 READY_TODAY = "READY_TODAY"
 READY_AFTER_VOLATILITY_BRIDGE = "READY_AFTER_VOLATILITY_BRIDGE"  # No longer used by any family as of 1.1.0.
 REQUIRES_FUTURES_POSITIONING = "REQUIRES_FUTURES_POSITIONING"
-REQUIRES_LIQUIDITY = "REQUIRES_LIQUIDITY"
+REQUIRES_LIQUIDITY = "REQUIRES_LIQUIDITY"  # No longer used by any family as of 1.2.0.
 REQUIRES_DATA_NOT_YET_AVAILABLE = "REQUIRES_DATA_NOT_YET_AVAILABLE"  # multiple/richer gaps (e.g. term structure).
 
 ALL_READINESS_STATES = (
@@ -203,7 +221,7 @@ STRATEGY_DEFINITIONS = {
         "forbidden_direction_leans": ("MIXED",),
         "required_min_consensus_rank": 1,
         "required_confidence": CONFIDENCE_MODERATE,
-        "readiness": REQUIRES_LIQUIDITY,
+        "readiness": READY_TODAY,  # Liquidity now bridged (Phase 9).
     },
     NEUTRAL_PREMIUM_SELLING: {
         "objective": "Collect option premium in a range-bound market with elevated-but-stable volatility.",
@@ -273,7 +291,7 @@ STRATEGY_DEFINITIONS = {
         "forbidden_direction_leans": ("MIXED",),
         "required_min_consensus_rank": 1,
         "required_confidence": CONFIDENCE_MODERATE,
-        "readiness": REQUIRES_LIQUIDITY,  # Volatility now bridged; only Liquidity remains missing.
+        "readiness": READY_TODAY,  # Volatility (Series 88) and Liquidity (Phase 9) both now bridged.
     },
     IRON_FLY: {
         "objective": "Tighter-range premium collection with defined risk, higher theta concentration.",
@@ -283,7 +301,7 @@ STRATEGY_DEFINITIONS = {
         "forbidden_direction_leans": ("MIXED",),
         "required_min_consensus_rank": 1,
         "required_confidence": CONFIDENCE_MODERATE,
-        "readiness": REQUIRES_LIQUIDITY,
+        "readiness": READY_TODAY,  # Liquidity now bridged (Phase 9).
     },
     CALENDAR: {
         "objective": "Exploit differential time decay / IV term structure across two expiries.",

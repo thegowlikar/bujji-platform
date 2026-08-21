@@ -1,0 +1,25 @@
+{
+  "timestamp": "2026-08-13T20:42:31.391052+05:30",
+  "broker": "fyers",
+  "access_method": "direct_sdk_fyers_historical_rest",
+  "instrument": "NIFTY_FUTURES",
+  "symbol_requested": "NSE:NIFTY26AUGFUT",
+  "symbol_returned": "NSE:NIFTY26AUGFUT",
+  "continuity_method": "fyers_cont_flag_1",
+  "resolution_tested": "D",
+  "range_tested": [
+    "2026-07-14",
+    "2026-08-13"
+  ],
+  "historical_status": "OK",
+  "earliest_date_confirmed": "2018-01-02",
+  "cont_flag_tested": true,
+  "volume_available": true,
+  "oi_available": false,
+  "integrity_checks_passed": true,
+  "validation_result": "CERTIFIED_AVAILABLE",
+  "limitations": [
+    "Continuous futures depth is structurally shallower than spot/VIX: real earliest date ~2018-01-02, live-bisected -- 2017 and earlier returns no_data regardless of cont_flag.",
+    "OI is never available from FYERS historical candles, at any resolution."
+  ]
+}

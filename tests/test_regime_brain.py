@@ -9,8 +9,11 @@ import pytest
 
 from bujji.core.clock import IST
 from bujji.core.models import Candle
+from bujji.intelligence.context import IntelligenceContext
 from bujji.intelligence.models import DataQuality, RegimeType
 from bujji.intelligence.regime_brain import MIN_CANDLES, RegimeBrain
+
+TEST_CONTEXT = IntelligenceContext(as_of_time=datetime(2026, 7, 20, 9, 20, tzinfo=IST))
 
 
 def _candles(closes: list[float], start_hour=9, start_min=20,
@@ -35,7 +38,7 @@ def brain():
 # ---------------------------------------------------------------------- #
 def test_insufficient_candles_returns_unknown_never_guesses(brain):
     closes = [100.0, 101.0, 100.5]  # Fewer than MIN_CANDLES.
-    reading = brain.analyze(_candles(closes))
+    reading = brain.analyze(_candles(closes), context=TEST_CONTEXT)
     assert reading.regime is RegimeType.UNKNOWN
     assert reading.confidence == 0.0
     assert reading.data_quality is DataQuality.INSUFFICIENT
@@ -44,7 +47,7 @@ def test_insufficient_candles_returns_unknown_never_guesses(brain):
 
 def test_exactly_min_candles_is_accepted(brain):
     closes = [100.0] * MIN_CANDLES
-    reading = brain.analyze(_candles(closes))
+    reading = brain.analyze(_candles(closes), context=TEST_CONTEXT)
     assert reading.data_quality is DataQuality.SUFFICIENT
 
 
@@ -58,7 +61,7 @@ def test_pure_straight_line_move_is_trending(brain):
     base) so the volatility check doesn't dominate first."""
     base = 24000.0
     closes = [base + i * 8 for i in range(10)]  # Monotonic up, real scale.
-    reading = brain.analyze(_candles(closes))
+    reading = brain.analyze(_candles(closes), context=TEST_CONTEXT)
     assert reading.regime is RegimeType.TRENDING
     assert reading.evidence["efficiency_ratio"] == pytest.approx(1.0)
     assert reading.confidence > 0.9
@@ -70,7 +73,7 @@ def test_pure_oscillation_around_a_mean_is_ranging(brain):
     scale oscillation (a few points around a ~24000 base)."""
     base = 24000.0
     closes = [base + (8 if i % 2 == 0 else -8) for i in range(12)]
-    reading = brain.analyze(_candles(closes))
+    reading = brain.analyze(_candles(closes), context=TEST_CONTEXT)
     assert reading.regime is RegimeType.RANGING
     assert reading.evidence["efficiency_ratio"] < 0.3
 
@@ -79,7 +82,7 @@ def test_large_random_looking_swings_are_volatile(brain):
     """Big candle-to-candle swings (high realized vol) must be flagged
     VOLATILE even though the net move happens to be moderate."""
     closes = [100, 108, 96, 110, 94, 112, 92, 114, 90, 116]
-    reading = brain.analyze(_candles(closes))
+    reading = brain.analyze(_candles(closes), context=TEST_CONTEXT)
     assert reading.regime is RegimeType.VOLATILE
     assert reading.evidence["realized_vol"] > 0
 
@@ -92,7 +95,7 @@ def test_range_narrowing_within_session_is_compressed(brain):
     base = 24000.0
     first_half = [base, base + 9, base - 7, base + 8, base - 6, base + 7]
     second_half = [base + 1.0, base + 1.1, base + 0.9, base + 1.0, base + 1.1, base + 1.0]
-    reading = brain.analyze(_candles(first_half + second_half))
+    reading = brain.analyze(_candles(first_half + second_half), context=TEST_CONTEXT)
     assert reading.regime is RegimeType.COMPRESSED
     assert reading.evidence["compression_ratio"] < 0.6
 
@@ -105,14 +108,14 @@ def test_range_widening_within_session_is_transitioning(brain):
     base = 24000.0
     first_half = [base, base + 0.5, base, base + 0.5, base, base + 0.5]
     second_half = [base + 3, base - 4, base + 5, base - 3, base + 4, base - 2]
-    reading = brain.analyze(_candles(first_half + second_half))
+    reading = brain.analyze(_candles(first_half + second_half), context=TEST_CONTEXT)
     assert reading.regime is RegimeType.TRANSITIONING
     assert reading.evidence["compression_ratio"] > 1.6
 
 
 def test_evidence_always_present_for_a_sufficient_reading(brain):
     closes = [100 + i for i in range(8)]
-    reading = brain.analyze(_candles(closes))
+    reading = brain.analyze(_candles(closes), context=TEST_CONTEXT)
     assert "efficiency_ratio" in reading.evidence
     assert "realized_vol" in reading.evidence
     assert "net_move" in reading.evidence
@@ -125,14 +128,14 @@ def test_candles_are_sorted_before_analysis_regardless_of_input_order(brain):
     closes = [100 + i for i in range(8)]
     ordered = _candles(closes)
     shuffled = list(reversed(ordered))
-    r1 = brain.analyze(ordered)
-    r2 = brain.analyze(shuffled)
+    r1 = brain.analyze(ordered, context=TEST_CONTEXT)
+    r2 = brain.analyze(shuffled, context=TEST_CONTEXT)
     assert r1.regime == r2.regime
     assert r1.evidence == r2.evidence
 
 
 def test_render_and_to_log_do_not_raise(brain):
-    reading = brain.analyze(_candles([100 + i for i in range(8)]))
+    reading = brain.analyze(_candles([100 + i for i in range(8)]), context=TEST_CONTEXT)
     assert "REGIME BRAIN" in reading.render()
     log = reading.to_log()
     assert log["brain"] == "regime"
@@ -163,7 +166,7 @@ def test_real_quiet_day_2026_07_01_classifies_as_ranging(brain):
     """Regression fixture: a genuinely quiet real NIFTY session must
     classify as RANGING with meaningful confidence -- validated live
     against this exact session in this codebase's development history."""
-    reading = brain.analyze(_real_day_2026_07_01())
+    reading = brain.analyze(_real_day_2026_07_01(), context=TEST_CONTEXT)
     assert reading.regime is RegimeType.RANGING
     assert reading.confidence > 0.5
     assert reading.data_quality is DataQuality.SUFFICIENT

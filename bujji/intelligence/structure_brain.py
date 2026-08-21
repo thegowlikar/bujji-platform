@@ -42,7 +42,8 @@ from __future__ import annotations
 
 from typing import Optional
 
-from ..core.clock import now_ist
+from .context import IntelligenceContext
+from .evidence import wrap_evidence
 from .models import DataQuality, StructureProximity, StructureReading
 
 NEAR_WALL_THRESHOLD_PCT = 0.25  # Roughly one NIFTY strike-width at ~24000 spot.
@@ -58,8 +59,9 @@ class StructureBrain:
         self,
         spot: float,
         strikes: list[tuple[float, float, float]],
+        context: IntelligenceContext,
     ) -> StructureReading:
-        as_of = now_ist()
+        as_of = context.as_of_time
 
         if spot is None or spot <= 0:
             return self._unknown(as_of, spot, "invalid_spot: spot must be positive")
@@ -106,7 +108,8 @@ class StructureBrain:
             distance_to_support_pct=round(distance_to_support_pct, 4) if distance_to_support_pct is not None else None,
             put_call_oi_ratio=round(put_call_oi_ratio, 4) if put_call_oi_ratio is not None else None,
             proximity=proximity, confidence=confidence, data_quality=DataQuality.SUFFICIENT,
-            evidence=evidence, reason=reason, as_of=as_of,
+            evidence=evidence, evidence_lineage=wrap_evidence(evidence, context=context),
+            reason=reason, as_of=as_of,
         )
 
     @staticmethod

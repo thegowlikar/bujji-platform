@@ -145,7 +145,13 @@ def test_mixed_direction_when_lenses_genuinely_disagree():
     # depending on the exact derived states — assert the INVARIANT
     # (both lens opinions always fully preserved) unconditionally, and
     # additionally assert MIXED behavior IF the two lenses do disagree.
-    assert len(a.participating_lenses) == 2
+    # Name-based, not count-based: the invariant is that EVERY lens opinion
+    # survives into the assessment, which a hardcoded 2 stopped expressing
+    # the moment OPTIONS_POSITIONING_DIRECTION was wired in on 2026-08-20.
+    lens_names = {lo.lens_name for lo in a.participating_lenses}
+    assert mdi_taxonomy.PRICE_STRUCTURE_DIRECTION in lens_names
+    assert mdi_taxonomy.MARKET_STRUCTURE_DIRECTION in lens_names
+    assert lens_names <= set(mdi_taxonomy.KNOWN_LENS_NAMES)
     assert price_lens in a.participating_lenses
     assert structure_lens in a.participating_lenses
 
@@ -246,8 +252,14 @@ def test_market_structure_lens_honest_unknown_for_spatial_only_location():
 def test_explanation_is_genuinely_computed():
     psi, mssi = _assess_both([100, 101, 102, 103, 104, 105])
     a = mdi_engine.determine_market_direction(psi, mssi, timestamp="2026-07-24T09:30:00")
-    assert len(a.explanation.which_lenses_participated) == 2
-    assert len(a.explanation.per_lens_evidence) == 2
+    # Every participating lens must be named in the explanation -- the
+    # count is incidental, the completeness is the point.
+    assert (set(a.explanation.which_lenses_participated)
+            == {lo.lens_name for lo in a.participating_lenses})
+    # One evidence line PER PARTICIPATING LENS -- the completeness is the
+    # invariant, not the number. A hardcoded 2 stopped expressing it when
+    # OPTIONS_POSITIONING_DIRECTION was wired in on 2026-08-20.
+    assert len(a.explanation.per_lens_evidence) == len(a.participating_lenses)
     assert a.explanation.why_not_a_simple_vote
 
 

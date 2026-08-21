@@ -53,17 +53,30 @@ DOMAIN_VOLATILITY, each with disclosed reasoning:
   breakevens relative to width) or when compression suggests price is
   likely to stay pinned.
 
-IRON_CONDOR/IRON_FLY/CALENDAR are NOT in this rule set: the former two
-remain gated on DOMAIN_LIQUIDITY (still unavailable) regardless of
-volatility; CALENDAR requires DOMAIN_VOLATILITY_TERM_STRUCTURE
+CALENDAR is NOT in this rule set: it requires DOMAIN_VOLATILITY_TERM_STRUCTURE
 specifically (still unavailable, deliberately kept distinct from plain
 DOMAIN_VOLATILITY — see taxonomy.py's module docstring).
+
+---------------------------------------------------------------------
+Liquidity gating design (Phase 9 follow-up — "Liquidity Intelligence
+Bridge"), one rule for every family that requires DOMAIN_LIQUIDITY
+(SYNTHETIC, IRON_CONDOR, IRON_FLY), mirroring the volatility pattern
+exactly -- a real per-call `Optional[LiquidityReading]`, never assumed:
+---------------------------------------------------------------------
+- `_rule_liquidity`: tightness in (TIGHT, NORMAL) -> supports entering/
+  exiting the structure without meaningful slippage. tightness == WIDE
+  -> does not (the spread itself would erode the edge). tightness ==
+  UNKNOWN (invalid/missing quote for this specific call) is handled
+  BEFORE this rule runs -- it is treated as a per-call evidence gap
+  (mirrors vsb is None), not fed into the rule as if it were a real
+  reading.
 """
 from __future__ import annotations
 
 import hashlib
 from typing import Callable, Dict, List, Optional, Tuple
 
+from bujji.intelligence.models import LiquidityReading, SpreadTightness
 from bujji.msi_consensus.models import ConsensusAssessment
 from bujji.msi_consensus import taxonomy as consensus_taxonomy
 from bujji.msi_market_direction.models import MarketDirectionAssessment
@@ -138,12 +151,24 @@ _VOLATILITY_RULES: Dict[str, Callable[[VolatilityStructureAssessment], Tuple[boo
 }
 
 
+def _rule_liquidity(liquidity: LiquidityReading) -> Tuple[bool, str]:
+    ok = liquidity.tightness in (SpreadTightness.TIGHT, SpreadTightness.NORMAL)
+    return ok, (
+        f"liquidity_tightness={liquidity.tightness.value}: "
+        f"{'spread tight enough to enter/exit without meaningful slippage' if ok else 'spread too wide -- would erode the edge'}."
+    )
+
+
+_LIQUIDITY_RULE_FAMILIES: Tuple[str, ...] = (taxonomy.SYNTHETIC, taxonomy.IRON_CONDOR, taxonomy.IRON_FLY)
+
+
 def assess_strategy_suitability(
     family: str,
     mdi: MarketDirectionAssessment,
     mssi: MarketStructureAssessment,
     consensus: ConsensusAssessment,
     vsb: Optional[VolatilityStructureAssessment] = None,
+    liquidity: Optional[LiquidityReading] = None,
     *,
     timestamp: str,
     provenance: str = _config.DEFAULT_PROVENANCE,
@@ -160,6 +185,16 @@ def assess_strategy_suitability(
     # INSUFFICIENT_EVIDENCE.
     if taxonomy.DOMAIN_VOLATILITY in definition["required_evidence"] and vsb is None:
         missing_domains.append(taxonomy.DOMAIN_VOLATILITY)
+
+    # Same pattern for DOMAIN_LIQUIDITY (Phase 9): no reading at all for
+    # this call, OR the reading exists but is itself UNKNOWN (invalid/
+    # missing quote -- LiquidityBrain's own honest fallback), is a
+    # genuine per-call evidence gap. Never treated as "tight enough" by
+    # default -- absence of evidence is not evidence of tightness.
+    if taxonomy.DOMAIN_LIQUIDITY in definition["required_evidence"] and (
+        liquidity is None or liquidity.tightness == SpreadTightness.UNKNOWN
+    ):
+        missing_domains.append(taxonomy.DOMAIN_LIQUIDITY)
     missing_domains = tuple(sorted(set(missing_domains)))
 
     supporting_reasons: List[str] = []
@@ -170,10 +205,23 @@ def assess_strategy_suitability(
     if missing_domains:
         suitability = taxonomy.INSUFFICIENT_EVIDENCE
         confidence = taxonomy.CONFIDENCE_NONE
+        # A domain can be missing either because it's genuinely absent
+        # codebase-wide (taxonomy.UNAVAILABLE_DOMAINS) or because this
+        # specific call was given no real per-call evidence object for
+        # an otherwise-available domain (vsb is None / liquidity is
+        # None or UNKNOWN) -- both honestly resolve to
+        # INSUFFICIENT_EVIDENCE, but the reason text distinguishes them.
+        per_call_gap_domains = {d for d in missing_domains if d not in taxonomy.UNAVAILABLE_DOMAINS}
+        codebase_gap_domains = {d for d in missing_domains if d in taxonomy.UNAVAILABLE_DOMAINS}
+        if per_call_gap_domains and not codebase_gap_domains:
+            gap_desc = "for this specific call"
+        elif codebase_gap_domains and not per_call_gap_domains:
+            gap_desc = "in this codebase today"
+        else:
+            gap_desc = "some for this specific call, some in this codebase today"
         rejecting_reasons.append(
             f"Required evidence domain(s) {missing_domains} are genuinely unavailable "
-            f"({'for this specific call' if taxonomy.DOMAIN_VOLATILITY in missing_domains and vsb is None and taxonomy.DOMAIN_VOLATILITY not in taxonomy.UNAVAILABLE_DOMAINS else 'in this codebase today'}) "
-            f"-- suitability cannot be determined, honestly reported as insufficient rather than guessed."
+            f"({gap_desc}) -- suitability cannot be determined, honestly reported as insufficient rather than guessed."
         )
     else:
         direction_ok = True
@@ -245,7 +293,18 @@ def assess_strategy_suitability(
                     rejecting_reasons.append(f"{reason} (volatility condition for {family}: not satisfied)")
                     rejecting_evidence.append(vsb.assessment_id)
 
-        if direction_forbidden or not direction_ok or not consensus_ok or not structure_ok or not volatility_ok:
+        liquidity_ok = True
+        if taxonomy.DOMAIN_LIQUIDITY in definition["required_evidence"] and liquidity is not None and family in _LIQUIDITY_RULE_FAMILIES:
+            liquidity_ok, reason = _rule_liquidity(liquidity)
+            liquidity_evidence_id = f"LIQ-{liquidity.tightness.value}-{liquidity.as_of.isoformat() if liquidity.as_of else 'NA'}"
+            if liquidity_ok:
+                supporting_reasons.append(f"{reason} (liquidity condition for {family}: satisfied)")
+                supporting_evidence.append(liquidity_evidence_id)
+            else:
+                rejecting_reasons.append(f"{reason} (liquidity condition for {family}: not satisfied)")
+                rejecting_evidence.append(liquidity_evidence_id)
+
+        if direction_forbidden or not direction_ok or not consensus_ok or not structure_ok or not volatility_ok or not liquidity_ok:
             suitability = taxonomy.UNSUITABLE
         else:
             suitability = taxonomy.SUITABLE
@@ -298,21 +357,22 @@ def assess_all_families(
     mssi: MarketStructureAssessment,
     consensus: ConsensusAssessment,
     vsb: Optional[VolatilityStructureAssessment] = None,
+    liquidity: Optional[LiquidityReading] = None,
     *,
     timestamp: str,
     provenance: str = _config.DEFAULT_PROVENANCE,
     schema_version: str = _config.SCHEMA_VERSION,
 ) -> Tuple[StrategySuitabilityAssessment, ...]:
     """Deliverable 5 -- every family assessed independently; this
-    function is a pure map, never a comparison/ranking. `vsb` is
-    optional and backward-compatible: calling this with only
-    (mdi, mssi, consensus), as every pre-Series-88-follow-up caller
-    still does, produces IDENTICAL results to before this change for
-    every family that does NOT require DOMAIN_VOLATILITY, and honestly
-    INSUFFICIENT_EVIDENCE (not a crash, not a silent guess) for every
-    family that does."""
+    function is a pure map, never a comparison/ranking. `vsb` and
+    `liquidity` are both optional and backward-compatible: calling this
+    with only (mdi, mssi, consensus), as every pre-Series-88 caller
+    still does, produces IDENTICAL results to before either bridge for
+    every family that does NOT require DOMAIN_VOLATILITY/DOMAIN_LIQUIDITY,
+    and honestly INSUFFICIENT_EVIDENCE (not a crash, not a silent guess)
+    for every family that does."""
     return tuple(
-        assess_strategy_suitability(family, mdi, mssi, consensus, vsb, timestamp=timestamp, provenance=provenance, schema_version=schema_version)
+        assess_strategy_suitability(family, mdi, mssi, consensus, vsb, liquidity, timestamp=timestamp, provenance=provenance, schema_version=schema_version)
         for family in taxonomy.ALL_STRATEGY_FAMILIES
     )
 

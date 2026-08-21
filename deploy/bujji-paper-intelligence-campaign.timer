@@ -1,0 +1,69 @@
+[Unit]
+# =========================================================================
+# BUJJI PAPER INTELLIGENCE CAMPAIGN — TIMER, Phase 6
+#
+# Fires bujji-paper-intelligence-campaign.service (Type=oneshot) once
+# per intended NSE trading day, shortly after market open. Mirrors
+# bujji-daily-intelligence.timer / bujji-shadow-decision-campaign.timer's
+# own proven pattern exactly. This timer is the ONLY scheduling
+# mechanism for its service; nothing else triggers it.
+#
+# STATUS: INSTALLED 2026-08-19 from this tracked copy (deploy/ is the
+# source of truth; /etc/systemd/system holds the installed copy).
+# Operator-approved install, same session as the 09:27:30 collision fix.
+# =========================================================================
+Description=Daily trigger for Bujji Paper Intelligence Campaign (weekdays only)
+
+[Timer]
+# Weekends excluded structurally by the calendar expression (Mon..Fri)
+# -- a first, coarse safety net. The SECOND, authoritative check is
+# inside the service's own entrypoint script
+# (bujji.market_calendar.MarketCalendar.is_trading_day()), which also
+# knows about listed NSE holidays. On an NSE holiday the timer still
+# fires; the entrypoint's own calendar check exits 0 immediately (a
+# clean, expected skip, never a fabricated session).
+# 09:27:30 IST (corrected 2026-08-19; was 09:20). 09:20 landed EXACTLY on
+# the shadow-decision-campaign's five-minute cycle beat (09:10 start ->
+# :15/:20/:25...), stacking this unit's startup burst -- connect,
+# instrument-master resolve, first polls -- on top of a sibling's cycle
+# against the shared FYERS 10/s ceiling. That is the precise collision
+# bujji-options-os-trading.timer's 09:22:30 offset was engineered to
+# avoid, so this unit uses the same trick one beat later: the :25/:30
+# midpoint. Current fire map this slots into (the old comment's
+# "09:00 daily-intelligence / 09:10 +10min" chain is long stale):
+#   08:45:00  bujji-token-preflight
+#   09:10:00  bujji-shadow-decision-campaign  (cycles on :15/:20/:25...)
+#   09:16:00  bujji-daily-intelligence
+#   09:17:00  bujji-futures-depth-poller
+#   09:22:30  bujji-options-os-trading
+#   09:27:30  THIS UNIT
+# No functional dependency between any of them -- each owns its own lock
+# and its own artifact directory.
+OnCalendar=Mon..Fri 09:27:30 Asia/Kolkata
+
+# Never replay a missed fire at boot: a market-hours campaign started
+# hours late is a session's worth of misleading half-data, and the
+# entrypoint's own market gates would mostly refuse it anyway -- fail
+# visibly on the day, run normally the next (same Persistent=false
+# convention as every other bujji timer since 2026-08-18).
+Persistent=false
+
+# Systemd's own single-instance-per-unit-name semantics defer a second
+# OnCalendar fire while the service is still running from the previous
+# fire -- the FIRST of two independent overlap-prevention layers. The
+# SECOND, belt-and-braces layer is application-level:
+# bujji.core.process_lock.ProcessLock at
+# data/paper_intelligence_campaign.lock (a DEDICATED lock path --
+# never daily_intelligence.lock or shadow_decision_campaign.lock),
+# which also protects against a manually invoked
+# run_paper_intelligence_campaign.py overlapping a timer-fired one.
+# A THIRD layer, unique to this unit: refuse_if_authoritative_runtime_active()
+# refuses to start at all if bujji-daily-intelligence.service currently
+# owns its own lock, avoiding a duplicate broker/capture session across
+# systems too.
+# Fire late rather than early, and tightly: a 1min wander could put the
+# fire back onto a sibling's cycle beat.
+AccuracySec=30s
+
+[Install]
+WantedBy=timers.target

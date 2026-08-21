@@ -1,0 +1,931 @@
+{
+  "captured_at_ist": "2026-08-13T09:22:04.142156+05:30",
+  "futures_symbol": "NSE:NIFTY26AUGFUT",
+  "option_symbol": "NSE:NIFTY2681824100CE",
+  "futures": {
+    "poll_1": {
+      "label": "futures_poll_1",
+      "row_present": true,
+      "top_level_keys": [
+        "ask",
+        "atp",
+        "bids",
+        "c",
+        "ch",
+        "chp",
+        "expiry",
+        "h",
+        "l",
+        "lower_ckt",
+        "ltp",
+        "ltq",
+        "ltt",
+        "o",
+        "oi",
+        "oiflag",
+        "oipercent",
+        "pdoi",
+        "tick_Size",
+        "totalbuyqty",
+        "totalsellqty",
+        "upper_ckt",
+        "v"
+      ],
+      "shape": {
+        "totalbuyqty": "int",
+        "totalsellqty": "int",
+        "ask": [
+          {
+            "price": "float",
+            "volume": "int",
+            "ord": "int"
+          },
+          "...(5 items total)"
+        ],
+        "bids": [
+          {
+            "price": "float",
+            "volume": "int",
+            "ord": "int"
+          },
+          "...(5 items total)"
+        ],
+        "o": "float",
+        "h": "float",
+        "l": "int",
+        "c": "float",
+        "chp": "float",
+        "tick_Size": "float",
+        "ch": "float",
+        "ltq": "int",
+        "ltt": "int",
+        "ltp": "float",
+        "v": "int",
+        "atp": "float",
+        "lower_ckt": "float",
+        "upper_ckt": "float",
+        "expiry": "str",
+        "oi": "int",
+        "oiflag": "bool",
+        "pdoi": "int",
+        "oipercent": "float"
+      },
+      "example": {
+        "totalbuyqty": 266760,
+        "totalsellqty": 318435,
+        "ask": [
+          {
+            "price": 24428.5,
+            "volume": 65,
+            "ord": 1
+          },
+          {
+            "price": 24428.6,
+            "volume": 390,
+            "ord": 3
+          },
+          {
+            "price": 24428.9,
+            "volume": 260,
+            "ord": 1
+          },
+          {
+            "price": 24429,
+            "volume": 975,
+            "ord": 4
+          },
+          {
+            "price": 24429.1,
+            "volume": 845,
+            "ord": 4
+          }
+        ],
+        "bids": [
+          {
+            "price": 24416.1,
+            "volume": 195,
+            "ord": 3
+          },
+          {
+            "price": 24416,
+            "volume": 195,
+            "ord": 3
+          },
+          {
+            "price": 24415,
+            "volume": 1040,
+            "ord": 12
+          },
+          {
+            "price": 24413.9,
+            "volume": 1495,
+            "ord": 2
+          },
+          {
+            "price": 24413.8,
+            "volume": 325,
+            "ord": 2
+          }
+        ],
+        "o": 24460.5,
+        "h": 24460.5,
+        "l": 24415,
+        "c": 24470.5,
+        "chp": -0.22,
+        "tick_Size": 0.1,
+        "ch": -54.3,
+        "ltq": 65,
+        "ltt": 1786593123,
+        "ltp": 24416.2,
+        "v": 103415,
+        "atp": 24431.29,
+        "lower_ckt": 22023.5,
+        "upper_ckt": 26917.5,
+        "expiry": "1787652600",
+        "oi": 12587900,
+        "oiflag": true,
+        "pdoi": 12562800,
+        "oipercent": 0.2
+      }
+    },
+    "poll_2": {
+      "label": "futures_poll_2",
+      "row_present": true,
+      "top_level_keys": [
+        "ask",
+        "atp",
+        "bids",
+        "c",
+        "ch",
+        "chp",
+        "expiry",
+        "h",
+        "l",
+        "lower_ckt",
+        "ltp",
+        "ltq",
+        "ltt",
+        "o",
+        "oi",
+        "oiflag",
+        "oipercent",
+        "pdoi",
+        "tick_Size",
+        "totalbuyqty",
+        "totalsellqty",
+        "upper_ckt",
+        "v"
+      ],
+      "shape": {
+        "totalbuyqty": "int",
+        "totalsellqty": "int",
+        "ask": [
+          {
+            "price": "float",
+            "volume": "int",
+            "ord": "int"
+          },
+          "...(5 items total)"
+        ],
+        "bids": [
+          {
+            "price": "float",
+            "volume": "int",
+            "ord": "int"
+          },
+          "...(5 items total)"
+        ],
+        "o": "float",
+        "h": "float",
+        "l": "int",
+        "c": "float",
+        "chp": "float",
+        "tick_Size": "float",
+        "ch": "float",
+        "ltq": "int",
+        "ltt": "int",
+        "ltp": "int",
+        "v": "int",
+        "atp": "float",
+        "lower_ckt": "float",
+        "upper_ckt": "float",
+        "expiry": "str",
+        "oi": "int",
+        "oiflag": "bool",
+        "pdoi": "int",
+        "oipercent": "float"
+      },
+      "example": {
+        "totalbuyqty": 272480,
+        "totalsellqty": 317720,
+        "ask": [
+          {
+            "price": 24426.4,
+            "volume": 390,
+            "ord": 3
+          },
+          {
+            "price": 24426.9,
+            "volume": 780,
+            "ord": 3
+          },
+          {
+            "price": 24427.2,
+            "volume": 260,
+            "ord": 1
+          },
+          {
+            "price": 24427.3,
+            "volume": 325,
+            "ord": 2
+          },
+          {
+            "price": 24427.4,
+            "volume": 65,
+            "ord": 1
+          }
+        ],
+        "bids": [
+          {
+            "price": 24416.6,
+            "volume": 130,
+            "ord": 2
+          },
+          {
+            "price": 24416.2,
+            "volume": 65,
+            "ord": 1
+          },
+          {
+            "price": 24416.1,
+            "volume": 65,
+            "ord": 1
+          },
+          {
+            "price": 24416,
+            "volume": 195,
+            "ord": 3
+          },
+          {
+            "price": 24415,
+            "volume": 1040,
+            "ord": 12
+          }
+        ],
+        "o": 24460.5,
+        "h": 24460.5,
+        "l": 24415,
+        "c": 24470.5,
+        "chp": -0.18,
+        "tick_Size": 0.1,
+        "ch": -44.5,
+        "ltq": 65,
+        "ltt": 1786593128,
+        "ltp": 24426,
+        "v": 103610,
+        "atp": 24431.28,
+        "lower_ckt": 22023.5,
+        "upper_ckt": 26917.5,
+        "expiry": "1787652600",
+        "oi": 12587900,
+        "oiflag": true,
+        "pdoi": 12562800,
+        "oipercent": 0.2
+      }
+    },
+    "snapshot_vs_incremental_signal": {
+      "comparable": true,
+      "keys_only_in_first": [],
+      "keys_only_in_second": [],
+      "shared_list_field_length_deltas": {
+        "bids": {
+          "first_len": 5,
+          "second_len": 5
+        },
+        "ask": {
+          "first_len": 5,
+          "second_len": 5
+        }
+      },
+      "note": "Structurally similar key sets and list lengths across both polls are WEAK EVIDENCE the response is a full current-book snapshot each time. Missing/shrunk keys on the second poll are WEAK EVIDENCE of an incremental/delta feed. A human must read both raw captures before concluding either way -- see the module docstring."
+    }
+  },
+  "option": {
+    "poll_1": {
+      "label": "option_poll_1",
+      "row_present": true,
+      "top_level_keys": [
+        "ask",
+        "atp",
+        "bids",
+        "c",
+        "ch",
+        "chp",
+        "expiry",
+        "h",
+        "l",
+        "lower_ckt",
+        "ltp",
+        "ltq",
+        "ltt",
+        "o",
+        "oi",
+        "oiflag",
+        "oipercent",
+        "pdoi",
+        "tick_Size",
+        "totalbuyqty",
+        "totalsellqty",
+        "upper_ckt",
+        "v"
+      ],
+      "shape": {
+        "totalbuyqty": "int",
+        "totalsellqty": "int",
+        "ask": [
+          {
+            "price": "float",
+            "volume": "int",
+            "ord": "int"
+          },
+          "...(5 items total)"
+        ],
+        "bids": [
+          {
+            "price": "float",
+            "volume": "int",
+            "ord": "int"
+          },
+          "...(5 items total)"
+        ],
+        "o": "float",
+        "h": "float",
+        "l": "float",
+        "c": "float",
+        "chp": "float",
+        "tick_Size": "float",
+        "ch": "float",
+        "ltq": "int",
+        "ltt": "int",
+        "ltp": "int",
+        "v": "int",
+        "atp": "float",
+        "lower_ckt": "float",
+        "upper_ckt": "float",
+        "expiry": "str",
+        "oi": "int",
+        "oiflag": "bool",
+        "pdoi": "int",
+        "oipercent": "int"
+      },
+      "example": {
+        "totalbuyqty": 171405,
+        "totalsellqty": 50050,
+        "ask": [
+          {
+            "price": 316.05,
+            "volume": 260,
+            "ord": 2
+          },
+          {
+            "price": 316.1,
+            "volume": 520,
+            "ord": 3
+          },
+          {
+            "price": 316.15,
+            "volume": 390,
+            "ord": 3
+          },
+          {
+            "price": 316.2,
+            "volume": 650,
+            "ord": 5
+          },
+          {
+            "price": 316.25,
+            "volume": 260,
+            "ord": 3
+          }
+        ],
+        "bids": [
+          {
+            "price": 315.25,
+            "volume": 520,
+            "ord": 4
+          },
+          {
+            "price": 315.2,
+            "volume": 520,
+            "ord": 4
+          },
+          {
+            "price": 315.15,
+            "volume": 260,
+            "ord": 3
+          },
+          {
+            "price": 315.1,
+            "volume": 65,
+            "ord": 1
+          },
+          {
+            "price": 315.05,
+            "volume": 390,
+            "ord": 3
+          }
+        ],
+        "o": 327.15,
+        "h": 344.75,
+        "l": 312.55,
+        "c": 365.75,
+        "chp": -13.6,
+        "tick_Size": 0.05,
+        "ch": -49.75,
+        "ltq": 65,
+        "ltt": 1786593128,
+        "ltp": 316,
+        "v": 217035,
+        "atp": 323.96,
+        "lower_ckt": 0.05,
+        "upper_ckt": 849.1,
+        "expiry": "1787047800",
+        "oi": 369200,
+        "oiflag": true,
+        "pdoi": 321035,
+        "oipercent": 15
+      }
+    },
+    "poll_2": {
+      "label": "option_poll_2",
+      "row_present": true,
+      "top_level_keys": [
+        "ask",
+        "atp",
+        "bids",
+        "c",
+        "ch",
+        "chp",
+        "expiry",
+        "h",
+        "l",
+        "lower_ckt",
+        "ltp",
+        "ltq",
+        "ltt",
+        "o",
+        "oi",
+        "oiflag",
+        "oipercent",
+        "pdoi",
+        "tick_Size",
+        "totalbuyqty",
+        "totalsellqty",
+        "upper_ckt",
+        "v"
+      ],
+      "shape": {
+        "totalbuyqty": "int",
+        "totalsellqty": "int",
+        "ask": [
+          {
+            "price": "float",
+            "volume": "int",
+            "ord": "int"
+          },
+          "...(5 items total)"
+        ],
+        "bids": [
+          {
+            "price": "float",
+            "volume": "int",
+            "ord": "int"
+          },
+          "...(5 items total)"
+        ],
+        "o": "float",
+        "h": "float",
+        "l": "float",
+        "c": "float",
+        "chp": "float",
+        "tick_Size": "float",
+        "ch": "float",
+        "ltq": "int",
+        "ltt": "int",
+        "ltp": "int",
+        "v": "int",
+        "atp": "float",
+        "lower_ckt": "float",
+        "upper_ckt": "float",
+        "expiry": "str",
+        "oi": "int",
+        "oiflag": "bool",
+        "pdoi": "int",
+        "oipercent": "int"
+      },
+      "example": {
+        "totalbuyqty": 173355,
+        "totalsellqty": 49985,
+        "ask": [
+          {
+            "price": 316.1,
+            "volume": 455,
+            "ord": 4
+          },
+          {
+            "price": 316.15,
+            "volume": 520,
+            "ord": 4
+          },
+          {
+            "price": 316.2,
+            "volume": 1040,
+            "ord": 8
+          },
+          {
+            "price": 316.25,
+            "volume": 195,
+            "ord": 3
+          },
+          {
+            "price": 316.3,
+            "volume": 325,
+            "ord": 2
+          }
+        ],
+        "bids": [
+          {
+            "price": 315.25,
+            "volume": 455,
+            "ord": 4
+          },
+          {
+            "price": 315.2,
+            "volume": 585,
+            "ord": 5
+          },
+          {
+            "price": 315.15,
+            "volume": 520,
+            "ord": 4
+          },
+          {
+            "price": 315.1,
+            "volume": 520,
+            "ord": 4
+          },
+          {
+            "price": 315.05,
+            "volume": 585,
+            "ord": 4
+          }
+        ],
+        "o": 327.15,
+        "h": 344.75,
+        "l": 312.55,
+        "c": 365.75,
+        "chp": -13.88,
+        "tick_Size": 0.05,
+        "ch": -50.75,
+        "ltq": 65,
+        "ltt": 1786593133,
+        "ltp": 315,
+        "v": 217555,
+        "atp": 323.95,
+        "lower_ckt": 0.05,
+        "upper_ckt": 849.1,
+        "expiry": "1787047800",
+        "oi": 369200,
+        "oiflag": true,
+        "pdoi": 321035,
+        "oipercent": 15
+      }
+    },
+    "snapshot_vs_incremental_signal": {
+      "comparable": true,
+      "keys_only_in_first": [],
+      "keys_only_in_second": [],
+      "shared_list_field_length_deltas": {
+        "bids": {
+          "first_len": 5,
+          "second_len": 5
+        },
+        "ask": {
+          "first_len": 5,
+          "second_len": 5
+        }
+      },
+      "note": "Structurally similar key sets and list lengths across both polls are WEAK EVIDENCE the response is a full current-book snapshot each time. Missing/shrunk keys on the second poll are WEAK EVIDENCE of an incremental/delta feed. A human must read both raw captures before concluding either way -- see the module docstring."
+    }
+  },
+  "raw_responses": {
+    "futures_poll_1": {
+      "totalbuyqty": 266760,
+      "totalsellqty": 318435,
+      "ask": [
+        {
+          "price": 24428.5,
+          "volume": 65,
+          "ord": 1
+        },
+        {
+          "price": 24428.6,
+          "volume": 390,
+          "ord": 3
+        },
+        {
+          "price": 24428.9,
+          "volume": 260,
+          "ord": 1
+        },
+        {
+          "price": 24429,
+          "volume": 975,
+          "ord": 4
+        },
+        {
+          "price": 24429.1,
+          "volume": 845,
+          "ord": 4
+        }
+      ],
+      "bids": [
+        {
+          "price": 24416.1,
+          "volume": 195,
+          "ord": 3
+        },
+        {
+          "price": 24416,
+          "volume": 195,
+          "ord": 3
+        },
+        {
+          "price": 24415,
+          "volume": 1040,
+          "ord": 12
+        },
+        {
+          "price": 24413.9,
+          "volume": 1495,
+          "ord": 2
+        },
+        {
+          "price": 24413.8,
+          "volume": 325,
+          "ord": 2
+        }
+      ],
+      "o": 24460.5,
+      "h": 24460.5,
+      "l": 24415,
+      "c": 24470.5,
+      "chp": -0.22,
+      "tick_Size": 0.1,
+      "ch": -54.3,
+      "ltq": 65,
+      "ltt": 1786593123,
+      "ltp": 24416.2,
+      "v": 103415,
+      "atp": 24431.29,
+      "lower_ckt": 22023.5,
+      "upper_ckt": 26917.5,
+      "expiry": "1787652600",
+      "oi": 12587900,
+      "oiflag": true,
+      "pdoi": 12562800,
+      "oipercent": 0.2
+    },
+    "futures_poll_2": {
+      "totalbuyqty": 272480,
+      "totalsellqty": 317720,
+      "ask": [
+        {
+          "price": 24426.4,
+          "volume": 390,
+          "ord": 3
+        },
+        {
+          "price": 24426.9,
+          "volume": 780,
+          "ord": 3
+        },
+        {
+          "price": 24427.2,
+          "volume": 260,
+          "ord": 1
+        },
+        {
+          "price": 24427.3,
+          "volume": 325,
+          "ord": 2
+        },
+        {
+          "price": 24427.4,
+          "volume": 65,
+          "ord": 1
+        }
+      ],
+      "bids": [
+        {
+          "price": 24416.6,
+          "volume": 130,
+          "ord": 2
+        },
+        {
+          "price": 24416.2,
+          "volume": 65,
+          "ord": 1
+        },
+        {
+          "price": 24416.1,
+          "volume": 65,
+          "ord": 1
+        },
+        {
+          "price": 24416,
+          "volume": 195,
+          "ord": 3
+        },
+        {
+          "price": 24415,
+          "volume": 1040,
+          "ord": 12
+        }
+      ],
+      "o": 24460.5,
+      "h": 24460.5,
+      "l": 24415,
+      "c": 24470.5,
+      "chp": -0.18,
+      "tick_Size": 0.1,
+      "ch": -44.5,
+      "ltq": 65,
+      "ltt": 1786593128,
+      "ltp": 24426,
+      "v": 103610,
+      "atp": 24431.28,
+      "lower_ckt": 22023.5,
+      "upper_ckt": 26917.5,
+      "expiry": "1787652600",
+      "oi": 12587900,
+      "oiflag": true,
+      "pdoi": 12562800,
+      "oipercent": 0.2
+    },
+    "option_poll_1": {
+      "totalbuyqty": 171405,
+      "totalsellqty": 50050,
+      "ask": [
+        {
+          "price": 316.05,
+          "volume": 260,
+          "ord": 2
+        },
+        {
+          "price": 316.1,
+          "volume": 520,
+          "ord": 3
+        },
+        {
+          "price": 316.15,
+          "volume": 390,
+          "ord": 3
+        },
+        {
+          "price": 316.2,
+          "volume": 650,
+          "ord": 5
+        },
+        {
+          "price": 316.25,
+          "volume": 260,
+          "ord": 3
+        }
+      ],
+      "bids": [
+        {
+          "price": 315.25,
+          "volume": 520,
+          "ord": 4
+        },
+        {
+          "price": 315.2,
+          "volume": 520,
+          "ord": 4
+        },
+        {
+          "price": 315.15,
+          "volume": 260,
+          "ord": 3
+        },
+        {
+          "price": 315.1,
+          "volume": 65,
+          "ord": 1
+        },
+        {
+          "price": 315.05,
+          "volume": 390,
+          "ord": 3
+        }
+      ],
+      "o": 327.15,
+      "h": 344.75,
+      "l": 312.55,
+      "c": 365.75,
+      "chp": -13.6,
+      "tick_Size": 0.05,
+      "ch": -49.75,
+      "ltq": 65,
+      "ltt": 1786593128,
+      "ltp": 316,
+      "v": 217035,
+      "atp": 323.96,
+      "lower_ckt": 0.05,
+      "upper_ckt": 849.1,
+      "expiry": "1787047800",
+      "oi": 369200,
+      "oiflag": true,
+      "pdoi": 321035,
+      "oipercent": 15
+    },
+    "option_poll_2": {
+      "totalbuyqty": 173355,
+      "totalsellqty": 49985,
+      "ask": [
+        {
+          "price": 316.1,
+          "volume": 455,
+          "ord": 4
+        },
+        {
+          "price": 316.15,
+          "volume": 520,
+          "ord": 4
+        },
+        {
+          "price": 316.2,
+          "volume": 1040,
+          "ord": 8
+        },
+        {
+          "price": 316.25,
+          "volume": 195,
+          "ord": 3
+        },
+        {
+          "price": 316.3,
+          "volume": 325,
+          "ord": 2
+        }
+      ],
+      "bids": [
+        {
+          "price": 315.25,
+          "volume": 455,
+          "ord": 4
+        },
+        {
+          "price": 315.2,
+          "volume": 585,
+          "ord": 5
+        },
+        {
+          "price": 315.15,
+          "volume": 520,
+          "ord": 4
+        },
+        {
+          "price": 315.1,
+          "volume": 520,
+          "ord": 4
+        },
+        {
+          "price": 315.05,
+          "volume": 585,
+          "ord": 4
+        }
+      ],
+      "o": 327.15,
+      "h": 344.75,
+      "l": 312.55,
+      "c": 365.75,
+      "chp": -13.88,
+      "tick_Size": 0.05,
+      "ch": -50.75,
+      "ltq": 65,
+      "ltt": 1786593133,
+      "ltp": 315,
+      "v": 217555,
+      "atp": 323.95,
+      "lower_ckt": 0.05,
+      "upper_ckt": 849.1,
+      "expiry": "1787047800",
+      "oi": 369200,
+      "oiflag": true,
+      "pdoi": 321035,
+      "oipercent": 15
+    }
+  }
+}

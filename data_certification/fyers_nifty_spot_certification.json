@@ -1,0 +1,17 @@
+{
+  "timestamp": "2026-08-12T09:27:14.807499+00:00",
+  "broker": "fyers",
+  "access_method": "direct_sdk_fyers_broker_py",
+  "instrument": "NIFTY_SPOT",
+  "symbol_requested": "NSE:NIFTY50-INDEX",
+  "symbol_returned": "NSE:NIFTY50-INDEX",
+  "quote_status": "NOT_TESTED_SEPARATELY",
+  "historical_status": "OK",
+  "volume_available": false,
+  "oi_available": false,
+  "timestamp_valid": true,
+  "validation_result": "CERTIFIED_AVAILABLE",
+  "limitations": [
+    "quote OK, historical OK, symbol match confirmed, integrity checks passed, required fields present."
+  ]
+}

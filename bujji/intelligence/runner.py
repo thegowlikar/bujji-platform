@@ -35,6 +35,7 @@ from typing import Any, Optional
 from ..core.enums import OptionType
 from ..core.models import Candle, Position
 from .behaviour_brain import BehaviourBrain
+from .context import EXECUTION_MODE_LIVE, IntelligenceContext
 from .event_brain import EventBrain
 from .greeks_brain import GreeksBrain
 from .liquidity_brain import LiquidityBrain
@@ -72,7 +73,14 @@ def run_intelligence(
 ) -> dict[str, Any]:
     readings: dict[str, Any] = {}
 
-    readings["regime"] = _regime.analyze(spot_candles).to_dashboard()
+    # ONE shared IntelligenceContext for every brain this cycle (Phase
+    # 19.2.2) -- `now` is already the real live/replay time this function
+    # was called with, so this introduces no new clock source, it just
+    # threads the existing one through instead of each brain independently
+    # calling now_ist().
+    context = IntelligenceContext(as_of_time=now, execution_mode=EXECUTION_MODE_LIVE)
+
+    readings["regime"] = _regime.analyze(spot_candles, context).to_dashboard()
 
     spot = spot_candles[-1].close if spot_candles else None
 
@@ -82,7 +90,7 @@ def run_intelligence(
     if ctx is not None:
         readings["volatility"] = _volatility.analyze(
             spot_candles, ctx["spot_now"], ctx["strike"], ctx["t_years_now"],
-            ce_premium, pe_premium, RISK_FREE_RATE,
+            ce_premium, pe_premium, RISK_FREE_RATE, context=context,
         ).to_dashboard()
         readings["premium"] = _premium.analyze(
             entry_combined_premium=ctx["entry_combined_premium"],
@@ -94,12 +102,13 @@ def run_intelligence(
         readings["greeks"] = _greeks.analyze(
             spot=ctx["spot_now"], strike=ctx["strike"], t_years=ctx["t_years_now"],
             iv_ce=ctx["iv_ce_now"], iv_pe=ctx["iv_pe_now"], risk_free_rate=RISK_FREE_RATE,
+            context=context,
         ).to_dashboard()
 
     # --- Not yet wired to a live production data feed (see module
     # docstring) -- null-safe brains report their own honest UNKNOWN. ---
-    readings["liquidity"] = _liquidity.analyze(ce_bid, ce_ask, pe_bid, pe_ask).to_dashboard()
-    readings["structure"] = _structure.analyze(spot, oi_strikes or []).to_dashboard()
+    readings["liquidity"] = _liquidity.analyze(ce_bid, ce_ask, pe_bid, pe_ask, context=context).to_dashboard()
+    readings["structure"] = _structure.analyze(spot, oi_strikes or [], context=context).to_dashboard()
 
     expiry_date = None
     if position is not None and position.ce_contract is not None:
@@ -107,7 +116,7 @@ def run_intelligence(
             expiry_date = date.fromisoformat(position.ce_contract.expiry)
         except (TypeError, ValueError):
             expiry_date = None
-    readings["event"] = _event.analyze(expiry_date, now.date(), vix_level, vix_prev_close).to_dashboard()
+    readings["event"] = _event.analyze(expiry_date, now.date(), vix_level, vix_prev_close, context=context).to_dashboard()
 
     trades = [(row["daily_result"], row.get("exit_reason") or "unknown")
               for row in reversed(trade_rows)]  # Oldest first -- streak must read forward in time.

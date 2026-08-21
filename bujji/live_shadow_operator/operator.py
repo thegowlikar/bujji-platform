@@ -80,7 +80,7 @@ class LiveShadowOperator:
         assert_shadow_safe()
         self._log = logger or logging.getLogger("bujji.live_shadow_operator")
         self._lock = ProcessLock(lock_path)
-        self._journal = OperatorJournal(Path(journal_dir))
+        self._journal = OperatorJournal(Path(journal_dir), logger=self._log)
         self._underlying = underlying
         self._driver: Optional[SessionDriver] = None
         self._portfolio = PortfolioState()
@@ -90,6 +90,12 @@ class LiveShadowOperator:
         self._rate_limiter = RateLimitedCaller(config=rate_limiter_config, logger=self._log)
         self._last_freshness: Optional[FreshnessReport] = None
         self._completed_cadence_days: set = set()
+        # cadence_duration_seconds fix (TODO.md P2-4): the real, per-cadence
+        # t2-t0 measurement run_cadence() already computes (and correctly
+        # journals) was never retained for close_cadence_metrics() to read
+        # -- that method fell back to total session uptime instead. This
+        # holds the most recently completed cadence's real duration.
+        self._last_cadence_duration_seconds: float = 0.0
 
     # -- Deliverable 2 stage 1: acquire process lock -----------------------
     def acquire(self) -> None:
@@ -185,6 +191,7 @@ class LiveShadowOperator:
             open_positions=tuple(self._open_positions), timestamp=timestamp,
         )
         t2 = time.monotonic()
+        self._last_cadence_duration_seconds = t2 - t0  # feeds close_cadence_metrics(), see TODO.md P2-4
         assert_shadow_safe()  # re-asserted immediately after every cadence, per Deliverable 3
 
         if cadence.admitted_trade is not None:
@@ -210,15 +217,29 @@ class LiveShadowOperator:
         return cadence
 
     def close_cadence_metrics(self, day: str) -> OperationalMetrics:
+        # cadence_duration_seconds fix (TODO.md P2-4, live-confirmed dead in
+        # Session #3 and LSQ-1 Day 1: previously reported total session
+        # uptime, e.g. hours, not a real per-cadence duration, e.g.
+        # sub-second). Now the real t2-t0 measurement from the most
+        # recently completed run_cadence() call -- the same real number
+        # already correctly journaled there, just never retained for this
+        # method to read until now. 0.0 if no cadence has completed yet
+        # this session (unchanged fallback behavior for that case).
         return record_operational_metrics(
             day, self._driver.result,
-            decision_latency_seconds=0.0, cadence_duration_seconds=(
-                time.monotonic() - self._started_monotonic if self._started_monotonic else 0.0
-            ),
+            decision_latency_seconds=0.0,
+            cadence_duration_seconds=self._last_cadence_duration_seconds,
         )
 
     # -- Deliverable 4 / Sprint 112 Deliverable 7: health snapshot --------
-    def health_snapshot(self, *, token_expires_in_seconds: Optional[float] = None) -> HealthSnapshot:
+    def health_snapshot(self, *, token_expires_in_seconds: Optional[float] = None,
+                         watchdog_state: Optional[str] = None, watchdog_reconnect_attempt: int = 0,
+                         watchdog_reconnect_reason: Optional[str] = None,
+                         subscription_state: Optional[str] = None) -> HealthSnapshot:
+        # Sprint P1: real, disclosed watchdog metrics -- all optional,
+        # defaulted, additive-only kwargs (this project's own established
+        # schema-evolution convention). Purely observational: nothing
+        # here feeds back into `_driver`/any decision path.
         result = self._driver.result if self._driver else SessionResult()
         return build_health_snapshot(
             result, reconnect_count=self._reconnect_count,
@@ -228,6 +249,9 @@ class LiveShadowOperator:
             api_retry_count=self._rate_limiter.metrics.total_retries,
             api_dropped_requests=self._rate_limiter.metrics.dropped_requests,
             journal_path=str(self._journal._path),
+            journal_failed_writes=self._journal.failed_writes,
+            watchdog_state=watchdog_state, watchdog_reconnect_attempt=watchdog_reconnect_attempt,
+            watchdog_reconnect_reason=watchdog_reconnect_reason, subscription_state=subscription_state,
         )
 
     # -- Deliverable 7: end-of-day report ----------------------------------

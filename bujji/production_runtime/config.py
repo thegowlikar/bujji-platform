@@ -14,17 +14,30 @@ something recomputed on every run. This config therefore carries the
 result of the *last successful* Series 46 replay qualification,
 supplied by whatever release process produced this configuration --
 never recomputed live inside a runtime process.
+
+A fourth mode, D0_REHEARSAL (Numeric Risk Governor Gate D0), was added
+after the original three. It exercises the real Governor assess() via
+`bujji.production_runtime.d0_rehearsal_runtime.run_d0_rehearsal_mode`
+against a real CompositionRoot, with no dispatch call anywhere in its
+own reachable code -- verified by an AST-based test, not just this
+docstring. Falls under the SAME `broker_name == "fyers"` guard below as
+every mode except PRODUCTION_READY: a live broker is never
+constructible in D0_REHEARSAL, exactly as it already isn't in
+READ_ONLY or SHADOW.
 """
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any, Dict
+from typing import Any, Dict, Optional
 
 RUNTIME_MODE_READ_ONLY = "READ_ONLY"
 RUNTIME_MODE_SHADOW = "SHADOW"
 RUNTIME_MODE_PRODUCTION_READY = "PRODUCTION_READY"
+RUNTIME_MODE_D0_REHEARSAL = "D0_REHEARSAL"
 
-ALL_RUNTIME_MODES = (RUNTIME_MODE_READ_ONLY, RUNTIME_MODE_SHADOW, RUNTIME_MODE_PRODUCTION_READY)
+ALL_RUNTIME_MODES = (
+    RUNTIME_MODE_READ_ONLY, RUNTIME_MODE_SHADOW, RUNTIME_MODE_PRODUCTION_READY, RUNTIME_MODE_D0_REHEARSAL,
+)
 
 ALL_BROKER_NAMES = ("paper", "fyers")
 ALL_MARKET_SOURCES = ("LIVE", "REPLAY")
@@ -40,7 +53,14 @@ class RuntimeConfig:
     mode: str = RUNTIME_MODE_SHADOW
     broker_name: str = "paper"           # "paper" | "fyers" -- which production Broker to construct.
     broker_display_name: str = "FYERS"   # Name passed to the Broker Adapter (Series 40)'s translate().
-    lot_size: int = 75
+    # Cross-check ONLY -- the authoritative lot size is read from the FYERS
+    # instrument master at composition time (2026-08-18 fix; the 2026-07-19
+    # audit found the master said NIFTY=65 while this default said 75, and the
+    # default won). None means "no cross-check declared". There is
+    # deliberately no way to force a lot size from config: pin a fixture
+    # master via `instrument_master_directory` instead.
+    lot_size: Optional[int] = None
+    instrument_master_directory: str = "data/instrument_master"
     capital_policy_value: str = "SIMULATION"
     qualification_fingerprint: str = "RFP-0000000000000000"
     replay_status: str = "PASSED"
@@ -61,6 +81,23 @@ class RuntimeConfig:
             raise InvalidRuntimeConfig(f"Unrecognized broker_name: {self.broker_name!r}")
         if self.market_source not in ALL_MARKET_SOURCES:
             raise InvalidRuntimeConfig(f"Unrecognized market_source: {self.market_source!r}")
+        if self.lot_size is not None and self.lot_size <= 0:
+            raise InvalidRuntimeConfig(f"lot_size cross-check must be positive: {self.lot_size!r}")
+        # P1-1 fix (TODO.md): a live-capable broker must never be
+        # constructible outside Mode 3. Before this check, `RuntimeConfig(
+        # mode="SHADOW", broker_name="fyers")` constructed successfully and
+        # produced a real, unguarded FyersBroker with a live place_order --
+        # confirmed by direct execution, not a hypothetical. This is the
+        # primary fix layer (reject at config construction, before the
+        # composition root ever runs); see composition_root.py's
+        # `_build_broker` for the defense-in-depth second layer.
+        if self.broker_name == "fyers" and self.mode != RUNTIME_MODE_PRODUCTION_READY:
+            raise InvalidRuntimeConfig(
+                f"broker_name='fyers' is only permitted in mode="
+                f"{RUNTIME_MODE_PRODUCTION_READY!r} (got mode={self.mode!r}). "
+                f"Outside Mode 3, use broker_name='paper' -- a live broker "
+                f"must never be constructible in READ_ONLY or SHADOW mode."
+            )
 
 
 def load_config(values: Dict[str, Any]) -> RuntimeConfig:

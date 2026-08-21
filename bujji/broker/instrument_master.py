@@ -79,6 +79,24 @@ class OptionRow:
         return datetime.fromtimestamp(self.expiry_epoch, tz=timezone.utc).date()
 
 
+class ConflictingLotSizeError(ValueError):
+    """The symbol master carries more than one lot size for one underlying.
+
+    Carries the structured breakdown so callers and tests can assert on the
+    real state instead of parsing prose.
+    """
+
+    def __init__(self, underlying: str, by_expiry: dict) -> None:
+        self.underlying = underlying
+        self.by_expiry = by_expiry
+        super().__init__(
+            f"conflicting lot sizes for {underlying}: "
+            + ", ".join(f"{e}={sorted(v)}" for e, v in sorted(by_expiry.items()))
+            + " -- a lot-size transition is in progress; size per-contract from "
+            "OptionRow.lot_size, not per-underlying."
+        )
+
+
 class InstrumentMaster:
     """Downloads, caches, and searches the FYERS NFO symbol master."""
 
@@ -136,6 +154,110 @@ class InstrumentMaster:
                     continue  # Malformed row — skip rather than crash the scan.
         self._rows_by_underlying[underlying] = rows
         return rows
+
+    def _futures_rows_for(self, underlying: str) -> list[OptionRow]:
+        """Futures rows (`option_type == "XX"`) for `underlying`, read from
+        the same real CSV `_rows_for()` reads.
+
+        Deliberately NOT merged into `_rows_for()` or its
+        `_rows_by_underlying` cache: Phase 17I.5's audit confirmed
+        `_rows_for()`'s CE/PE-only filter is intentional, protected by
+        `test_excludes_futures_rows`, and must stay unchanged. This is an
+        additive read path, not a modification of that one.
+
+        Reuses `OptionRow` as a plain row carrier rather than a new
+        dataclass -- `strike` carries the CSV's own `-1.0` sentinel for a
+        futures row and `option_type` carries `"XX"` verbatim, both
+        verified directly against the real NFO CSV in Phase 17I.5.
+        """
+        rows: list[OptionRow] = []
+        with open(self._cache_file, newline="", encoding="utf-8", errors="replace") as f:
+            for r in csv.reader(f):
+                if len(r) < _MIN_COLUMNS:
+                    continue
+                if r[_COL_UNDERLYING] != underlying:
+                    continue
+                if r[_COL_OPTION_TYPE] != "XX":
+                    continue
+                try:
+                    rows.append(OptionRow(
+                        symbol=r[_COL_SYMBOL],
+                        underlying=underlying,
+                        strike=float(r[_COL_STRIKE]),
+                        option_type=r[_COL_OPTION_TYPE],
+                        expiry_epoch=int(r[_COL_EXPIRY_EPOCH]),
+                        lot_size=int(float(r[_COL_LOT_SIZE])),
+                    ))
+                except (ValueError, IndexError):
+                    continue  # Malformed row — skip rather than crash the scan.
+        return rows
+
+    def lot_size_for(self, underlying: str) -> int:
+        """The exchange lot size for `underlying`, read from the cached
+        symbol master -- every options AND futures row, unanimity required.
+
+        Cache-only and synchronous ON PURPOSE: this is called on the trading
+        session's startup path, which must not grow a network dependency.
+        The cache is refreshed daily by the capture path's `_ensure_fresh()`;
+        a missing cache raises `FileNotFoundError` (fail closed -- sizing off
+        a guess is worse than not starting).
+
+        Raises `ConflictingLotSizeError` when contracts disagree. That is a
+        real state, not a defect: during an exchange lot-size revision the new
+        size applies to far-dated series first, so a single per-underlying
+        number is momentarily a lie. Callers that hit this must size
+        per-contract from `OptionRow.lot_size` instead of per-underlying.
+
+        Raises `LookupError` when the master has no rows for `underlying`.
+
+        WHY THIS EXISTS: the 2026-07-19 audit (module docstring) found the
+        live master says NIFTY=65 while config.yaml hardcodes 75, and the
+        trading path sized every order from the config value -- 15.4%% oversized
+        per lot. This method makes the master the one authoritative read.
+        """
+        rows = self._rows_for(underlying) + self._futures_rows_for(underlying)
+        if not rows:
+            raise LookupError(
+                f"instrument master has no rows for underlying {underlying!r} "
+                f"in {self._cache_file}"
+            )
+        by_expiry: dict[str, set[int]] = {}
+        for row in rows:
+            by_expiry.setdefault(row.expiry_date.isoformat(), set()).add(row.lot_size)
+        distinct = {size for sizes in by_expiry.values() for size in sizes}
+        if len(distinct) > 1:
+            raise ConflictingLotSizeError(underlying, by_expiry)
+        return distinct.pop()
+
+    async def resolve_nearest_future(self, underlying: str) -> tuple[str, str, int]:
+        """Resolve the nearest-upcoming-expiry futures contract for
+        `underlying` directly from the real NFO instrument master.
+
+        Phase 17I.5's audit-confirmed replacement for `_futures_symbol()`'s
+        provisional, wall-clock-driven symbol construction: the real CSV
+        carries a genuine `expiry_epoch` for futures rows (same column as
+        options), so there is no need to guess a symbol from today's date.
+
+        Returns `(symbol, expiry_iso, lot_size)` -- no new dataclass,
+        mirroring `resolve_atm()`'s own nearest-expiry selection exactly
+        (same `>= today - 86400` window, same "soonest listed expiry"
+        rule, no new algorithm).
+        """
+        await self._ensure_fresh()
+        rows = self._futures_rows_for(underlying)
+        if not rows:
+            raise LookupError(
+                f"No futures rows found for underlying={underlying!r} in "
+                f"the instrument master ({self._cache_file})."
+            )
+
+        today_epoch = int(datetime.now(timezone.utc).timestamp())
+        upcoming = [r for r in rows if r.expiry_epoch >= today_epoch - 86400]
+        if not upcoming:
+            raise LookupError(f"No upcoming futures expiries found for {underlying!r}.")
+        nearest = min(upcoming, key=lambda r: r.expiry_epoch)
+
+        return nearest.symbol, nearest.expiry_date.isoformat(), nearest.lot_size
 
     async def resolve_atm(
         self, underlying: str, spot: float, option_type: OptionType,

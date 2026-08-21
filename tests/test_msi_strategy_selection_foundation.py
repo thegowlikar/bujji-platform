@@ -29,6 +29,13 @@ from bujji.msi_strategy_selection_foundation import taxonomy as ssf_taxonomy
 
 from bujji.msi_volatility_structure import engine as vsb_engine
 
+from bujji.intelligence.context import IntelligenceContext
+from bujji.intelligence.liquidity_brain import LiquidityBrain
+from bujji.intelligence import models as liquidity_taxonomy
+
+liquidity_brain_engine = LiquidityBrain()
+TEST_CONTEXT = IntelligenceContext(as_of_time=datetime(2026, 7, 24, 9, 30))
+
 
 # ---------------------------------------------------------------------------
 # Helpers — real Observation -> MarketEvent -> Episode -> PSI/MSSI/MDI
@@ -202,11 +209,92 @@ def test_backward_compatible_call_without_vsb_still_works():
 
 
 def test_synthetic_reports_insufficient_evidence_for_liquidity():
+    """No `liquidity` argument given at all -- a per-call evidence gap,
+    same honest behavior as vsb=None, now that DOMAIN_LIQUIDITY is
+    codebase-wide available (Phase 9)."""
     mdi, mssi, consensus = _build_all([100, 101, 102, 103, 104, 105, 106])
     assessments = ssf_engine.assess_all_families(mdi, mssi, consensus, timestamp="2026-07-24T09:30:00")
     a = ssf_query.by_family(assessments, ssf_taxonomy.SYNTHETIC)
     assert a.suitability == ssf_taxonomy.INSUFFICIENT_EVIDENCE
     assert ssf_taxonomy.DOMAIN_LIQUIDITY in a.required_missing_evidence
+
+
+# ---------------------------------------------------------------------------
+# Phase 9 -- Liquidity Intelligence Bridge. Mirrors the volatility test
+# block above exactly: real reading -> real SUITABLE/UNSUITABLE read;
+# no reading, or an UNKNOWN reading, -> honest INSUFFICIENT_EVIDENCE.
+# ---------------------------------------------------------------------------
+def _tight_liquidity():
+    return liquidity_brain_engine.analyze(ce_bid=100.0, ce_ask=100.3, pe_bid=100.0, pe_ask=100.3, context=TEST_CONTEXT)
+
+
+def _wide_liquidity():
+    return liquidity_brain_engine.analyze(ce_bid=100.0, ce_ask=104.0, pe_bid=100.0, pe_ask=104.0, context=TEST_CONTEXT)
+
+
+def _unknown_liquidity():
+    return liquidity_brain_engine.analyze(ce_bid=None, ce_ask=None, pe_bid=None, pe_ask=None, context=TEST_CONTEXT)
+
+
+def test_liquidity_wiring_produces_real_suitability_with_tight_reading():
+    """The actual point of this bridge: given a REAL, TIGHT
+    LiquidityReading, SYNTHETIC/IRON_CONDOR/IRON_FLY get a genuine
+    SUITABLE/UNSUITABLE read instead of an unconditional
+    INSUFFICIENT_EVIDENCE."""
+    mdi, mssi, consensus = _build_all([100, 100.5, 99.5, 100.2, 99.8, 100.3, 99.9, 100.1])
+    vsb = _real_vsb([100, 100.5, 99.5, 100.2, 99.8, 100.3, 99.9, 100.1])
+    liquidity = _tight_liquidity()
+    assert liquidity.tightness == liquidity_taxonomy.SpreadTightness.TIGHT
+    assessments = ssf_engine.assess_all_families(mdi, mssi, consensus, vsb, liquidity, timestamp="2026-07-24T09:30:00")
+    for family in (ssf_taxonomy.SYNTHETIC, ssf_taxonomy.IRON_CONDOR, ssf_taxonomy.IRON_FLY):
+        a = ssf_query.by_family(assessments, family)
+        assert ssf_taxonomy.DOMAIN_LIQUIDITY not in a.required_missing_evidence, f"{family} should no longer report liquidity missing"
+        assert a.suitability in (ssf_taxonomy.SUITABLE, ssf_taxonomy.UNSUITABLE), f"{family} should get a real read with a real tight liquidity reading, got {a.suitability}"
+
+
+def test_wide_liquidity_reading_makes_liquidity_gated_families_unsuitable():
+    """A real but WIDE reading is real evidence AGAINST suitability --
+    never silently ignored, never treated as tight-enough by default."""
+    mdi, mssi, consensus = _build_all([100, 100.5, 99.5, 100.2, 99.8, 100.3, 99.9, 100.1])
+    vsb = _real_vsb([100, 100.5, 99.5, 100.2, 99.8, 100.3, 99.9, 100.1])
+    liquidity = _wide_liquidity()
+    assert liquidity.tightness == liquidity_taxonomy.SpreadTightness.WIDE
+    assessments = ssf_engine.assess_all_families(mdi, mssi, consensus, vsb, liquidity, timestamp="2026-07-24T09:30:00")
+    for family in (ssf_taxonomy.SYNTHETIC, ssf_taxonomy.IRON_CONDOR, ssf_taxonomy.IRON_FLY):
+        a = ssf_query.by_family(assessments, family)
+        assert ssf_taxonomy.DOMAIN_LIQUIDITY not in a.required_missing_evidence
+        assert a.suitability == ssf_taxonomy.UNSUITABLE, f"{family} should be UNSUITABLE on a wide spread, got {a.suitability}"
+        assert any("wide" in r.lower() or "liquidity" in r.lower() for r in a.rejecting_reasons)
+
+
+def test_unknown_liquidity_reading_still_reports_insufficient_evidence():
+    """A LiquidityReading object IS supplied, but its own tightness is
+    UNKNOWN (invalid/missing quote) -- must be treated identically to no
+    reading at all, never assumed tight."""
+    mdi, mssi, consensus = _build_all([100, 101, 102, 103, 104, 105, 106])
+    liquidity = _unknown_liquidity()
+    assert liquidity.tightness == liquidity_taxonomy.SpreadTightness.UNKNOWN
+    assessments = ssf_engine.assess_all_families(mdi, mssi, consensus, liquidity=liquidity, timestamp="2026-07-24T09:30:00")
+    a = ssf_query.by_family(assessments, ssf_taxonomy.SYNTHETIC)
+    assert a.suitability == ssf_taxonomy.INSUFFICIENT_EVIDENCE
+    assert ssf_taxonomy.DOMAIN_LIQUIDITY in a.required_missing_evidence
+
+
+def test_liquidity_backward_compatible_call_without_liquidity_still_works():
+    """Every pre-Phase-9 caller passing only (mdi, mssi, consensus, vsb)
+    must still work identically -- liquidity is optional."""
+    mdi, mssi, consensus = _build_all([100, 101, 102, 103, 104, 105, 106])
+    vsb = _real_vsb([100, 101, 102, 103, 104, 105, 106])
+    assessments = ssf_engine.assess_all_families(mdi, mssi, consensus, vsb, timestamp="2026-07-24T09:30:00")
+    assert len(assessments) == len(ssf_taxonomy.ALL_STRATEGY_FAMILIES)
+    a = ssf_query.by_family(assessments, ssf_taxonomy.SYNTHETIC)
+    assert a.suitability == ssf_taxonomy.INSUFFICIENT_EVIDENCE
+    assert ssf_taxonomy.DOMAIN_LIQUIDITY in a.required_missing_evidence
+
+
+def test_liquidity_domain_now_available_codebase_wide():
+    assert ssf_taxonomy.DOMAIN_LIQUIDITY in ssf_taxonomy.AVAILABLE_DOMAINS
+    assert ssf_taxonomy.DOMAIN_LIQUIDITY not in ssf_taxonomy.UNAVAILABLE_DOMAINS
 
 
 # ---------------------------------------------------------------------------
@@ -312,9 +400,25 @@ _PACKAGE_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__fi
 
 _FORBIDDEN_MODULE_PREFIXES = (
     "mic_v2", "bujji.mic_replay", "bujji.production_runtime", "bujji.trading_brain",
-    "bujji.strategy_selector", "fyers_apiv3", "bujji.intelligence",
+    "bujji.strategy_selector", "fyers_apiv3",
     "bujji.msi_price_structure", "bujji.msi_decision_synthesis",
     "bujji.msi_strategy_eligibility", "bujji.msi_trade_intent", "bujji.msi_participant_positioning",
+)
+
+# `bujji.intelligence` is broadly forbidden EXCEPT for `.models` --
+# Phase 9's Liquidity Intelligence Bridge imports only the plain,
+# side-effect-free dataclasses `LiquidityReading`/`SpreadTightness` from
+# there (mirroring how this package already imports
+# `bujji.msi_volatility_structure.models` directly -- Series 88's
+# established downstream-consumption exception). Every OTHER
+# `bujji.intelligence.*` submodule (brains, runner -- anything that
+# actually computes or touches a broker) remains forbidden.
+_FORBIDDEN_INTELLIGENCE_SUBMODULE_PREFIXES = (
+    "bujji.intelligence.liquidity_brain", "bujji.intelligence.runner",
+    "bujji.intelligence.volatility_brain", "bujji.intelligence.premium_brain",
+    "bujji.intelligence.greeks_brain", "bujji.intelligence.regime_brain",
+    "bujji.intelligence.structure_brain", "bujji.intelligence.event_brain",
+    "bujji.intelligence.behaviour_brain",
 )
 
 _FORBIDDEN_TERMS = ("uuid4", "strike_select", "expiry_select", "place_order", "execution_plan", "optimi", "score", "rank_")
@@ -337,6 +441,12 @@ def test_ast_isolation_no_forbidden_imports():
             for name in names:
                 for forbidden in _FORBIDDEN_MODULE_PREFIXES:
                     assert not name.startswith(forbidden), f"{path} imports forbidden module {name}"
+                if name == "bujji.intelligence" or name.startswith("bujji.intelligence."):
+                    assert name == "bujji.intelligence.models" or name.startswith("bujji.intelligence.models."), (
+                        f"{path} imports non-models bujji.intelligence module {name}"
+                    )
+                    for forbidden in _FORBIDDEN_INTELLIGENCE_SUBMODULE_PREFIXES:
+                        assert not name.startswith(forbidden), f"{path} imports forbidden module {name}"
 
 
 def test_ast_isolation_no_uuid4_no_unseeded_randomness():

@@ -1,0 +1,76 @@
+[Unit]
+# =========================================================================
+# DEPRECATED / LEGACY SYSTEM — DO NOT CONFUSE WITH BUJJI OPTIONS OS
+#
+# This is the legacy ORB-VWAP ATM Seller strategy bot, superseded by Bujji
+# Options OS (production_runtime/, trading_brain/, msi_trade_construction/,
+# shadow_observatory/ — see /opt/bujji/app/docs/SYSTEM_OWNERSHIP.md).
+#
+# Deliberately NOT installed as "bujji.service" — install it as
+# "bujji-orb-vwap-legacy.service" (see deploy/README.md) so the bare name
+# "bujji" stays free for a future Bujji Options OS deployment service and
+# can never be confused with, or accidentally start, this legacy bot.
+# =========================================================================
+Description=[DEPRECATED/LEGACY] Bujji VWAP Premium Straddle Seller — superseded by Bujji Options OS, see docs/SYSTEM_OWNERSHIP.md
+# Wait for real network/DNS before starting — the broker connection at
+# startup will otherwise fail fast (by design) on every boot.
+After=network-online.target
+Wants=network-online.target
+
+# Restart-loop rate limiting. NOTE: StartLimit* directives belong in [Unit],
+# not [Service] — systemd silently ignores them if placed in [Service]. If a
+# crash loop trips this (10 starts in 600s), systemd stops trying and the unit
+# enters "failed"; clear it with `systemctl reset-failed bujji-orb-vwap-legacy`.
+StartLimitIntervalSec=600
+StartLimitBurst=10
+
+[Service]
+Type=simple
+
+# --- EDIT THESE FOR YOUR DEPLOYMENT -----------------------------------
+User=bujji
+Group=bujji
+WorkingDirectory=/opt/bujji
+ExecStart=/opt/bujji/.venv/bin/python -m bujji.app --config /opt/bujji/config/config.yaml
+# Secrets belong in an EnvironmentFile with 0600 permissions, never in this
+# unit file or in config.yaml. Required: FYERS_APP_ID, FYERS_ACCESS_TOKEN.
+# Optional, enables automatic daily token renewal for ~15 days at a time
+# (see docs/FYERS_TOKEN_LIFECYCLE.md): FYERS_APP_SECRET, FYERS_REFRESH_TOKEN,
+# FYERS_PIN, FYERS_CREDENTIALS_FILE (defaults to in-memory only if unset —
+# set this to the SAME path as this EnvironmentFile so renewed tokens
+# survive a restart, e.g. FYERS_CREDENTIALS_FILE=/opt/bujji/.env).
+EnvironmentFile=/opt/bujji/.env
+# ------------------------------------------------------------------------
+
+# F2 (process supervision): this is what makes Tier 1's crash-recovery (C1)
+# and single-instance lock (F4) guarantees actually hold after a VPS reboot
+# or an unexpected process death — without this, a crashed bot simply stays
+# dead and any open position is abandoned until a human notices.
+Restart=always
+RestartSec=5
+
+# Give the process time to run its graceful shutdown (release the F4 lock,
+# stop the dashboard) on SIGTERM before systemd escalates to SIGKILL.
+TimeoutStopSec=30
+KillSignal=SIGTERM
+
+# Hygiene: keep failures visible in `journalctl -u bujji-orb-vwap-legacy`, not lost.
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=bujji-orb-vwap-legacy
+
+# --- Security hardening ------------------------------------------------
+# The service holds a live broker credential, so lock down what it can touch.
+# The token-renewal subsystem writes back to FYERS_CREDENTIALS_FILE, and the
+# app writes logs/data/lock under WorkingDirectory — those are the ONLY paths
+# it needs write access to. Everything else on the system is read-only or
+# hidden from the process.
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+ReadWritePaths=/opt/bujji/logs /opt/bujji/data /opt/bujji/.env
+# ------------------------------------------------------------------------
+
+[Install]
+WantedBy=multi-user.target

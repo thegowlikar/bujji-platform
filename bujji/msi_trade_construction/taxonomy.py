@@ -72,6 +72,12 @@ SUPPORTED_FAMILIES = (
     "VOLATILITY_EXPANSION", "VOLATILITY_COMPRESSION",
     "CALENDAR", "RATIO", "BUTTERFLY", "IRON_CONDOR", "IRON_FLY",
     "COVERED", "SYNTHETIC",
+    # Added 2026-08-19 (operator directive: three-part regime selection).
+    # A directional VOLATILITY SELLER needs a credit spread that leans with
+    # the trend; the codebase had none -- SHORT_DIRECTIONAL is a naked
+    # single short, not a spread, so a trending market had no sellable
+    # defined-risk shape at all and always resolved to no-trade.
+    "BULL_PUT_SPREAD", "BEAR_CALL_SPREAD",
 )
 
 # Families whose risk profile is structurally defined-risk (every leg has
@@ -83,6 +89,11 @@ SUPPORTED_FAMILIES = (
 DEFINED_RISK_FAMILIES = (
     "IRON_CONDOR", "IRON_FLY", "BUTTERFLY", "CALENDAR",
     "LONG_DIRECTIONAL", "NEUTRAL_PREMIUM_BUYING", "VOLATILITY_EXPANSION",
+    # Both credit spreads pair every short leg with a protective long leg,
+    # so max loss is bounded by (wing width - credit) BY CONSTRUCTION --
+    # the same structural fact that puts IRON_CONDOR here, not a claim
+    # derived from any historical drawdown.
+    "BULL_PUT_SPREAD", "BEAR_CALL_SPREAD",
 )
 UNDEFINED_RISK_FAMILIES = (
     "SHORT_DIRECTIONAL", "NEUTRAL_PREMIUM_SELLING", "VOLATILITY_COMPRESSION",

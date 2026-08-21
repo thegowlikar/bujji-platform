@@ -103,10 +103,39 @@ def _make_event(
 # module docstring). Never fabricates a field: returns None when the
 # payload does not carry it.
 # ---------------------------------------------------------------------------
+# A SCALAR payload is ONE bare number with no key attached, so the only
+# thing that says WHAT it measures is the observation's own type. Without
+# this map the scalar branch answered every field_name with the same
+# number: a spot PRICE observation returned its price when asked for
+# "open_interest" and again when asked for "volume", so two real spot
+# ticks emitted OI_CHANGED and VOLUME_CHANGED carrying the NIFTY level as
+# though it were open interest and traded volume. Verified on the
+# production bridge 2026-08-18 (24601.05 -> 24608.30 emitted both).
+#
+# That is fabrication, and it contradicted this very function's docstring
+# promise never to invent a field. It also mattered beyond tidiness: those
+# phantom events inflate the episode/event counts that PSI confidence and
+# the thesis evidence gates are computed from.
+#
+# An observation_type absent from this map has no known scalar meaning, so
+# it answers nothing -- unknown is not a licence to guess.
+_SCALAR_FIELD_ALIASES = {
+    moc_taxonomy.TYPE_PRICE: ("price", "close", "last"),
+    moc_taxonomy.TYPE_FUTURES: ("price", "close", "last"),
+    moc_taxonomy.TYPE_VOLATILITY_VIX: ("vix",),
+    moc_taxonomy.TYPE_OPTION_OPEN_INTEREST: ("open_interest",),
+    moc_taxonomy.TYPE_FUTURES_OPEN_INTEREST: ("open_interest",),
+    moc_taxonomy.TYPE_OPTION_VOLUME: ("volume",),
+}
+
+
 def _numeric_field(observation: Observation, field_name: str) -> Optional[float]:
     value = observation.value
     payload = value.payload
     if value.value_kind == moc_taxonomy.VALUE_KIND_SCALAR:
+        aliases = _SCALAR_FIELD_ALIASES.get(observation.identity.observation_type)
+        if aliases is None or field_name not in aliases:
+            return None
         return float(payload) if isinstance(payload, (int, float)) else None
     if value.value_kind == moc_taxonomy.VALUE_KIND_OHLC:
         if isinstance(payload, Mapping):

@@ -10,6 +10,15 @@ input" types this module accepts. They are plain, broker-neutral data
 carriers this module never fetches itself -- the caller supplies them,
 exactly like every other Trading Brain module receives its inputs
 already produced.
+
+`last_price` (Live Shadow Real-Time Paper Execution sprint): the most
+recently observed price for this contract, exactly as it existed in
+the caller-supplied chain/tick snapshot this module was given -- never
+fetched, never estimated, never defaulted here. `None` when the
+caller's snapshot did not carry a price for this entry (e.g. a purely
+structural chain with no live pricing attached yet); downstream
+consumers must treat `None` as "no observed price available," never as
+zero.
 """
 from __future__ import annotations
 
@@ -29,6 +38,7 @@ class NiftyOptionChainEntry:
     option_type: str
     expiry: str
     contract_symbol: str
+    last_price: Optional[float] = None
 
 
 @dataclass(frozen=True)
@@ -53,6 +63,7 @@ class NiftyOptionContract:
     construction_trace: str
     timestamp: str
     version: str
+    last_price: Optional[float] = None
 
 
 @dataclass(frozen=True)

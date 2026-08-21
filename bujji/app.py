@@ -1,4 +1,20 @@
-"""Application composition root and async run loop.
+"""[DEPRECATED / LEGACY] Bujji ORB-VWAP ATM Seller — application composition
+root and async run loop.
+
+This is the LEGACY opening-range-breakout + VWAP straddle-selling strategy
+bot, superseded by Bujji Options OS (production_runtime/, trading_brain/,
+msi_trade_construction/, shadow_observatory/ — see
+docs/SYSTEM_OWNERSHIP.md for the full ownership map). Verified via
+import/dependency audit to have NO call-path overlap with Options OS other
+than shared low-level infrastructure (PaperBroker, EventBus, the Broker ABC,
+Side/OptionType/OrderStatus enums, and the OptionContract/OrderRequest/
+OrderResult dataclasses in core/models.py) that both systems depend on and
+that must not be deleted or modified as part of any ORB-VWAP cleanup.
+
+The systemd unit for this module was renamed from the ambiguous
+"bujji.service" to "bujji-orb-vwap-legacy.service" specifically so a future
+Bujji Options OS deployment service can never collide with, or be mistaken
+for, this legacy bot. This module is not started automatically.
 
 Builds every component via dependency injection, starts the dashboard, and runs
 the candle loop until the session reaches DONE_FOR_DAY or a shutdown signal is

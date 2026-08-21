@@ -1,0 +1,30 @@
+MIC Validation Report
+============================================================
+
+Total real trading days analyzed: 2110
+
+TREND samples:
+  n = 0
+  Average ADX: None
+  Average efficiency ratio: None
+  Average reversal frequency: None
+  Average persistence: None
+
+RANGE samples:
+  n = 1655
+  Average ADX: 25.136
+  Average efficiency ratio: 0.1187
+  Average reversal frequency: 0.5213
+  Average persistence: 1.9154
+
+UNCLEAR samples:
+  n = 455
+
+Conclusion:
+  INCONCLUSIVE -- insufficient real samples in one or both groups to evaluate any dimension.
+
+Evidence:
+  - ADX: insufficient data in one or both groups -- not evaluated
+  - efficiency_ratio: insufficient data in one or both groups -- not evaluated
+  - persistence: insufficient data in one or both groups -- not evaluated
+  - reversal_frequency: insufficient data in one or both groups -- not evaluated
