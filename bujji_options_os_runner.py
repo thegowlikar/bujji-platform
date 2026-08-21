@@ -2005,6 +2005,10 @@ class OptionsOSRunner:
         )
         self._governor_result_summary["entry_allowed"] = entry_decision.allowed
         self._governor_result_summary["entry_filled"] = cycle_result.filled if cycle_result else False
+        # Checked whether or not the entry filled: an order that asked for a
+        # symbol the quote book does not hold is worth knowing about even if
+        # it was ultimately rejected.
+        self._check_quote_book_agreement()
 
         if not cycle_result or not cycle_result.filled:
             reason = _entry_failure_reason(cycle_result)
@@ -2285,6 +2289,38 @@ class OptionsOSRunner:
         except Exception as exc:  # noqa: BLE001 -- a simulation-realism sync must never end a session
             self._logger.warning("PAPER_MARKET_SYNC failed (%s) -- continuing with reference-price fills.", exc)
             self._governor_result_summary["paper_market_sync"] = {"error": f"{type(exc).__name__}: {exc}"}
+
+    def _check_quote_book_agreement(self) -> None:
+        """Alarm when an order looked up a symbol the quote book does not hold.
+
+        WHY THIS IS NOT COVERED BY THE EXISTING ALARM. PAPER_MARKET_SYNC warns
+        only when `quotes_applied == 0`. That catches "no quotes at all" and
+        misses the more dangerous case entirely: quotes WERE applied, under
+        names nothing ever looks up. Then every leg fills at its own reference
+        premium with no spread cost, every downstream number stays plausible,
+        and nothing reports it. A frictionless fill is indistinguishable from
+        a good one unless someone counts the misses.
+
+        That is precisely what a symbol-vocabulary mismatch produces, and it
+        is why this exists BEFORE any vocabulary change: a migration error
+        must present as an alarm, not as a successful-looking fill.
+
+        Never raises: this is a realism check on a paper broker, not a
+        safety gate on a real position.
+        """
+        try:
+            misses = getattr(self._broker, "quote_lookup_misses", ())
+            if not misses:
+                return
+            self._governor_result_summary["quote_lookup_misses"] = list(misses)
+            self._logger.critical(
+                "QUOTE BOOK MISMATCH -- %d order lookup(s) found no quote while the book was "
+                "POPULATED: %s. Those legs filled at their own reference premium with NO spread "
+                "cost, which is indistinguishable from a real fill in every number downstream. "
+                "The order symbols and the quote-book symbols are not the same vocabulary.",
+                len(misses), sorted(set(misses)))
+        except Exception as exc:  # noqa: BLE001 -- a realism check never ends a session
+            self._logger.warning("quote-book agreement check failed: %s", exc)
 
     def _record_canonical_entry(self, pg_id, cycle_result, spot, trend_regime, selection) -> None:
         """Open the canonical PositionLifecycle for a real, already-filled

@@ -126,6 +126,12 @@ class PaperBroker(Broker):
         self._premium: dict[str, float] = {}
         # Real caller-supplied top-of-book, {symbol: (bid, ask)} -- see set_quote().
         self._quotes: dict[str, tuple] = {}
+        # Symbols an order asked for while the quote book was POPULATED but
+        # did not contain them. See _quotes_for() -- this is the signal that
+        # two symbol vocabularies are in play, and it is recorded rather than
+        # raised because by the time a fill runs the caller has already
+        # committed to the order.
+        self._quote_lookup_misses: list = []
         # Real caller-supplied top-of-book QUANTITY, {symbol: depth} -- see set_depth().
         self._depth: dict[str, int] = {}
         self._volatility: dict[str, float] = {}
@@ -180,6 +186,52 @@ class PaperBroker(Broker):
         caller and test sees.
         """
         self._quotes[symbol] = (bid, ask)
+
+    def _quotes_for(self, symbol: str) -> tuple:
+        """Top-of-book for `symbol`, recording a miss the caller can act on.
+
+        WHY THIS IS NOT A BARE dict.get(). It was
+        `self._quotes.get(symbol, (None, None))`, and a miss is invisible:
+        FillSimulator receives bid=None/ask=None, produces no spread, and the
+        caller falls back to `reference_price` -- a FRICTIONLESS FILL that
+        looks like a successful one. Every downstream number stays plausible.
+
+        That is exactly what a symbol-vocabulary mismatch produces. If orders
+        carry one symbol format and the quote book is keyed by another, every
+        leg fills at its own reference premium with no spread cost, and the
+        only existing alarm cannot fire: it tests `quotes_applied == 0`, but
+        the quotes WERE applied -- under names nothing looks up.
+
+        TWO DIFFERENT MISSES, deliberately distinguished:
+          * EMPTY BOOK -- no quote sync ran. Frictionless fills are the
+            documented, already-alarmed behaviour for that configuration, and
+            most tests construct a PaperBroker without ever setting a quote.
+            Not recorded.
+          * POPULATED BOOK, SYMBOL ABSENT -- something synced quotes, and this
+            order asked for a name that sync never produced. That is a key
+            mismatch, and it is the one worth alarming on.
+
+        Recorded, not raised: a fill runs after the caller has already
+        committed to the order, so raising here would abort a placement the
+        broker has effectively accepted. The caller reads
+        `quote_lookup_misses` and decides.
+        """
+        found = self._quotes.get(symbol)
+        if found is not None:
+            return found
+        if self._quotes:
+            self._quote_lookup_misses.append(symbol)
+        return (None, None)
+
+    @property
+    def quote_lookup_misses(self) -> tuple:
+        """Symbols looked up against a populated quote book and not found.
+
+        Non-empty means fills were priced with no spread while quotes existed
+        under other names -- i.e. two vocabularies. Order preserved; a symbol
+        appears once per lookup, so a repeat is a repeat.
+        """
+        return tuple(self._quote_lookup_misses)
 
     def set_depth(self, symbol: str, available_depth: Optional[int]) -> None:
         """Supply the REAL observed top-of-book quantity, so an order that
@@ -500,7 +552,7 @@ class PaperBroker(Broker):
             latency_ms, slippage_delta, rejection_reason = 0.0, 0.0, None
             stage = ExecutionStage.FILLED if status is OrderStatus.FILLED else ExecutionStage.PARTIALLY_FILLED
         else:
-            bid, ask = self._quotes.get(request.contract.symbol, (None, None))
+            bid, ask = self._quotes_for(request.contract.symbol)
             snapshot = MarketSnapshot(
                 symbol=request.contract.symbol, last_price=reference_price,
                 bid=bid, ask=ask, available_depth=self._depth.get(request.contract.symbol),
