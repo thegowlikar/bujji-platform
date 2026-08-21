@@ -243,3 +243,60 @@ class TestOneReadNotNPlusOne:
 
         expected = mod.OptionsOSRunner._expected_symbols(_Stub(), {"CE"})
         assert expected == {"CE"}, "a closed group leaked into EXPECTED"
+
+
+class TestReconciliationIsNotDeadWhereItMatters:
+    """DEFECT IN d6fbfaf (mine). _run_one_management_pass opens with
+    `if not self._entry_prices: return`, and _entry_prices is populated only
+    when an entry FILLS. Reconciliation was called far below that guard, so it
+    never ran unless Bujji already believed it held a position -- the exact
+    opposite of the case it exists to detect. A position at the broker that
+    Bujji does not know about means, by definition, no entry of ours filled:
+    _entry_prices is empty, the pass returns at line one, and the unfiltered
+    read never happens. The detector was dead precisely where it mattered.
+
+    Asserted over the AST: the fix's own comment quotes the guard it moved
+    ahead of, so a source-text check matches the prose instead of the code.
+    """
+
+    @staticmethod
+    def _statements():
+        import ast
+        src = (REPO_ROOT / "bujji_options_os_runner.py").read_text()
+        for node in ast.walk(ast.parse(src)):
+            if isinstance(node, ast.FunctionDef) and node.name == "_run_one_management_pass":
+                return node.body
+        raise AssertionError("_run_one_management_pass not found")
+
+    def test_reconciliation_is_the_very_first_statement(self):
+        import ast
+        first = self._statements()[0]
+        assert isinstance(first, ast.Expr)
+        assert ast.unparse(first).strip() == "self._reconcile_broker_positions(stage_label)"
+
+    def test_it_precedes_the_entry_prices_guard(self):
+        """The guard that made it dead."""
+        import ast
+        body = self._statements()
+        recon = next(i for i, st in enumerate(body)
+                     if "_reconcile_broker_positions" in ast.unparse(st))
+        guard = next(i for i, st in enumerate(body)
+                     if isinstance(st, ast.If) and "_entry_prices" in ast.unparse(st.test))
+        assert recon < guard
+
+    def test_it_precedes_every_early_return(self):
+        """Two further early returns (no valuation, emergency brake) also sat
+        between the guard and the old call site."""
+        import ast
+        body = self._statements()
+        recon = next(i for i, st in enumerate(body)
+                     if "_reconcile_broker_positions" in ast.unparse(st))
+        returns = [i for i, st in enumerate(body)
+                   if any(isinstance(n, ast.Return) for n in ast.walk(st))]
+        assert all(recon < r for r in returns), (
+            f"an early return at statement {[r for r in returns if r < recon]} "
+            "precedes reconciliation")
+
+    def test_there_is_exactly_one_call_site(self):
+        src = (REPO_ROOT / "bujji_options_os_runner.py").read_text()
+        assert src.count("self._reconcile_broker_positions(stage_label)") == 1

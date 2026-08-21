@@ -2158,6 +2158,23 @@ class OptionsOSRunner:
             self._logger.exception("canonical lifecycle entry failed (session continues): %s", exc)
 
     def _run_one_management_pass(self, stage_label: str) -> None:
+        # RECONCILE BEFORE ANY EARLY RETURN (defect in d6fbfaf, mine).
+        #
+        # This method opens with `if not self._entry_prices: return`, and
+        # _entry_prices is populated only when an entry FILLS. Reconciliation
+        # was called far below that guard, so it never ran unless Bujji
+        # already believed it held a position -- which is the exact opposite
+        # of the case it exists to detect. A position at the broker that Bujji
+        # does not know about means, by definition, that no entry of ours
+        # filled: _entry_prices is empty, the pass returns at line one, and
+        # the unfiltered read never happens. The detector was dead precisely
+        # where it mattered.
+        #
+        # Two further early returns below (no valuation; emergency brake) also
+        # preceded it. Reconciliation depends on none of that state: it needs
+        # the broker and the registry, both available from the first pass.
+        self._reconcile_broker_positions(stage_label)
+
         if not self._entry_prices:
             return
         import asyncio
@@ -2278,15 +2295,6 @@ class OptionsOSRunner:
         # lost was the ability to SEE a failed exit, and any escalation from
         # one. An operator reading the session could not tell whether the
         # stop-loss worked.
-        # CONTINUOUS RECONCILIATION (2026-08-21). Broker truth was consulted
-        # at placement, at startup and at EOD -- never in between. The only
-        # in-session position read went through PositionRealityRegistry, which
-        # intersects broker positions with an in-memory table of registered
-        # symbols, so a position at a symbol Bujji never registered was
-        # mathematically undiscoverable: never valued, never stop-lossed,
-        # never escalated, unnoticed until EOD.
-        self._reconcile_broker_positions(stage_label)
-
         execution = getattr(result, "forced_execution", None)
         exit_status = getattr(execution, "status", None) if execution is not None else None
         self._logger.info(
