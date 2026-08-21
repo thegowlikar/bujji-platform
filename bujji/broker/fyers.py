@@ -40,7 +40,7 @@ from ..core.config import BrokerConfig
 from ..core.enums import Direction, OrderStatus, Side
 from ..core.models import Candle, OptionContract, OrderRequest, OrderResult
 from .base import Broker
-from .errors import AuthenticationError
+from .errors import AuthenticationError, UnverifiedPositionSchemaError
 from .fyers_token_manager import FyersTokenManager
 
 # Best-effort FYERS error-code classification for auth/session failures
@@ -838,6 +838,27 @@ class FyersBroker(Broker):
         return dict(row) if row else None
 
     async def place_order(self, request: OrderRequest) -> OrderResult:
+        # THE POSITION-SCHEMA GATE. `FYERS_POSITION_SCHEMA_VERIFIED` said of
+        # itself: "This flag exists so that fact is a gate rather than a
+        # comment." It was a comment. Nothing in production read it -- only
+        # tests asserting it stayed False -- so the safeguard against
+        # manufactured flatness protected nothing.
+        #
+        # Placed HERE, on the one call that can create a position, rather than
+        # at construction (harmless, and a construction-only test legitimately
+        # builds this broker) or on every call (which would block the EXIT of a
+        # position and strand it, turning a guard into the hazard it exists to
+        # prevent).
+        if not self.position_schema_verified:
+            raise UnverifiedPositionSchemaError(
+                "refusing to place a REAL order: FYERS_POSITION_SCHEMA_VERIFIED "
+                "is False, so get_open_positions() cannot be trusted to report "
+                "an open position. A wrong field name reads every row as qty 0 "
+                "and manufactures flatness -- this system would sell options it "
+                "could never prove it had closed. Clear this by observing a real "
+                "open position and confirming the payload field names, then set "
+                "the flag; never by reasoning about it."
+            )
         # C3 IDEMPOTENCY REQUIREMENT: the ExecutionEngine guarantees at-most-once
         # placement per client_order_id ONLY IF this id is round-trippable —
         # it is sent as `orderTag` here and matched back in get_order via the

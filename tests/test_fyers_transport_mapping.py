@@ -19,6 +19,19 @@ class RecordingFyers(FyersBroker):
     """Records every _call invocation's (action, params) and returns a
     caller-supplied canned response."""
 
+    # THIS HARNESS NEVER REACHES A REAL ACCOUNT -- `_call` is overridden below,
+    # so no network request is made and no order can exist. The real
+    # FyersBroker refuses to place an order while
+    # FYERS_POSITION_SCHEMA_VERIFIED is False (see
+    # tests/test_position_schema_gate.py): a payload whose `netQty` field name
+    # is wrong reads every position as flat, and a system that sells options
+    # must never open what it cannot prove it closed.
+    #
+    # These tests are about SDK parameter mapping, not about that gate, so the
+    # opt-in is stated explicitly HERE rather than by weakening the gate. The
+    # production default stays False.
+    position_schema_verified = True
+
     def __init__(self, config, logger):
         super().__init__(config, logger)
         self.calls: list[tuple] = []

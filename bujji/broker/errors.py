@@ -32,6 +32,30 @@ class AuthenticationError(RuntimeError):
     """
 
 
+class UnverifiedPositionSchemaError(RuntimeError):
+    """Raised instead of placing a REAL order while `netQty` / `symbol` in the
+    FYERS positions payload are still unconfirmed against a live account.
+
+    `FYERS_POSITION_SCHEMA_VERIFIED` documents itself as existing "so that fact
+    is a gate rather than a comment" -- but nothing consulted it. Its own
+    comment names the harm precisely: if `netQty` were actually called
+    something else, every position row would read as qty 0, every position
+    would be filtered out as flat, and the account would look EMPTY. It
+    "manufactures flatness", and it does so silently and in the dangerous
+    direction.
+
+    Placing an order you cannot later prove you closed is the one thing an
+    options-SELLING system must never do, so the gate sits on `place_order`:
+    the only call that can create a position. Reads, cancels and exits are
+    deliberately NOT gated -- blocking those would strand a position rather
+    than prevent one.
+
+    Clearing this is an OPERATOR action, never an inference: observe a real
+    open position, confirm the field names against the live payload, then set
+    the flag. It must not be flipped by reasoning.
+    """
+
+
 class LiveExecutionDisabledError(RuntimeError):
     """Raised instead of ever placing/modifying/cancelling a real order.
 
