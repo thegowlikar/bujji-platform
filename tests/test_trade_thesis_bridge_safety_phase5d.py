@@ -237,6 +237,29 @@ _EXIT_BROKER_TRUTH_AUTHORIZED = (
 )
 
 
+# AUTHORIZED 2026-08-21 (Rule 11): EOD closure as a broker-truth state machine.
+#
+# WHY. _eod_close() ran one management pass and then called
+# run_market_close_sequence() -- four lines that transition POSTMARKET then
+# COMPLETE. Nothing discovered broker positions, nothing cancelled working
+# orders, and nothing asked the broker whether the account was flat before the
+# session declared COMPLETE and the process exited. A position the management
+# pass did not close carried overnight with nothing watching it, while
+# finalize_session(final_positions=(), unrealized_pnl=0.0) wrote a summary
+# asserting there was nothing open.
+#
+# WHAT IT ADDS. Orchestration only, composed from proven parts: placement goes
+# through the SAME broker-truth place_fn entries and exits use (never
+# place_order directly), the reversal pattern is lifted from
+# core/orchestrator._flatten_orphan, and discovery is an unfiltered
+# get_open_positions. It adds no strategy, no risk rule, and no new broker
+# capability -- and it can only ever REFUSE to complete a session, never
+# permit one it previously refused. See tests/test_eod_closure.py.
+_EOD_CLOSURE_AUTHORIZED = (
+    "bujji/production_runtime/eod_closure.py",
+)
+
+
 def test_no_forbidden_module_imports_in_bridge():
     out = _grep(FORBIDDEN_IMPORTS, FILE)
     assert out == "", f"forbidden import found: {out}"
@@ -290,7 +313,7 @@ def test_no_forbidden_protected_package_touched():
         cwd="/opt/bujji/app", capture_output=True, text=True,
     )
     changed = [l for l in result.stdout.strip().splitlines() if l]
-    changed = [l for l in changed if l not in _PAPERBROKER_V2_AUTHORIZED + _LOT_SIZE_AUTHORITATIVE_AUTHORIZED + _CPC_SAFETY_SPINE_AUTHORIZED + _CPC_EVIDENCE_AND_REALISM_AUTHORIZED + _THREE_PART_SELECTION_AUTHORIZED + _DEFINED_RISK_MODE_AUTHORIZED + _LEARNING_LOOP_AUTHORIZED + _DATA_QUALITY_GATE_AUTHORIZED + _WEBSOCKET_TICK_PROVIDER_AUTHORIZED + _JOURNALED_EXECUTION_AUTHORIZED + _EXIT_BROKER_TRUTH_AUTHORIZED]
+    changed = [l for l in changed if l not in _PAPERBROKER_V2_AUTHORIZED + _LOT_SIZE_AUTHORITATIVE_AUTHORIZED + _CPC_SAFETY_SPINE_AUTHORIZED + _CPC_EVIDENCE_AND_REALISM_AUTHORIZED + _THREE_PART_SELECTION_AUTHORIZED + _DEFINED_RISK_MODE_AUTHORIZED + _LEARNING_LOOP_AUTHORIZED + _DATA_QUALITY_GATE_AUTHORIZED + _WEBSOCKET_TICK_PROVIDER_AUTHORIZED + _JOURNALED_EXECUTION_AUTHORIZED + _EXIT_BROKER_TRUTH_AUTHORIZED + _EOD_CLOSURE_AUTHORIZED]
     forbidden_prefixes = (
         "bujji/msi_consensus/", "bujji/msi_decision_synthesis/",
         "bujji/msi_strategy_eligibility/", "bujji/msi_strategy_selector/",
@@ -373,5 +396,29 @@ def test_shadow_session_runner_and_broker_unchanged():
     # (test_market_perception_safety, test_phase14b_safety) remain untouched
     # and enforcing. Dedicated coverage: tests/test_rate_budget.py, including
     # a REAL two-process test that fails if the budget is not shared.
-    assert ("303" in stat_line or "55" in stat_line or stat_line == ""), \
+    #
+    # Updated 2026-08-21 (Rule 13, EOD closure): TWO additive declarations,
+    # no behaviour change and no new capability.
+    #
+    #   order_book_survives_restart = True -- startup recovery must know
+    #   whether a broker's not-found is evidence about the exchange or merely
+    #   this process's amnesia. PaperBroker rebuilds its order dict empty
+    #   every session, so a not-found from IT was being recorded durably as
+    #   RECOVERY_CONFIRMED_NEVER_RECEIVED. The exchange holds this broker's
+    #   book, so its not-found IS evidence.
+    #
+    #   FYERS_POSITION_SCHEMA_VERIFIED = False -- get_open_positions() reads
+    #   `netQty`/`netAvg` off each netPositions row. The top-level shape was
+    #   confirmed live against an EMPTY book; the per-row names have never
+    #   been seen against a real open position, as that method already says.
+    #   EOD flat verification, residual sizing and orphan detection all rest
+    #   on them, and if `netQty` were named otherwise every row would read
+    #   qty 0 and the account would look EMPTY -- a silent failure that
+    #   manufactures flatness. This makes that a gate rather than a comment.
+    #   It must be flipped only by an operator observing a REAL open position.
+    #
+    # No place/modify/cancel surface is touched; the two capability guards
+    # remain untouched and enforcing. Coverage: tests/test_eod_closure.py.
+    assert ("303" in stat_line or "55" in stat_line or "81" in stat_line
+            or stat_line == ""), \
         f"unexpected fyers.py diff: {stat_line}"

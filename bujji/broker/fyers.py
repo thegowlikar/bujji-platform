@@ -240,11 +240,37 @@ def _paced(method):
     return call
 
 
+# THE RAW POSITION SCHEMA IS NOT VERIFIED (Rule 13, 2026-08-21).
+#
+# get_open_positions() normalizes FYERS rows to {symbol, side, qty, avg_price}
+# by reading `netQty` and `netAvg` off each row of `netPositions`. The
+# top-level shape was confirmed live against an EMPTY position book; the
+# per-row field names were carried over from an earlier implementation and
+# have never been seen against a real open position, as that method's own
+# comment states.
+#
+# EVERY safety property built on top of it -- EOD flat verification, residual
+# sizing, orphan detection, emergency-close verification -- depends on those
+# two names being right. If `netQty` were actually named something else, each
+# row would read as qty 0, every position would be filtered out as flat, and
+# the account would look EMPTY. That failure is silent and points the wrong
+# way: it manufactures flatness.
+#
+# This flag exists so that fact is a gate rather than a comment. It must not
+# be flipped by reasoning; only by an operator observing a REAL open position
+# and confirming the field names against the live payload.
+FYERS_POSITION_SCHEMA_VERIFIED = False
+
+
 class FyersBroker(Broker):
     # The EXCHANGE holds the order book, not this process. A not-found from
     # here is real evidence about the order's fate, so startup recovery may
     # treat it as authoritative.
     order_book_survives_restart = True
+
+    # Mirrors the module-level gate above so callers can read it off the
+    # broker instance they already hold.
+    position_schema_verified = FYERS_POSITION_SCHEMA_VERIFIED
 
     name = "fyers"
 

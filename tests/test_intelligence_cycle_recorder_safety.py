@@ -301,6 +301,29 @@ _EXIT_BROKER_TRUTH_AUTHORIZED = (
 )
 
 
+# AUTHORIZED 2026-08-21 (Rule 11): EOD closure as a broker-truth state machine.
+#
+# WHY. _eod_close() ran one management pass and then called
+# run_market_close_sequence() -- four lines that transition POSTMARKET then
+# COMPLETE. Nothing discovered broker positions, nothing cancelled working
+# orders, and nothing asked the broker whether the account was flat before the
+# session declared COMPLETE and the process exited. A position the management
+# pass did not close carried overnight with nothing watching it, while
+# finalize_session(final_positions=(), unrealized_pnl=0.0) wrote a summary
+# asserting there was nothing open.
+#
+# WHAT IT ADDS. Orchestration only, composed from proven parts: placement goes
+# through the SAME broker-truth place_fn entries and exits use (never
+# place_order directly), the reversal pattern is lifted from
+# core/orchestrator._flatten_orphan, and discovery is an unfiltered
+# get_open_positions. It adds no strategy, no risk rule, and no new broker
+# capability -- and it can only ever REFUSE to complete a session, never
+# permit one it previously refused. See tests/test_eod_closure.py.
+_EOD_CLOSURE_AUTHORIZED = (
+    "bujji/production_runtime/eod_closure.py",
+)
+
+
 def test_no_forbidden_module_imports_in_recorder():
     out = _grep(FORBIDDEN_IMPORTS, RECORDER_FILE)
     assert out == "", f"forbidden import found: {out}"
@@ -371,7 +394,7 @@ def test_no_protected_lineage_package_touched():
         cwd="/opt/bujji/app", capture_output=True, text=True,
     )
     changed = [l for l in result.stdout.strip().splitlines() if l]
-    changed = [l for l in changed if l not in _PAPERBROKER_V2_AUTHORIZED + _LOT_SIZE_AUTHORITATIVE_AUTHORIZED + _CPC_SAFETY_SPINE_AUTHORIZED + _CPC_EVIDENCE_AND_REALISM_AUTHORIZED + _LIVE_PREMIUM_FIX_AUTHORIZED + _THREE_PART_SELECTION_AUTHORIZED + _DEFINED_RISK_MODE_AUTHORIZED + _LEARNING_LOOP_AUTHORIZED + _DIRECTION_POSITIONING_LENS_AUTHORIZED + _DATA_QUALITY_GATE_AUTHORIZED + _WEBSOCKET_TICK_PROVIDER_AUTHORIZED + _JOURNALED_EXECUTION_AUTHORIZED + _EXIT_BROKER_TRUTH_AUTHORIZED]
+    changed = [l for l in changed if l not in _PAPERBROKER_V2_AUTHORIZED + _LOT_SIZE_AUTHORITATIVE_AUTHORIZED + _CPC_SAFETY_SPINE_AUTHORIZED + _CPC_EVIDENCE_AND_REALISM_AUTHORIZED + _LIVE_PREMIUM_FIX_AUTHORIZED + _THREE_PART_SELECTION_AUTHORIZED + _DEFINED_RISK_MODE_AUTHORIZED + _LEARNING_LOOP_AUTHORIZED + _DIRECTION_POSITIONING_LENS_AUTHORIZED + _DATA_QUALITY_GATE_AUTHORIZED + _WEBSOCKET_TICK_PROVIDER_AUTHORIZED + _JOURNALED_EXECUTION_AUTHORIZED + _EXIT_BROKER_TRUTH_AUTHORIZED + _EOD_CLOSURE_AUTHORIZED]
     forbidden_prefixes = (
         "bujji/msi_strategy_selector/", "bujji/msi_trade_intent/", "bujji/msi_trade_construction/",
         "bujji/risk_governor/", "bujji/execution_engine/", "bujji/trading_brain/",
@@ -389,6 +412,7 @@ def test_no_protected_lineage_package_touched():
         and l not in _WEBSOCKET_TICK_PROVIDER_AUTHORIZED
         and l not in _JOURNALED_EXECUTION_AUTHORIZED
         and l not in _EXIT_BROKER_TRUTH_AUTHORIZED
+        and l not in _EOD_CLOSURE_AUTHORIZED
     ]
     assert violations == [], f"forbidden module changes found: {violations}"
 

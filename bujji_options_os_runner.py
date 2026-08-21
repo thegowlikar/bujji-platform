@@ -411,6 +411,11 @@ class OptionsOSRunner:
         self._intelligence_origin = None
         # Set only when a partial entry leaves filled-but-unwound legs live.
         self._orphan_position_live = False
+        # Set by _run_eod_closure; read by _session_archive so finalization
+        # reports the broker's own view instead of a hardcoded flat.
+        self._eod_closure_result = None
+        self._exit_place_fn = None
+        self._journal_path = None
 
         self._entry_prices: Dict[str, float] = {}
         self._governor_result_summary: Dict[str, Any] = {}
@@ -541,6 +546,10 @@ class OptionsOSRunner:
         journal_path = REPO_ROOT / artifacts_cfg.get("journal_path", "data/options_os_shadow_position_group_journal.db")
         journal_path.parent.mkdir(parents=True, exist_ok=True)
         self._journal = PositionGroupJournal(str(journal_path))
+        # EOD closure enumerates Bujji's own submitted orders from this file
+        # to cancel any still working (the Broker interface exposes no
+        # working-order enumeration -- see eod_closure's own docstring).
+        self._journal_path = journal_path
         # STARTUP RECOVERY (Layer 11, 2026-08-21) -- run once, before any new
         # mint, per position_group_recovery's own stated contract, honoured
         # for the first time (it previously had zero callers). Any leg a
@@ -659,6 +668,10 @@ class OptionsOSRunner:
         from bujji.production_runtime.execution_journal_bridge import broker_truth_place_fn as _btpf
 
         _exit_place_fn = _btpf(execution_engine, _asyncio_exec.run, self._logger)
+        # Held for EOD closure, which flattens whatever the management pass
+        # did not -- through the SAME broker-truth placement function, so
+        # there is exactly one order path for entry, exit and closure.
+        self._exit_place_fn = _exit_place_fn
         self._executor = TradeLifecycleExecutor(self._broker, self._registry, self._lifecycle_runtime,
                                                 place_fn=_exit_place_fn,
                                                  event_bus=self._root.event_bus)
@@ -2534,10 +2547,69 @@ class OptionsOSRunner:
         self._governor_result_summary["management_cycles"] = cycles
 
     def _eod_close(self) -> None:
+        """Close the session against BROKER TRUTH, never against memory.
+
+        This was: one management pass, then run_market_close_sequence() --
+        four lines that transition POSTMARKET then COMPLETE. Nothing
+        discovered broker positions, nothing cancelled working orders, and
+        nothing asked the broker whether the account was flat before the
+        session declared itself COMPLETE and the process exited. A position
+        the management pass did not close -- a rejected exit, a timed-out
+        exit, or a position the in-memory registry could not see -- carried
+        overnight with nothing watching it.
+
+        The management pass still runs first: it is the strategy-aware exit
+        and it prices legs from the valuation. The closure machine then
+        handles whatever it did not, from the broker's own account state.
+        """
         self._stage = RunnerStage.EOD_CLOSE
         self._logger.info("EOD_CLOSE")
         self._run_one_management_pass("EOD_CLOSE")
-        self._trading_brain_runtime.run_market_close_sequence()
+        self._run_eod_closure()
+
+    def _run_eod_closure(self) -> None:
+        """Drive the closure state machine and gate COMPLETE on its verdict."""
+        import asyncio as _asyncio
+
+        from bujji.production_runtime.eod_closure import run_eod_closure
+
+        try:
+            result = run_eod_closure(
+                broker=self._broker, place_fn=self._exit_place_fn, run_async=_asyncio.run,
+                journal=self._journal, journal_db_path=str(self._journal_path),
+                underlying=self._root.underlying, lot_size=self._root.exchange_lot_size,
+                session_id=self._session_id, logger=self._logger,
+                max_attempts=int(self._config.get("exit_policy", {}).get("eod_flatten_attempts", 2)),
+            )
+        except Exception as exc:  # noqa: BLE001
+            # A closure machine that itself failed has NOT proven flatness.
+            # Fail closed: never fall through to COMPLETE.
+            self._logger.critical(
+                "EOD CLOSURE RAISED (%s: %s) -- flatness is UNPROVEN. The session is NOT "
+                "complete.", type(exc).__name__, exc)
+            self._eod_closure_result = None
+            self._governor_result_summary["eod_closure"] = {
+                "state": "BROKER_TRUTH_UNKNOWN", "flat": None, "session_closed": False,
+                "detail": f"closure raised: {type(exc).__name__}: {exc}",
+            }
+            self._governor_result_summary["session_closed"] = False
+            self._governor_result_summary["closure_reason"] = "CRITICAL_UNFLATTENED_POSITION"
+            return
+
+        self._eod_closure_result = result
+        self._governor_result_summary["eod_closure"] = result.to_dict()
+        self._governor_result_summary["session_closed"] = result.session_closed
+
+        if result.session_closed:
+            # THE ONLY PATH TO COMPLETE. Positively verified flatness.
+            self._trading_brain_runtime.run_market_close_sequence()
+            return
+
+        self._governor_result_summary["closure_reason"] = result.state
+        self._logger.critical(
+            "SESSION NOT CLOSED -- %s. Broker flat=%s. %s. The runtime is deliberately "
+            "NOT advanced to COMPLETE: doing so would assert a flatness nothing has "
+            "proven.", result.state, result.flat, result.detail)
 
     def _session_archive(self) -> None:
         self._stage = RunnerStage.SESSION_ARCHIVE
@@ -2547,7 +2619,29 @@ class OptionsOSRunner:
         realized = 0.0
         for symbol in self._entry_prices:
             realized += self._broker.get_realized_pnl(symbol)
-        self._recorder.finalize_session(final_positions=(), realized_pnl=realized, unrealized_pnl=0.0)
+
+        # FINALIZATION REPORTS REALITY (2026-08-21). This passed a literal
+        # empty tuple and a literal 0.0, so every summary.json asserted "no
+        # open positions, no unrealized exposure" -- including on a session
+        # that ended with a position still open. The per-session artifact of
+        # record was structurally incapable of reporting the one condition an
+        # operator most needs to see.
+        #
+        # The closure machine's own broker read is authoritative here. When it
+        # could not establish truth, the positions are reported as UNKNOWN
+        # rather than as empty.
+        closure = getattr(self, "_eod_closure_result", None)
+        final_positions = tuple(getattr(closure, "positions_after", ()) or ())
+        if closure is not None and closure.flat is None:
+            self._governor_result_summary["final_positions_status"] = "UNKNOWN"
+        elif final_positions:
+            self._governor_result_summary["final_positions_status"] = "OPEN"
+        else:
+            self._governor_result_summary["final_positions_status"] = (
+                "FLAT" if closure is not None and closure.flat is True else "UNKNOWN")
+        self._governor_result_summary["final_positions"] = list(final_positions)
+        self._recorder.finalize_session(
+            final_positions=final_positions, realized_pnl=realized, unrealized_pnl=0.0)
         self._governor_result_summary["realized_pnl"] = realized
         self._governor_result_summary["cycles_priced_from_ticks"] = self._priced_from_ticks_cycles
         self._governor_result_summary["cycles_blind"] = self._blind_cycles
