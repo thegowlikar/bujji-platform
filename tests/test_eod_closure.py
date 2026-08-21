@@ -12,6 +12,8 @@ summary.json asserting there was nothing open.
 """
 from __future__ import annotations
 
+import ast
+
 import asyncio
 import logging
 import sys
@@ -206,25 +208,48 @@ class TestProductionWiring:
     """Rule 14: fail if someone later builds a second EOD path."""
 
     RUNNER = (REPO_ROOT / "bujji_options_os_runner.py").read_text()
+    RUNNER_AST = ast.parse((REPO_ROOT / "bujji_options_os_runner.py").read_text())
+
+    @classmethod
+    def _method(cls, name):
+        for node in ast.walk(cls.RUNNER_AST):
+            if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) and node.name == name:
+                return node
+        raise AssertionError(f"{name} not found in the runner")
 
     def test_eod_close_calls_the_canonical_machine(self):
-        i = self.RUNNER.index("def _eod_close")
-        block = self.RUNNER[i:i + 1400]
-        assert "self._run_eod_closure()" in block
+        assert "self._run_eod_closure()" in ast.unparse(self._method("_eod_close"))
 
     def test_complete_is_reachable_only_from_a_verified_flat(self):
-        """run_market_close_sequence is what advances to COMPLETE. In the
-        runner it must appear exactly twice -- the brake and EOD -- and each
-        must be gated on proven flatness."""
-        # Count the CALL form, not the bare name -- the bare name also
-        # appears in comments explaining the defect this replaced.
+        """run_market_close_sequence is what advances to COMPLETE. It must
+        appear exactly twice -- the brake and EOD -- and each must sit INSIDE
+        a proven-flat branch.
+
+        AST, NOT A CHARACTER WINDOW (2026-08-21). This read
+        `self.RUNNER[i:i + 2600]` and broke the moment the closure-integrity
+        audit added a comment to `_run_eod_closure`: the call slid past the
+        2600th character and `.index()` raised, reporting a defect that did
+        not exist. A window measures how much prose sits above the code, not
+        whether the code is correct -- this repo has now lost time to that
+        pattern five separate times. Asserting on the parse tree makes the
+        test say what it means: the call is nested under the gate.
+        """
         assert self.RUNNER.count(
             "self._trading_brain_runtime.run_market_close_sequence()") == 2
-        i = self.RUNNER.index("def _run_eod_closure")
-        block = self.RUNNER[i:i + 2600]
-        gate = block.index("if result.session_closed:")
-        call = block.index("run_market_close_sequence()")
-        assert gate < call, "COMPLETE is reachable without a proven flat"
+
+        fn = self._method("_run_eod_closure")
+        gates = [n for n in ast.walk(fn)
+                 if isinstance(n, ast.If) and "result.session_closed" in ast.unparse(n.test)]
+        assert gates, "the session_closed gate is gone from _run_eod_closure"
+        assert any("run_market_close_sequence()" in ast.unparse(gate.body)
+                   for gate in gates), "COMPLETE is reachable without a proven flat"
+
+        # And nowhere else in that method -- an ungated second call would
+        # advance COMPLETE on an unproven flat.
+        outside = [n for n in ast.walk(fn) if isinstance(n, ast.Call)
+                   and ast.unparse(n.func).endswith("run_market_close_sequence")
+                   and not any(g.lineno <= n.lineno <= g.end_lineno for g in gates)]
+        assert not outside, "run_market_close_sequence is called outside the flat gate"
 
     def test_the_closure_uses_the_same_place_fn_as_entries_and_exits(self):
         i = self.RUNNER.index("def _run_eod_closure")
