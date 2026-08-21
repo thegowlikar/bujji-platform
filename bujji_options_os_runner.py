@@ -2243,17 +2243,78 @@ class OptionsOSRunner:
             # was sized against, so the stop stays proportional to the position.
             self._risk_budget()["requested_risk"],
         ))
+        # EXIT STATUS IS CONSUMED, NOT DISCARDED (2026-08-21).
+        #
+        # This read `result.forced_execution is not None` -- a BOOLEAN "did an
+        # execution object come back" -- and logged and recorded only that.
+        # The object carries an honest terminal status (EXECUTED / PARTIAL /
+        # BROKER_TRUTH_UNKNOWN / REJECTED / FAILED_VALIDATION) computed from
+        # broker truth, and every bit of it was thrown away at this line. A
+        # stop-loss that the broker REJECTED and one that filled produced the
+        # identical log line and the identical summary entry:
+        # `forced_execution=True`.
+        #
+        # Closure decisions were never wrong because of this -- the governor
+        # transitions EXITED only on STATUS_EXECUTED, the executor marks
+        # closed only when broker reality reports no open leg, and
+        # map_exit_fills_to_legs skips a leg with no average_price. What was
+        # lost was the ability to SEE a failed exit, and any escalation from
+        # one. An operator reading the session could not tell whether the
+        # stop-loss worked.
+        execution = getattr(result, "forced_execution", None)
+        exit_status = getattr(execution, "status", None) if execution is not None else None
         self._logger.info(
-            "%s -- D.4 action=%s exit_policy=%s forced_execution=%s",
+            "%s -- D.4 action=%s exit_policy=%s forced_execution=%s exit_status=%s",
             stage_label, result.lifecycle_evaluation.recommendation.action,
-            result.policy_decision.decision, result.forced_execution is not None,
+            result.policy_decision.decision, execution is not None, exit_status,
         )
         self._governor_result_summary.setdefault("management_passes", []).append({
             "stage": stage_label, "decision": result.policy_decision.decision,
-            "forced_execution": result.forced_execution is not None,
+            "forced_execution": execution is not None,
+            "exit_status": exit_status,
         })
+        self._record_exit_outcome(stage_label, exit_status, execution)
         self._capture_exit_fills(symbols_before_exit, result)
 
+
+    def _record_exit_outcome(self, stage_label: str, exit_status, execution) -> None:
+        """Record what an attempted exit actually did, and escalate when it
+        did not close the position.
+
+        An exit was ATTEMPTED whenever an execution object exists. Whether it
+        SUCCEEDED is `status`. Only STATUS_EXECUTED means the position was
+        closed; everything else leaves exposure standing, and the session must
+        carry that fact rather than a boolean that reads as success.
+
+        This never mutates position state -- the executor and governor own
+        that, and both already gate on broker truth. This is the observability
+        and escalation half that was missing.
+        """
+        if execution is None:
+            return
+        from bujji.production_runtime.trade_lifecycle_executor import STATUS_EXECUTED
+
+        record = {
+            "stage": stage_label,
+            "status": exit_status,
+            "position_group_id": getattr(execution, "position_group_id", None),
+            "action": getattr(execution, "action", None),
+            "reason": getattr(execution, "reason", None),
+            "orders_submitted": len(getattr(execution, "orders_submitted", ()) or ()),
+        }
+        if exit_status == STATUS_EXECUTED:
+            self._governor_result_summary.setdefault("exits_confirmed", []).append(record)
+            return
+
+        # NOT closed. Loudly, every time -- an exit that did not close is the
+        # condition under which a position keeps running against its thesis
+        # while the session believes it acted.
+        self._governor_result_summary.setdefault("exits_unresolved", []).append(record)
+        self._governor_result_summary["has_unresolved_exit"] = True
+        self._logger.critical(
+            "%s -- EXIT DID NOT CLOSE THE POSITION: status=%s (%s). Exposure REMAINS. "
+            "Management continues and EOD closure will attempt it again against "
+            "broker truth.", stage_label, exit_status, record["reason"])
 
     def _execute_emergency_close(self, brake_reason, valuation, stage_label: str) -> None:
         """Actually flatten, then prove it against the broker.
@@ -2640,6 +2701,16 @@ class OptionsOSRunner:
             self._governor_result_summary["final_positions_status"] = (
                 "FLAT" if closure is not None and closure.flat is True else "UNKNOWN")
         self._governor_result_summary["final_positions"] = list(final_positions)
+        # RULE 8: an unresolved exit must survive into the session artifact.
+        # A session whose stop-loss was REJECTED and whose EOD closure could
+        # not prove flat must not read as a clean close just because the
+        # closure machine happened to return.
+        if self._governor_result_summary.get("has_unresolved_exit"):
+            unresolved = self._governor_result_summary.get("exits_unresolved", [])
+            self._logger.critical(
+                "SESSION HAD %d UNRESOLVED EXIT(S): %s. final_positions_status=%s",
+                len(unresolved), [u.get("status") for u in unresolved],
+                self._governor_result_summary.get("final_positions_status"))
         self._recorder.finalize_session(
             final_positions=final_positions, realized_pnl=realized, unrealized_pnl=0.0)
         self._governor_result_summary["realized_pnl"] = realized
