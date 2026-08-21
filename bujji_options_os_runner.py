@@ -1622,6 +1622,23 @@ class OptionsOSRunner:
             if now.time() >= observe_until:
                 break
             cycles += 1
+            # RECONCILE ON EVERY CYCLE OF THE LOOP THAT ACTUALLY RUNS ALL DAY.
+            #
+            # This loop breaks at observe_until (15:30), NOT at entry_cutoff --
+            # past the cutoff it `continue`s, "observation only, all day". So
+            # on a no-entry day it occupies the ENTIRE session, and
+            # _position_management() (whose own loop ends at monitor_until,
+            # 15:15) runs only after it, when that deadline has already
+            # passed. Making _position_management unconditional was therefore
+            # necessary but nowhere near sufficient: the clock that ticks all
+            # day lives HERE.
+            #
+            # Proven live 2026-08-21: a NO_TRADE session produced zero
+            # position_reconciliation.jsonl records.
+            #
+            # Cost is one unfiltered broker read per decision cycle (300s),
+            # against a host-wide ~8.3/s budget.
+            self._reconcile_broker_positions(f"CONTINUOUS[{cycles}]")
             plan = WarmupPlan(
                 polls=polls_per_cycle + (first_cycle_extra_polls if cycles == 1 else 0),
                 interval_seconds=poll_interval, strides=(1,))
@@ -1721,6 +1738,23 @@ class OptionsOSRunner:
             if now.time() >= observe_until:
                 break
             cycles += 1
+            # RECONCILE ON EVERY CYCLE OF THE LOOP THAT ACTUALLY RUNS ALL DAY.
+            #
+            # This loop breaks at observe_until (15:30), NOT at entry_cutoff --
+            # past the cutoff it `continue`s, "observation only, all day". So
+            # on a no-entry day it occupies the ENTIRE session, and
+            # _position_management() (whose own loop ends at monitor_until,
+            # 15:15) runs only after it, when that deadline has already
+            # passed. Making _position_management unconditional was therefore
+            # necessary but nowhere near sufficient: the clock that ticks all
+            # day lives HERE.
+            #
+            # Proven live 2026-08-21: a NO_TRADE session produced zero
+            # position_reconciliation.jsonl records.
+            #
+            # Cost is one unfiltered broker read per decision cycle (300s),
+            # against a host-wide ~8.3/s budget.
+            self._reconcile_broker_positions(f"CONTINUOUS[{cycles}]")
             plan = WarmupPlan(polls=polls_per_cycle, interval_seconds=poll_interval, strides=(1,))
             _fresh = poll_spot_series(
                 fetch_spot=lambda: asyncio.run(broker.get_spot(self._root.underlying)),

@@ -441,12 +441,56 @@ class TestTheMonitoringLoopRunsWithoutAnEntry:
         i = body.index("monitoring_only")
         assert "naked = False if monitoring_only" in body[i:i + 400]
 
-    def test_there_is_still_exactly_one_reconcile_call_site(self):
-        """One authority, one home. The 15:15->15:30 observation window is
-        deliberately NOT given a second call site: _eod_close() follows it
-        immediately and both reconciles AND acts, and the entry cutoff is
-        14:30 so blocking new risk in that window is moot. A second site
-        would buy ~15 minutes of earlier DETECTION with no earlier ACTION,
-        at the cost of a call site that can drift."""
+    def test_every_ticking_loop_reconciles(self):
+        """THE INVARIANT CHANGED, deliberately (2026-08-21).
+
+        It was "exactly one call site". That was wrong, and the reasoning
+        behind it was wrong: I argued the 15:15->15:30 window did not need
+        coverage because _eod_close() follows immediately. But the continuous
+        ENTRY loop breaks at observe_until (15:30), not at entry_cutoff --
+        past the cutoff it `continue`s, "observation only, all day". So on a
+        no-entry day that loop occupies the ENTIRE session and
+        _position_management() (whose own loop ends at monitor_until, 15:15)
+        runs only afterwards, when its deadline has already passed.
+
+        The clock that ticks all day lives in the continuous loops. The
+        invariant that actually protects the property is therefore: EVERY
+        loop that ticks must reconcile -- not "there is only one site".
+        """
+        import ast
+
         src = (REPO_ROOT / "bujji_options_os_runner.py").read_text()
-        assert src.count("self._reconcile_broker_positions(stage_label)") == 1
+        tree = ast.parse(src)
+
+        def _reconciles(node) -> bool:
+            return any(
+                isinstance(n, ast.Call) and isinstance(n.func, ast.Attribute)
+                and n.func.attr == "_reconcile_broker_positions"
+                for n in ast.walk(node))
+
+        checked = 0
+        for name in ("_continuous_session", "_position_management"):
+            fn = next(n for n in ast.walk(tree)
+                      if isinstance(n, ast.FunctionDef) and n.name == name)
+            loops = [n for n in ast.walk(fn) if isinstance(n, (ast.While, ast.For))]
+            assert loops, f"{name} has no loop"
+            for loop in loops:
+                checked += 1
+                if name == "_position_management":
+                    # Its loop calls the pass, which reconciles first.
+                    assert any(
+                        isinstance(n, ast.Call) and isinstance(n.func, ast.Attribute)
+                        and n.func.attr == "_run_one_management_pass"
+                        for n in ast.walk(loop))
+                else:
+                    assert _reconciles(loop), (
+                        f"a ticking loop in {name} does not reconcile -- the "
+                        "detector is dead for however long that loop runs")
+        assert checked >= 3
+
+    def test_the_management_pass_still_reconciles_first(self):
+        import ast
+        src = (REPO_ROOT / "bujji_options_os_runner.py").read_text()
+        fn = next(n for n in ast.walk(ast.parse(src))
+                  if isinstance(n, ast.FunctionDef) and n.name == "_run_one_management_pass")
+        assert "_reconcile_broker_positions" in ast.unparse(fn.body[0])

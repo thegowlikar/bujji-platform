@@ -27,30 +27,84 @@ sys.path.insert(0, str(REPO_ROOT))
 RUNNER = (REPO_ROOT / "bujji_options_os_runner.py").read_text()
 
 
+def _method_source(name: str) -> str:
+    """A method's real body, via AST. Character windows were used here first
+    and were brittle: added code pushed the asserted text outside the guessed
+    window, so a correct implementation failed."""
+    import ast
+    for node in ast.walk(ast.parse(RUNNER)):
+        if isinstance(node, ast.FunctionDef) and node.name == name:
+            return ast.unparse(node)
+    raise AssertionError(f"{name} not found")
+
+
 class TestOrphanHasAManagementIdentity:
     def test_the_orphan_sets_the_governor_position_group_id(self):
         """The management pass reads self._governor._position_group_id. On an
         orphan (filled=False) it was never set, so every pass read
         valuations.get(None) -> None -> 'no valuation available for None'."""
-        i = RUNNER.index("def _register_orphaned_legs")
-        block = RUNNER[i:i + 2600]
-        assert "self._governor._position_group_id = pg_id" in block
+        assert "self._governor._position_group_id = pg_id" in _method_source(
+            "_register_orphaned_legs")
 
-    def test_continuous_mode_manages_an_orphan(self):
-        """_attempt_entry returns False on an orphan, so `if entered:` never
-        started management -- the loop moved on while a naked leg sat live."""
-        assert 'if entered or getattr(self, "_orphan_position_live", False):' in RUNNER
+    def test_the_monitoring_loop_no_longer_depends_on_having_entered(self):
+        """INVARIANT DELIBERATELY CHANGED 2026-08-21.
+
+        This asserted `if entered or _orphan_position_live:` -- the gate that
+        started management. That gate is gone: the loop now runs
+        unconditionally, because the case reconciliation exists for is "Bujji
+        believes it holds nothing while the broker holds something", and
+        `entered` is False in exactly that case.
+
+        The orphan property this test protects still holds, and more strongly:
+        management runs for an orphan because it runs for everything.
+        """
+        import ast
+        body = ast.unparse(next(
+            n for n in ast.walk(ast.parse(RUNNER))
+            if isinstance(n, ast.FunctionDef) and n.name == "_continuous_session"))
+        assert "self._position_management()" in body
+        i = body.index("self._position_management()")
+        assert "if entered" not in body[max(0, i - 220):i]
 
     def test_the_flag_starts_false(self):
         assert "self._orphan_position_live = False" in RUNNER
 
+    def test_the_orphan_flag_is_still_set_on_registration(self):
+        """It no longer gates the loop, but it still records that an orphan
+        exists, and the gap-4 handler forces it on when registration fails."""
+        assert "self._orphan_position_live = True" in _method_source(
+            "_register_orphaned_legs")
+
     def test_the_identity_the_registry_gets_is_the_one_the_governor_gets(self):
         """A mismatch here reintroduces the defect in a subtler form."""
-        i = RUNNER.index("def _register_orphaned_legs")
-        block = RUNNER[i:i + 2600]
-        assert 'pg_id = f"{cycle_result.proposal.assessment_id}-ORPHAN"' in block
-        assert "self._registry.register_entry(\n                pg_id," in block
-        assert "self._governor._position_group_id = pg_id" in block
+        import ast
+
+        src = _method_source("_register_orphaned_legs")
+        assert "self._governor._position_group_id = pg_id" in src
+        # pg_id must be LABEL-QUALIFIED: BROKER_TRUTH_UNKNOWN and
+        # PARTIAL_ORPHANED can both fire for one assessment, and
+        # register_entry refuses a duplicate group id by design.
+        # Checked on the AST node -- ast.unparse normalises f-string quoting,
+        # so a literal-text assertion is not reliable here.
+        tree = ast.parse(src)
+        pg_assign = next(
+            n for n in ast.walk(tree)
+            if isinstance(n, ast.Assign) and any(
+                isinstance(t, ast.Name) and t.id == "pg_id" for t in n.targets))
+        interpolated = {
+            v.value.id for v in ast.walk(pg_assign.value)
+            if isinstance(v, ast.FormattedValue) and isinstance(v.value, ast.Name)}
+        assert "label" in interpolated, "pg_id is not label-qualified"
+        # register_entry must receive that same pg_id as its first argument --
+        # asserted structurally rather than by string shape, which whitespace
+        # and line wrapping make unreliable.
+        calls = [n for n in ast.walk(ast.parse(src))
+                 if isinstance(n, ast.Call) and isinstance(n.func, ast.Attribute)
+                 and n.func.attr == "register_entry"]
+        assert len(calls) == 1, "expected exactly one registration"
+        first_arg = calls[0].args[0]
+        assert isinstance(first_arg, ast.Name) and first_arg.id == "pg_id", (
+            "register_entry does not receive the same id the governor is pointed at")
 
 
 class TestRecoveryNeverManufacturesNeverReceived:
