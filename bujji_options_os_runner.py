@@ -2563,9 +2563,45 @@ class OptionsOSRunner:
         if brake_reason is not None:
             self._logger.critical("%s -- EMERGENCY CLOSE: %s", stage_label, brake_reason)
             self._governor_result_summary["emergency_close_reason"] = brake_reason
-            self._emergency_closed = True
+
+            # `_emergency_closed` HALTS POSITION MANAGEMENT PERMANENTLY, so it
+            # must mean "the broker confirmed flat", never "we tried".
+            #
+            # It was set HERE, before the attempt, and never reconsidered. On
+            # 2026-08-21 the blind-cycle brake fired correctly at 09:54:35, the
+            # close raised NameError, CRITICAL_UNFLATTENED_POSITION was logged
+            # with both legs still open -- and one cycle later the loop read
+            # this flag and logged "POSITION_MANAGEMENT halted: emergency close
+            # executed." It had not executed. A naked short strangle then sat
+            # with no management, no stop-loss evaluation and no retry from
+            # 09:55:35 until the EOD sweep at 15:33:44. Five hours and 38
+            # minutes, undefined risk, because the brake that fired to protect
+            # the position disabled the only loop that could have retried it.
+            #
+            # The NameError is fixed; this fail-open is the general case, and
+            # it fires for ANY failed close -- broker timeout, rejection,
+            # network loss, an exception anywhere on the exit path.
+            #
+            # Cleared first so a True left by an earlier pass cannot be read as
+            # this pass's result.
+            self._governor_result_summary["emergency_close_broker_flat"] = None
             self._execute_emergency_close(
                 brake_reason, valuation, stage_label, symbols_before_exit)
+
+            if self._governor_result_summary.get("emergency_close_broker_flat") is True:
+                self._emergency_closed = True
+            else:
+                # Deliberately NOT set: the loop continues, and the next pass
+                # re-evaluates the brake and retries the close. Retrying is
+                # naturally rate-limited -- the loop sleeps its cadence between
+                # passes and is bounded by max_cycles and monitor_until -- and
+                # an unmanaged naked position is far worse than a retry.
+                self._logger.critical(
+                    "%s -- EMERGENCY CLOSE DID NOT CONFIRM FLAT "
+                    "(broker_flat=%r). Position management CONTINUES so the "
+                    "next pass retries; the position is NOT abandoned.",
+                    stage_label,
+                    self._governor_result_summary.get("emergency_close_broker_flat"))
             return
 
         selected = self._governor_result_summary.get("strategy_selected")
@@ -3102,7 +3138,12 @@ class OptionsOSRunner:
         )
         while cycles < max_cycles:
             if getattr(self, "_emergency_closed", False):
-                self._logger.critical("POSITION_MANAGEMENT halted: emergency close executed.")
+                # Only reachable once the broker CONFIRMED flat, so this
+                # sentence is now true. It used to be printed after a close
+                # that raised NameError and left both legs open.
+                self._logger.critical(
+                    "POSITION_MANAGEMENT halted: emergency close confirmed flat "
+                    "by the broker.")
                 break
             if termination_requested():
                 self._logger.critical(

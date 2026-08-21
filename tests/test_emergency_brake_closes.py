@@ -124,21 +124,94 @@ class TestForcedExitStatusIsHonest:
         assert out.status == STATUS_UNKNOWN
 
 
+def _brake_branch():
+    """The `if brake_reason is not None:` branch of _run_one_management_pass,
+    as an AST node.
+
+    Both assertions below used a CHARACTER WINDOW -- `src[i:i+500]` and
+    `src[i:i+2600]`. That measures proximity in bytes, not structure, so
+    adding an explanatory comment inside the branch pushed the very call
+    being asserted past the window and failed a test about code that had not
+    changed. (It happened twice: once at i+2600 in an earlier audit, once
+    here at i+500.) A window that a comment can break is a test of comment
+    length. The AST walk below cannot be moved by prose and is strictly
+    stronger -- it also proves the call is inside the branch rather than
+    merely near it in the file.
+    """
+    import ast
+
+    tree = ast.parse((REPO_ROOT / "bujji_options_os_runner.py").read_text())
+    for node in ast.walk(tree):
+        if not (isinstance(node, ast.If)
+                and isinstance(node.test, ast.Compare)
+                and isinstance(node.test.left, ast.Name)
+                and node.test.left.id == "brake_reason"):
+            continue
+        return node
+    raise AssertionError("the `if brake_reason is not None:` branch is gone")
+
+
+def _calls_in(node):
+    import ast
+
+    names = set()
+    for sub in ast.walk(node):
+        if isinstance(sub, ast.Call):
+            f = sub.func
+            names.add(getattr(f, "attr", None) or getattr(f, "id", None))
+    return names
+
+
 class TestTheBrakeSubmits:
     def test_the_brake_calls_the_order_firing_path(self):
-        """It called run_market_close_sequence -- two state transitions."""
-        src = (REPO_ROOT / "bujji_options_os_runner.py").read_text()
-        i = src.index("if brake_reason is not None:")
-        block = src[i:i + 500]
-        assert "_execute_emergency_close(" in block
-        assert "run_market_close_sequence()" not in block
+        """It called run_market_close_sequence -- two state transitions that
+        place no order -- instead of the path that actually submits."""
+        calls = _calls_in(_brake_branch())
+        assert "_execute_emergency_close" in calls
+        assert "run_market_close_sequence" not in calls
+
+    def test_the_brake_halts_management_only_on_a_confirmed_flat(self):
+        """`_emergency_closed` halts POSITION_MANAGEMENT permanently, so it
+        must mean the broker confirmed flat -- not that a close was tried.
+
+        On 2026-08-21 it was set BEFORE the attempt; the close raised
+        NameError, both legs stayed open, and the loop halted anyway. The
+        position ran unmanaged from 09:55:35 to the 15:33:44 EOD sweep.
+        Behavioural coverage lives in
+        tests/test_emergency_close_does_not_abandon.py; this pins the
+        structure so the assignment cannot drift back above the call.
+        """
+        import ast
+
+        branch = _brake_branch()
+        assigns, close_call = [], None
+        for sub in ast.walk(branch):
+            if isinstance(sub, ast.Assign):
+                for t in sub.targets:
+                    if isinstance(t, ast.Attribute) and t.attr == "_emergency_closed":
+                        assigns.append(sub.lineno)
+            if isinstance(sub, ast.Call) and getattr(sub.func, "attr", None) == \
+                    "_execute_emergency_close":
+                close_call = sub.lineno
+        assert assigns, "_emergency_closed is never set in the brake branch"
+        assert close_call is not None
+        assert min(assigns) > close_call, (
+            "_emergency_closed is assigned BEFORE _execute_emergency_close -- "
+            "that is the 2026-08-21 abandonment defect, where a close that "
+            "failed still halted position management permanently")
 
     def test_the_emergency_close_forces_an_exit(self):
-        src = (REPO_ROOT / "bujji_options_os_runner.py").read_text()
-        i = src.index("def _execute_emergency_close")
-        block = src[i:i + 2600]
-        assert "evaluate_and_enforce_exit(" in block
-        assert "force_exit_reason=brake_reason" in block
+        import ast
+
+        tree = ast.parse((REPO_ROOT / "bujji_options_os_runner.py").read_text())
+        fn = next((n for n in ast.walk(tree)
+                   if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef))
+                   and n.name == "_execute_emergency_close"), None)
+        assert fn is not None, "_execute_emergency_close is gone"
+        assert "evaluate_and_enforce_exit" in _calls_in(fn)
+        kwargs = {kw.arg for sub in ast.walk(fn) if isinstance(sub, ast.Call)
+                  for kw in sub.keywords if kw.arg}
+        assert "force_exit_reason" in kwargs
 
     def test_the_governor_accepts_a_forced_exit(self):
         from bujji.production_runtime.trading_session_governor.session_governor import (
