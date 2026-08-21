@@ -229,6 +229,51 @@ class TestTheStartupGuard:
         runner = self._runner()
         runner._guard_provider_vocabulary({})
 
+    def test_every_shipped_config_actually_starts(self):
+        """The guard is worth nothing if a config we ship cannot pass it.
+
+        This is the test that would have caught the original problem:
+        options_os_shadow.yaml paired replay_chain with fyers_certified for
+        three days and nothing noticed, because the two provider blocks are
+        read independently and no test ever looked at them together.
+        """
+        import yaml
+
+        runner = self._runner()
+        checked = []
+        for path in sorted((REPO_ROOT / "config").glob("*.yaml")):
+            try:
+                config = yaml.safe_load(path.read_text()) or {}
+            except yaml.YAMLError as exc:
+                pytest.fail(f"{path.name} is not loadable: {exc}")
+            providers = config.get("providers")
+            if not isinstance(providers, dict):
+                continue
+            runner._guard_provider_vocabulary(providers)
+            checked.append(path.name)
+        assert checked, "no config with a providers block was found -- this test proved nothing"
+
+    def test_the_shipped_configs_still_pair_deliberately(self):
+        """Pins the two pairings so a future edit to either one is a
+        conscious act rather than a default that drifts."""
+        import yaml
+
+        def providers(name):
+            return yaml.safe_load((REPO_ROOT / "config" / name).read_text())["providers"]
+
+        live = providers("options_os_paper_trading.yaml")
+        assert live["market_data"]["type"] == "fyers_live"
+        assert live["margin"]["type"] == "fyers_certified", (
+            "the live config trades on a broker-authoritative chain, so real "
+            "SPAN margin is the correct setting")
+
+        shadow = providers("options_os_shadow.yaml")
+        assert shadow["market_data"]["type"] == "replay_chain"
+        assert shadow["margin"]["type"] == "simulated", (
+            "a bhavcopy chain carries NSE-form symbols that have never been "
+            "shown valid at the execution venue -- it must not reach a real "
+            "margin endpoint")
+
     def test_the_guard_runs_before_any_provider_is_constructed(self):
         """A guard that fired after the chain was fetched would already have
         touched the broker."""

@@ -72,15 +72,41 @@ providers:
   #                        flip only after reviewing
   #                        data_certification/fyers_whole_book_span_margin_discovery_*.json
   margin:
+    # OPERATOR DECISION 2026-08-21: set to `simulated`, superseding the
+    # 2026-08-18 decision recorded below. NOT a withdrawal of that
+    # certification -- it still holds, and options_os_paper_trading.yaml
+    # (market_data: fyers_live) keeps using fyers_certified. The difference is
+    # THIS file's chain.
+    #
+    # WHY. This config pairs `market_data: replay_chain` with a real margin
+    # provider, and the two blocks were selected independently -- nothing
+    # coupled them. A ReplayChainProvider chain carries NSE bhavcopy
+    # `FinInstrmNm` symbols ("NIFTY26AUG24000CE"), which are real at NSE but
+    # have never been shown valid at the FYERS execution venue. Gate B is
+    # provider-agnostic: it sends whatever the chain carries to the live SPAN
+    # endpoint. So this session was one `--bhavcopy-path` away from quoting
+    # NSE-form symbols at FYERS.
+    #
+    # It never caused a visible incident, and that is the uncomfortable part:
+    # FYERS almost certainly rejects the un-prefixed form, so the path failed
+    # closed BY ACCIDENT (verified=False -> MARGIN_NOT_CERTIFIED -> VETO)
+    # rather than by design. That is exactly how the two-vocabulary defect
+    # survived unnoticed for months.
+    #
+    # `_guard_provider_vocabulary` (bujji_options_os_runner.py) now REFUSES
+    # to start this pairing, so leaving fyers_certified here would make this
+    # config unstartable. `simulated` is the honest setting for a replay
+    # session: it never touches a broker, and its own warning names itself
+    # every run so nobody mistakes it for real margin.
+    #
+    # ---- superseded, retained for the record ----
     # OPERATOR DECISION 2026-08-18: flipped to fyers_certified by the operator
     # after reviewing the live whole-book evidence in
     # data_certification/fyers_whole_book_span_margin_discovery_20260818.json
     # (request shape accepted; parser interprets the real response; span/expo/
     # benefit figures real; back-to-back calls deterministic). This satisfies
     # CertifiedWholeBookMarginProvider's human-confirmation contract.
-    # margin_verified=True now carries REAL broker-quoted SPAN margin into
-    # capital_check -- revert to fyers_uncertified to halt entries honestly.
-    type: fyers_certified
+    type: simulated
 
   market_data:
     type: replay_chain          # ReplayChainProvider -- the only Phase-1 implementation
