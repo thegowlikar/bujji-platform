@@ -415,6 +415,11 @@ class OptionsOSRunner:
         # reports the broker's own view instead of a hardcoded flat.
         self._eod_closure_result = None
         self._exit_place_fn = None
+        # Reconciliation state. Blocks default to FALSE only because no
+        # position can exist before the first pass runs; the first
+        # reconciliation sets the real value.
+        self._last_reconciliation = None
+        self._reconciliation_blocks_entry = False
         self._journal_path = None
 
         self._entry_prices: Dict[str, float] = {}
@@ -1763,6 +1768,18 @@ class OptionsOSRunner:
         passing silently: a session trading without a data-quality boundary
         is a fact an operator must be able to read afterwards.
         """
+        # RECONCILIATION IS A SAFETY CONTROL, not an observability feature.
+        # Taking new risk while the broker holds exposure Bujji is not
+        # managing -- or while position truth cannot be established at all --
+        # compounds an already-unmanaged position with a fresh one.
+        if getattr(self, "_reconciliation_blocks_entry", False):
+            last = getattr(self, "_last_reconciliation", None)
+            self._logger.warning(
+                "ENTRY REFUSED -- position reconciliation %s. %s",
+                getattr(last, "verdict", "UNKNOWN"), getattr(last, "detail", ""))
+            self._governor_result_summary["entry_blocked_by"] = "POSITION_RECONCILIATION"
+            return False
+
         verdict = getattr(self, "_data_quality", None)
         if verdict is None:
             if getattr(self, "_intelligence_origin", None) is None:
@@ -2261,6 +2278,15 @@ class OptionsOSRunner:
         # lost was the ability to SEE a failed exit, and any escalation from
         # one. An operator reading the session could not tell whether the
         # stop-loss worked.
+        # CONTINUOUS RECONCILIATION (2026-08-21). Broker truth was consulted
+        # at placement, at startup and at EOD -- never in between. The only
+        # in-session position read went through PositionRealityRegistry, which
+        # intersects broker positions with an in-memory table of registered
+        # symbols, so a position at a symbol Bujji never registered was
+        # mathematically undiscoverable: never valued, never stop-lossed,
+        # never escalated, unnoticed until EOD.
+        self._reconcile_broker_positions(stage_label)
+
         execution = getattr(result, "forced_execution", None)
         exit_status = getattr(execution, "status", None) if execution is not None else None
         self._logger.info(
@@ -2276,6 +2302,93 @@ class OptionsOSRunner:
         self._record_exit_outcome(stage_label, exit_status, execution)
         self._capture_exit_fills(symbols_before_exit, result)
 
+
+    def _expected_symbols(self) -> set:
+        """Every symbol Bujji believes it holds, from the registry's own
+        public surface. Memory -- deliberately the WEAKER side of the
+        comparison; the broker always wins."""
+        expected = set()
+        registry = getattr(self, "_registry", None)
+        if registry is None:
+            return expected
+        import asyncio as _asyncio
+
+        for pg_id in registry.all_group_ids():
+            try:
+                reality = _asyncio.run(registry.get_group_reality(pg_id))
+            except Exception:  # noqa: BLE001 -- one unreadable group never blinds the rest
+                continue
+            if reality.is_open:
+                expected.update(reality.symbols)
+        return expected
+
+    def _reconcile_broker_positions(self, stage_label: str):
+        """Compare belief against an UNFILTERED broker read, every pass.
+
+        Never raises: a reconciliation that cannot run must not end a session
+        that may hold an open position. But it also never reports success it
+        did not establish -- a failure is recorded as UNKNOWN, which blocks
+        new risk exactly as a CRITICAL divergence does.
+        """
+        import asyncio as _asyncio
+
+        try:
+            from bujji.production_runtime.eod_closure import discover_broker_positions
+            from bujji.production_runtime.position_reconciliation import (
+                SEVERITY_CRITICAL, SEVERITY_WARNING, UNKNOWN, reconcile)
+
+            observed, read_detail = discover_broker_positions(self._broker, _asyncio.run)
+            result = reconcile(self._expected_symbols(), observed)
+        except Exception as exc:  # noqa: BLE001 -- fail CLOSED, never silently open
+            self._logger.critical(
+                "%s -- RECONCILIATION FAILED TO RUN (%s: %s). Treating position truth as "
+                "UNKNOWN and blocking new risk.", stage_label, type(exc).__name__, exc)
+            self._reconciliation_blocks_entry = True
+            self._governor_result_summary["reconciliation_blocked"] = True
+            return None
+
+        self._last_reconciliation = result
+        self._reconciliation_blocks_entry = result.blocks_new_risk
+        record = result.to_dict()
+        record["stage"] = stage_label
+        record["at"] = self._clock().isoformat()
+        record["broker_read"] = read_detail
+        self._governor_result_summary.setdefault("reconciliations", []).append(
+            {"stage": stage_label, "verdict": result.verdict,
+             "severity": result.severity, "detail": result.detail})
+        if result.blocks_new_risk:
+            self._governor_result_summary["reconciliation_blocked"] = True
+        self._persist_reconciliation(record)
+
+        if result.severity == SEVERITY_CRITICAL and result.verdict == UNKNOWN:
+            self._logger.critical(
+                "%s -- POSITION TRUTH UNKNOWN (%s). New risk is BLOCKED: a read we could "
+                "not perform is not evidence of safety.", stage_label, result.detail)
+        elif result.severity == SEVERITY_CRITICAL:
+            self._logger.critical(
+                "%s -- %s. The broker holds exposure Bujji is NOT managing: it is not "
+                "valued, has no stop, and no exit is scheduled for it. New risk BLOCKED.",
+                stage_label, result.detail)
+        elif result.severity == SEVERITY_WARNING:
+            self._logger.warning("%s -- reconciliation divergence: %s",
+                                 stage_label, result.detail)
+        return result
+
+    def _persist_reconciliation(self, record) -> None:
+        """Durable evidence, beside the session's other artifacts. Never
+        raises -- an audit trail must not end a session."""
+        try:
+            import json as _json
+
+            store = getattr(self, "_store", None)
+            session_dir = getattr(store, "session_dir", None)
+            if session_dir is None:
+                return
+            path = session_dir / "position_reconciliation.jsonl"
+            with open(path, "a", encoding="utf-8") as handle:
+                handle.write(_json.dumps(record, sort_keys=True, default=str) + "\n")
+        except Exception as exc:  # noqa: BLE001
+            self._logger.warning("reconciliation record not persisted: %s", exc)
 
     def _record_exit_outcome(self, stage_label: str, exit_status, execution) -> None:
         """Record what an attempted exit actually did, and escalate when it

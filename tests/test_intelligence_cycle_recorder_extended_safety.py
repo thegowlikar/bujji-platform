@@ -279,6 +279,28 @@ _EOD_CLOSURE_AUTHORIZED = (
 )
 
 
+# AUTHORIZED 2026-08-21: continuous broker-truth position reconciliation.
+#
+# WHY. Broker truth was consulted at placement, at startup and at EOD -- never
+# in between. The only in-session position read went through
+# PositionRealityRegistry, which INTERSECTS the broker's positions with an
+# in-memory table of registered symbols, so a position at a symbol Bujji never
+# registered was mathematically undiscoverable through that API: never valued,
+# never stop-lossed, never escalated, unnoticed until EOD.
+#
+# WHAT IT ADDS. A pure comparison function (no I/O, no clock) plus a runner
+# hook on the EXISTING management cadence. It reports and gates; it never
+# mutates position state -- a test asserts mark_closed / place_order /
+# register_entry / _execute_reduce never appear in it. Closure stays owned by
+# the executor, governor and registry. It can only ever REFUSE new risk, never
+# permit risk that was previously refused. The unfiltered read reuses
+# eod_closure.discover_broker_positions rather than adding a second one.
+# Coverage: tests/test_position_reconciliation.py.
+_POSITION_RECONCILIATION_AUTHORIZED = (
+    "bujji/production_runtime/position_reconciliation.py",
+)
+
+
 def test_no_forbidden_module_imports():
     out = _grep(FORBIDDEN_IMPORTS, RECORDER_FILE)
     assert out == "", f"forbidden import found: {out}"
@@ -376,7 +398,7 @@ def test_no_protected_execution_lineage_touched():
         cwd="/opt/bujji/app", capture_output=True, text=True,
     )
     changed = [l for l in result.stdout.strip().splitlines() if l]
-    changed = [l for l in changed if l not in _PAPERBROKER_V2_AUTHORIZED + _LOT_SIZE_AUTHORITATIVE_AUTHORIZED + _CPC_SAFETY_SPINE_AUTHORIZED + _CPC_EVIDENCE_AND_REALISM_AUTHORIZED + _LIVE_PREMIUM_FIX_AUTHORIZED + _THREE_PART_SELECTION_AUTHORIZED + _DEFINED_RISK_MODE_AUTHORIZED + _LEARNING_LOOP_AUTHORIZED + _DATA_QUALITY_GATE_AUTHORIZED + _WEBSOCKET_TICK_PROVIDER_AUTHORIZED + _JOURNALED_EXECUTION_AUTHORIZED + _EXIT_BROKER_TRUTH_AUTHORIZED + _EOD_CLOSURE_AUTHORIZED]
+    changed = [l for l in changed if l not in _PAPERBROKER_V2_AUTHORIZED + _LOT_SIZE_AUTHORITATIVE_AUTHORIZED + _CPC_SAFETY_SPINE_AUTHORIZED + _CPC_EVIDENCE_AND_REALISM_AUTHORIZED + _LIVE_PREMIUM_FIX_AUTHORIZED + _THREE_PART_SELECTION_AUTHORIZED + _DEFINED_RISK_MODE_AUTHORIZED + _LEARNING_LOOP_AUTHORIZED + _DATA_QUALITY_GATE_AUTHORIZED + _WEBSOCKET_TICK_PROVIDER_AUTHORIZED + _JOURNALED_EXECUTION_AUTHORIZED + _EXIT_BROKER_TRUTH_AUTHORIZED + _EOD_CLOSURE_AUTHORIZED + _POSITION_RECONCILIATION_AUTHORIZED]
     forbidden_prefixes = (
         "bujji/msi_trade_construction/", "bujji/risk_governor/", "bujji/execution_engine/",
         "bujji/trading_brain/", "bujji/msi_shadow_trading/", "bujji/mic_replay/",
