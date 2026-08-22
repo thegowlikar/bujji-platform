@@ -63,6 +63,10 @@ is true.
 | Session strategy lock | `StrategyLock` | `bujji.production_runtime.trading_session_governor.strategy_lock` | OWNED |
 | Option observation | `OptionObservation` | `bujji.options_observation.models` | OWNED |
 | Session safety verdict | `SessionSafetyVerdict` | `bujji.production_runtime.session_safety_verdict` | OWNED |
+| Tick journal (writer) | `TickJournal` | `bujji.tick_journal.journal` | OWNED |
+| Tick journal manifest | `JournalManifest` | `bujji.tick_journal.manifest` | OWNED |
+| Replayed tick | `TickRecord` | `bujji.tick_journal.replay` | OWNED |
+| Replay result | `ReplayResult` | `bujji.tick_journal.replay` | OWNED |
 | Websocket tick feed | `FyersTickFeed` | `bujji.broker.fyers_ws` | OWNED |
 | Order status | `OrderStatus` | `bujji.core.enums` | OWNED |
 | Position lifecycle state | `PositionLifecycleState` | `bujji.production_runtime.position_lifecycle_runtime` | OWNED |
@@ -90,6 +94,32 @@ something different. The newcomers moved to `ReadinessQuote` and
 `ReadinessLegState`; the originals were not touched. A recently introduced
 duplicate is not left behind an indefinite CONTESTED label.
 
+### Two evidence layers, and why that is not two authorities
+
+`market_reality.store` (Layer 0) and `bujji.tick_journal` both hold market
+evidence, and a reader of the table above would reasonably wonder which should
+absorb the other. Neither. They answer different questions with different
+identity models, and each is authoritative only over its own:
+
+| | Layer 0 | Tick journal |
+| --- | --- | --- |
+| Owns | the SET of distinct facts observed | the SEQUENCE of arrivals |
+| Identity | content hash over identity + value | local ingest sequence |
+| A repeat is | the same fact, deduplicated | a second arrival, kept |
+| Order | not meaningful | the point |
+
+Layer 0's own docstring states the rule that makes it unsuitable for ticks: an
+identical id "means an identical fact", and re-capturing one is a no-op where
+"nothing is written, and nothing is lost". That is correct for observations.
+For ticks it is fatal -- lite-mode payloads carry only `symbol`, `ltp` and
+`type` with no exchange timestamp, so a quiet symbol emits byte-identical
+ticks, and collapsing them destroys the rate, gaps and order the journal exists
+to record.
+
+**Do not merge them.** Layer 0 reserves `KIND_MARKET_TICK` and has never
+produced one; that reservation is a historical artifact, not a claim on this
+truth.
+
 **Not conflicts.** `Explanation`, `Contradiction` and `LensOpinion` are defined
 once per `msi_*` package by convention — twenty, four and two definitions
 respectively. They are per-package value types, not competing authorities, and
@@ -103,14 +133,14 @@ are deliberately absent from the table above.
 starts, which modules production can reach. Current measurement:
 
 ```
-python files            1813
-  test modules           550
-  production modules    1263
+python files            1818
+  test modules           551
+  production modules    1267
 
-REACHABLE                482   (38.2% of production)
-orphaned                 781
-  test-only              542
-  unreferenced           239
+REACHABLE                546   (43.1% of production)
+orphaned                 721
+  test-only              512
+  unreferenced           209
 ```
 
 **`test-only` is a classification, not a verdict.** It means exactly one thing:
@@ -258,7 +288,10 @@ A milestone is complete when its acceptance test passes and failed before.
 
 Recorded here so no reader has to infer it from silence.
 
-- **No tick is persisted anywhere.** No session is replayable. (M2)
+- ~~No tick is persisted anywhere.~~ **Resolved (M2).** Every callback payload
+  is journaled verbatim before any field is read, with a manifest and
+  deterministic replay. Still unproven against a live feed: no tick has ever
+  arrived in this configuration, so the journal has recorded nothing real.
 - **The broker boundary is not a boundary.** `self._broker` is hardcoded to
   `PaperBroker`; every `FyersBroker` is execution-neutered. The three-valued
   UNKNOWN machinery is correct and untestable, because the read it guards

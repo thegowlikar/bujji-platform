@@ -130,12 +130,19 @@ class FyersTickFeed:
     """
 
     def __init__(self, app_id: str, access_token: str, logger: logging.Logger,
-                 log_path: str = "logs", litemode: bool = True) -> None:
+                 log_path: str = "logs", litemode: bool = True,
+                 journal=None) -> None:
         self._app_id = app_id
         self._access_token = access_token
         self._log = logger
         self._log_path = log_path
         self._litemode = litemode
+        # THE EVIDENCE LAYER. `None` means this session keeps NO record of what
+        # arrived -- usable for tests and for driving the class in isolation,
+        # never for a session whose decisions must be reconstructable. The
+        # requirement that a live session supplies one belongs to the runner,
+        # which owns that policy; see test_m2_tick_journal_is_evidence.
+        self._journal = journal
 
         # -- Lifecycle identity state: connection generation, the current
         # socket, connection-up/count, pending subscriptions, and the
@@ -334,6 +341,26 @@ class FyersTickFeed:
                 hook()
 
         def on_message(msg: dict) -> None:
+            # RECORDED FIRST, VERBATIM, BEFORE A SINGLE FIELD IS READ.
+            #
+            # Everything below this line is LOSS: `symbol` and `ltp` are taken
+            # and the other ~21 full-mode fields -- exch_feed_time, both sides
+            # of the book, sizes, OI, volume -- are discarded. A journal placed
+            # after the extraction would faithfully record the loss instead of
+            # the arrival.
+            #
+            # ACKS ARE RECORDED TOO, deliberately, and that is why this sits
+            # above the early return as well as above the extraction. A
+            # subscription acknowledgement is not a price, but it IS evidence
+            # that the request was accepted -- and on 2026-08-21 the question
+            # nobody could answer afterwards was precisely whether the feed had
+            # accepted the subscription and gone quiet, or never accepted it.
+            #
+            # `offer()` never blocks and never raises: a journal that could
+            # stall this thread would turn a disk hiccup into a missed tick.
+            if self._journal is not None:
+                self._journal.offer(msg)
+
             symbol, ltp = msg.get("symbol"), msg.get("ltp")
             if symbol is None or ltp is None:
                 return  # Connection/subscription ack, not a price tick.

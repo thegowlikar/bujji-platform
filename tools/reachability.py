@@ -1,4 +1,25 @@
-"""Which modules can production actually reach?
+"""Which modules can production actually reach?  **PROVISIONAL.**
+
+STATUS: PROVISIONAL. This tool has had FOUR material corrections, each found by
+a positive control rather than by review, and each changing the headline figure:
+
+    19.0%  ->  relative imports were not followed at all
+    35.6%  ->  package `__init__` execution was not counted as reached
+    38.2%  ->  relative imports inside `__init__.py` anchored on the PARENT
+               package, silently resolving `.journal` to an unrelated real
+               module -- WRONG edges, not merely missing ones
+    43.1%  ->  current
+
+Three of those inflated the "orphaned" side, which is the direction that
+flatters any claim built on this output. Until it has FIXTURE-BASED tests
+covering absolute imports, package-relative imports at every level, `__init__`
+anchoring, namespace/package ambiguity, and all eight real systemd entry
+points, treat its numbers as INDICATIVE.
+
+It is sound enough to answer "is this specific module reachable?" -- a question
+whose answer can be confirmed by grep in seconds, and which the quarantine
+ratchet uses. It is NOT yet a reliable source for strong quantitative claims,
+and no safety argument should rest on its percentages.
 
 WHY THIS IS A COMMITTED TOOL AND NOT A ONE-OFF SCRIPT.
 
@@ -75,7 +96,7 @@ def _package_of(module: str) -> str:
     return module.rsplit(".", 1)[0] if "." in module else ""
 
 
-def imports_of(path: Path, module: str) -> Set[str]:
+def imports_of(path: Path, module: str, is_package: bool = False) -> Set[str]:
     """Absolute module names this file imports, RELATIVE IMPORTS INCLUDED.
 
     The first version of this function skipped `node.level > 0` entirely, and a
@@ -102,9 +123,21 @@ def imports_of(path: Path, module: str) -> Set[str]:
             if node.level == 0:
                 base = node.module or ""
             else:
-                # `from . import x` inside a.b.c resolves against a.b;
-                # each extra dot climbs one more package.
-                base = _package_of(module)
+                # WHERE A RELATIVE IMPORT ANCHORS DEPENDS ON WHAT THE FILE IS.
+                #
+                # In a MODULE `a.b.c`, `from .d import x` means `a.b.d` -- one
+                # level up. In a PACKAGE's `__init__.py`, whose module name is
+                # `a.b`, the same statement means `a.b.d` -- the package ITSELF,
+                # not its parent.
+                #
+                # Treating both the same produced WRONG EDGES, not merely
+                # missing ones: `from .journal import ...` inside
+                # `bujji/tick_journal/__init__.py` resolved to `bujji.journal`,
+                # a real and entirely unrelated package. The graph then showed
+                # a dependency that does not exist and missed the one that
+                # does. Found when types in a freshly-wired package reported as
+                # unreachable while the runner plainly imported them.
+                base = module if is_package else _package_of(module)
                 for _ in range(node.level - 1):
                     base = _package_of(base)
                 if node.module:
@@ -174,7 +207,8 @@ def reachable_from(entries: Iterable[str], graph: Dict[str, Set[str]]) -> Set[st
 
 def analyse(root: Path) -> dict:
     mods = module_map(root)
-    graph = {name: imports_of(path, name) for name, path in mods.items()}
+    graph = {name: imports_of(path, name, is_package=(path.name == "__init__.py"))
+             for name, path in mods.items()}
 
     missing = [e for e in ENTRY_POINTS if e not in mods]
     reach_all = reachable_from(ENTRY_POINTS, graph)

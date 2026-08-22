@@ -214,6 +214,37 @@ def evaluate_session_safety(summary: Dict[str, Any]) -> SessionSafetyVerdict:
             f"and the broker did not confirm flat "
             f"(emergency_close_broker_flat={summary.get('emergency_close_broker_flat')!r})")
 
+    # A POSITION WITHOUT EVIDENCE CANNOT BE EXPLAINED AFTERWARDS.
+    #
+    # A session that opened risk and cannot produce a sealed, faithful tick
+    # journal has no reconstructable account of what it saw when it acted. That
+    # is not a record-keeping inconvenience -- every later question about the
+    # decision (was the book fresh? did the feed go quiet? what did the leg
+    # price at?) becomes unanswerable, and "we cannot tell" about an open
+    # position is exactly what this module refuses to report as clean.
+    #
+    # UNSEALED means the process was killed before it could seal: SIGKILL,
+    # power loss, an OOM kill. `_shutdown()` runs from a `finally` and covers
+    # orderly termination only -- it cannot cover those, and no handler does.
+    # A missing journal entry is therefore treated as absent evidence, not as
+    # an absent problem.
+    journal = summary.get("tick_journal")
+    if not isinstance(journal, dict):
+        reasons.append(
+            "a position was opened and no tick journal was recorded at all -- "
+            "the session cannot account for the market it acted on")
+    elif not journal.get("sealed"):
+        reasons.append(
+            f"a position was opened and the tick journal was never sealed "
+            f"({journal.get('error') or 'no manifest written'}) -- the session "
+            f"was interrupted before it could state what it had captured")
+    elif not journal.get("faithful"):
+        reasons.append(
+            f"a position was opened and the tick journal is not faithful "
+            f"(dropped={journal.get('dropped')}, offered={journal.get('offered')}, "
+            f"written={journal.get('written')}) -- evidence for this session is "
+            f"incomplete and cannot support a claim that it went well")
+
     if summary.get("has_unresolved_exit"):
         unresolved = summary.get("exits_unresolved") or []
         reasons.append(

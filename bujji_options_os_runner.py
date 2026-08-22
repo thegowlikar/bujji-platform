@@ -514,6 +514,7 @@ class OptionsOSRunner:
         self._intelligence_origin = None
         # Set only when a partial entry leaves filled-but-unwound legs live.
         self._orphan_position_live = False
+        self._tick_journal = None
         # Set by _run_eod_closure; read by _session_archive so finalization
         # reports the broker's own view instead of a hardcoded flat.
         self._eod_closure_result = None
@@ -1156,9 +1157,26 @@ class OptionsOSRunner:
             # exactly one prefix -- which is the format the 2026-08-20
             # websocket certification proved against REST (ws ltp == REST ltp,
             # 0.0000% deviation).
+            # THE EVIDENCE LAYER IS OPENED BEFORE THE FEED IS. A session that
+            # trades on ticks it did not record cannot reconstruct its own
+            # decisions afterwards, which is the property the whole safety
+            # contract rests on -- so the journal is not optional here, and a
+            # journal that cannot be opened fails the session rather than
+            # quietly running blind.
+            from bujji.tick_journal import TickJournal
+
+            journal_dir = REPO_ROOT / "data" / "tick_journal" / self._as_of_date
+            self._tick_journal = TickJournal(
+                journal_dir / f"{self._session_id}.jsonl",
+                session_id=self._session_id, logger=self._logger)
+            self._logger.info(
+                "TICK JOURNAL open at %s -- every payload is recorded verbatim "
+                "before any field is read from it.", self._tick_journal.path)
+
             self._tick_feed = FyersTickFeed(
                 app_id, token, self._logger,
-                log_path=str(REPO_ROOT / "logs"))
+                log_path=str(REPO_ROOT / "logs"),
+                journal=self._tick_journal)
             self._tick_feed.start()
             watchdog = TickSilenceWatchdog(
                 silence_threshold_seconds=float(tick_cfg.get("silence_threshold_seconds", 120.0)),
@@ -4457,10 +4475,83 @@ class OptionsOSRunner:
                                   getattr(feed, "connect_count", None))
             except Exception as exc:  # noqa: BLE001 -- teardown must not mask the session result
                 self._logger.warning("tick feed stop failed: %s", exc)
+        # THE JOURNAL IS SEALED AFTER THE FEED STOPS AND ON EVERY EXIT PATH.
+        #
+        # This runs from `run()`'s `finally`, so a session that crashed, was
+        # SIGTERMed, or refused to trade at all still leaves a sealed journal
+        # and a manifest. An evidence layer that only closes cleanly records
+        # exactly the sessions least in need of explanation.
+        #
+        # ORDER MATTERS: the feed is stopped first, so no callback can offer a
+        # record after the accounting is taken and make the manifest disagree
+        # with the file it describes.
+        self._seal_tick_journal()
+
         # No auto-resume, no retry, no hidden recovery: this method only
         # logs and releases whatever was constructed in _startup(). A
         # future invocation of this runner always begins a brand new
         # session from STARTUP -- it never reads back a prior one.
+
+    def _seal_tick_journal(self) -> None:
+        """Close the journal and write the manifest beside it. Never raises.
+
+        A manifest is what turns "this file exists" into "this file is a
+        faithful record, or here is exactly how it is not". Without one, a
+        journal truncated by a kill -9 parses perfectly and is silently short.
+
+        Never raises because this runs in teardown: a failure here must not
+        replace the session's real result with its own.
+        """
+        journal = getattr(self, "_tick_journal", None)
+        if journal is None:
+            return
+        try:
+            from bujji.tick_journal import JournalManifest, MANIFEST_VERSION
+
+            stats = journal.close()
+            manifest_path = journal.path.with_suffix(".manifest.json")
+            JournalManifest(
+                version=MANIFEST_VERSION,
+                session_id=self._session_id,
+                as_of_date=self._as_of_date,
+                journal_filename=journal.path.name,
+                started_at=getattr(self, "_session_started_at", "") or "",
+                ended_at=self._clock().isoformat(),
+                offered=stats.offered, written=stats.written, dropped=stats.dropped,
+                max_queue_depth=stats.max_queue_depth,
+                bytes_written=stats.bytes_written,
+                content_sha256=journal.content_sha256(),
+                fsync_every_records=journal._fsync_every_records,
+                fsync_every_seconds=journal._fsync_every_seconds,
+                max_queue=journal._queue.maxsize,
+                universe_symbols=len(getattr(self._universe, "symbols", ()) or ()),
+            ).write(manifest_path)
+
+            # `sealed` and `faithful` are STATED, not inferred by a reader
+            # from the counters. A session verdict must not have to
+            # reconstruct what "complete" meant.
+            self._governor_result_summary["tick_journal"] = {
+                "path": str(journal.path),
+                "manifest": str(manifest_path),
+                "sealed": True,
+                "faithful": stats.complete,
+                "max_crash_loss_records": journal._fsync_every_records,
+                "max_crash_loss_seconds": journal._fsync_every_seconds,
+                **stats.as_dict(),
+            }
+            self._logger.info(
+                "TICK JOURNAL sealed -- %d records, %d dropped, complete=%s, "
+                "manifest at %s",
+                stats.written, stats.dropped, stats.complete, manifest_path)
+        except Exception as exc:  # noqa: BLE001 -- teardown must not mask the session result
+            self._logger.critical(
+                "TICK JOURNAL could not be sealed (%s: %s) -- the session's tick "
+                "evidence may be unverifiable. The session result stands; this "
+                "is a record-keeping failure, and it is recorded as one.",
+                type(exc).__name__, exc)
+            self._governor_result_summary["tick_journal"] = {
+                "sealed": False, "faithful": False,
+                "error": f"{type(exc).__name__}: {exc}"}
 
 
 _TERMINATION_REQUESTED = _threading.Event()

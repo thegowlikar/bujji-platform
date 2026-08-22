@@ -73,6 +73,19 @@ CLEAN_SESSION = {
     "closure_reason": "SESSION_COMPLETE",
     "canonical_close_outcome": "ACCEPTED",
     "closure_truths_agree": True,
+    # EVIDENCE IS PART OF BEING CLEAN (M2). A session that opened a position
+    # and cannot produce a sealed, faithful tick journal cannot account for the
+    # market it acted on -- so it is no longer "clean" however well it closed.
+    #
+    # This fixture predates journaling and was INCOMPLETE rather than wrong: a
+    # position closed FLAT with full evidence is still safe, which is what the
+    # tests below assert. The test that the same shape WITHOUT a journal is
+    # UNSAFE lives next to the rule, in
+    # test_m2_tick_journal_is_evidence.py::test_an_open_position_with_no_journal_at_all_is_unsafe,
+    # and `test_a_clean_close_without_evidence_is_not_clean` below pins it here
+    # too so this fixture cannot be quietly completed into meaninglessness.
+    "tick_journal": {"sealed": True, "faithful": True,
+                     "dropped": 0, "offered": 1200, "written": 1200},
 }
 
 
@@ -96,6 +109,16 @@ class TestTheVerdict:
 
     def test_a_clean_close_is_safe(self):
         assert evaluate_session_safety(CLEAN_SESSION).safe is True
+
+    def test_a_clean_close_without_evidence_is_not_clean(self):
+        """M2. Closing the book well is not the same as being able to explain
+        what you did. Strip the journal from an otherwise perfect session and
+        it must stop being safe -- otherwise completing the fixture above would
+        have quietly disabled the rule for every test in this class."""
+        summary = {k: v for k, v in CLEAN_SESSION.items() if k != "tick_journal"}
+        verdict = evaluate_session_safety(summary)
+        assert verdict.safe is False
+        assert any("tick journal" in r for r in verdict.reasons)
 
     @pytest.mark.parametrize("status", ["OPEN", "UNKNOWN", None])
     def test_only_FLAT_proves_the_book_is_closed(self, status):
