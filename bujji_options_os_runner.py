@@ -384,8 +384,44 @@ def _resolve_exchange_lot_size(session_cfg: dict, log=None, cache_dir=None) -> i
     # replay point it at a pinned fixture); it is a path, never a number --
     # there is deliberately no way to hand this function a lot size directly.
     cache_dir = cache_dir or session_cfg.get("instrument_master_dir")
-    master = InstrumentMaster(
-        Path(cache_dir) if cache_dir else REPO_ROOT / "data" / "instrument_master", log)
+    master_dir = Path(cache_dir) if cache_dir else REPO_ROOT / "data" / "instrument_master"
+    master = InstrumentMaster(master_dir, log)
+
+    # FRESHNESS IS ASSERTED, NOT ASSUMED.
+    #
+    # `lot_size_for()` is cache-only and synchronous BY DESIGN -- its docstring
+    # says the trading startup path "must not grow a network dependency" -- and
+    # it delegates refreshing to "the capture path's `_ensure_fresh()`", which
+    # is a DIFFERENT systemd unit. Nothing checked that the other unit had
+    # actually run. If the capture path failed for a week, this read a
+    # week-old master and said nothing.
+    #
+    # Lot size multiplies EVERY order. This exact harm has already been paid
+    # once: the 2026-07-19 audit found the config saying 75 while the master
+    # said 65, and every constructed quantity was 15.4% oversized. A stale
+    # master reintroduces it across an exchange lot-size revision, which is
+    # precisely when the number changes.
+    #
+    # The window defaults to 96h rather than 24h because the refresher runs on
+    # WEEKDAYS: a Monday session legitimately reads a master last written on
+    # Friday morning, ~72h earlier. 96h covers that plus one holiday. It is not
+    # a comfort setting -- past it, the session refuses to size orders.
+    max_age_hours = float(session_cfg.get("instrument_master_max_age_hours", 96.0))
+    master_file = master_dir / f"fyers_fo_{session_cfg.get('exchange', 'NSE')}.csv"
+    if master_file.exists():
+        import time as _time
+
+        age_hours = (_time.time() - master_file.stat().st_mtime) / 3600.0
+        log.info("INSTRUMENT MASTER -- %s is %.1fh old (limit %.0fh).",
+                 master_file.name, age_hours, max_age_hours)
+        if age_hours > max_age_hours:
+            raise RuntimeError(
+                f"instrument master {master_file} is {age_hours:.1f}h old, past the "
+                f"{max_age_hours:.0f}h limit -- refusing to size orders from a stale "
+                f"lot size. Lot size multiplies every order and changes at exchange "
+                f"revisions. Refresh the master (the capture path does this daily) "
+                f"or raise session.instrument_master_max_age_hours deliberately."
+            )
 
     try:
         real = master.lot_size_for(underlying)
