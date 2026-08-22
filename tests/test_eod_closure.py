@@ -252,14 +252,45 @@ class TestProductionWiring:
         assert not outside, "run_market_close_sequence is called outside the flat gate"
 
     def test_the_closure_uses_the_same_place_fn_as_entries_and_exits(self):
-        i = self.RUNNER.index("def _run_eod_closure")
-        assert "place_fn=self._exit_place_fn" in self.RUNNER[i:i + 2600]
+        fn = ast.unparse(self._method("_run_eod_closure"))
+        assert "place_fn=self._exit_place_fn" in fn
 
     def test_a_raising_closure_fails_closed(self):
-        i = self.RUNNER.index("def _run_eod_closure")
-        block = self.RUNNER[i:i + 2600]
-        assert "except Exception" in block
-        assert '"session_closed"] = False' in block
+        """AST, NOT A CHARACTER WINDOW -- the sixth time.
+
+        This read `self.RUNNER[i:i + 2600]` and broke the moment
+        `_run_eod_closure` gained a comment: `except Exception` slid past the
+        2600th character and the test reported a defect in code that had not
+        changed. `test_complete_is_reachable_only_from_a_verified_flat`
+        directly above already carries this same note, and the class already
+        provides `_method()` for exactly this reason.
+
+        The parse tree says what the test means: the closure call is wrapped,
+        the handler catches Exception, and that handler is what records
+        session_closed=False. A window only measures how much prose sits above
+        the code.
+        """
+        fn = self._method("_run_eod_closure")
+
+        tries = [n for n in ast.walk(fn) if isinstance(n, ast.Try)]
+        assert tries, "_run_eod_closure no longer wraps the closure call at all"
+
+        guarding = [
+            t for t in tries
+            if "run_eod_closure(" in ast.unparse(t.body)
+            and any(h.type is None or "Exception" in ast.unparse(h.type)
+                    for h in t.handlers)
+        ]
+        assert guarding, (
+            "the run_eod_closure() call is not inside a try that catches "
+            "Exception -- a closure machine that raised would propagate and "
+            "the session would never record that flatness was unproven")
+
+        handlers = ast.unparse([h for t in guarding for h in t.handlers])
+        assert "'session_closed'] = False" in handlers or \
+               '"session_closed"] = False' in handlers, (
+            "the handler does not record session_closed=False -- a closure "
+            "that failed would leave the session reading as closed")
 
     def test_finalization_no_longer_hardcodes_flat(self):
         assert "finalize_session(final_positions=(), realized_pnl=realized, unrealized_pnl=0.0)" \
