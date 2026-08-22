@@ -2130,49 +2130,158 @@ class OptionsOSRunner:
             len(symbols), getattr(universe, "atm_strike", None),
             ",".join(getattr(universe, "roles_resolved", ()) or ()))
 
-    def _universe_coverage_permits_entry(self) -> bool:
-        """SUBSCRIBED IS NOT COVERED. Only a tick proves the pipe carries data.
-
-        A request that was sent, accepted and then delivered nothing looks
-        exactly like a symbol that is not trading. Both are silence, and
-        silence is UNKNOWN -- never coverage.
-        """
-        from bujji.production_runtime.universe_coverage import evaluate_coverage
-
-        if self._universe_error is not None:
-            if self._universe_error.startswith("NOT_APPLICABLE"):
-                self._governor_result_summary["universe_coverage"] = {
-                    "state": "NOT_APPLICABLE", "detail": self._universe_error}
-                return True
-            self._governor_result_summary["universe_coverage"] = {
-                "state": "UNKNOWN", "detail": self._universe_error}
-            self._governor_result_summary["entry_blocked_by"] = "UNIVERSE_COVERAGE"
-            self._logger.critical("ENTRY BLOCKED -- universe unusable: %s",
-                                  self._universe_error)
-            return False
-
-        intended = list(getattr(self._universe, "symbols", ()) or ())
-        max_age = float(
+    def _max_tick_age(self) -> float:
+        return float(
             (self._config.get("providers", {}).get("tick_source", {}) or {})
             .get("max_tick_age_seconds", 90.0))
-        ages = {}
-        for symbol in intended:
+
+    def _tick_ages_for(self, symbols) -> Dict[str, Optional[float]]:
+        """symbol -> seconds since its newest tick. Unreadable is None, never 0."""
+        ages: Dict[str, Optional[float]] = {}
+        for symbol in symbols:
             try:
                 ages[symbol] = self._tick_feed.tick_age_seconds(symbol)
             except Exception:  # noqa: BLE001 -- unreadable is silent, never fresh
                 ages[symbol] = None
+        return ages
 
-        verdict = evaluate_coverage(intended, self._universe_requested, ages, max_age)
-        self._governor_result_summary["universe_coverage"] = verdict.as_dict()
-        if verdict.permits_entry:
-            self._logger.info("UNIVERSE COVERAGE -- %s: %d/%d symbols fresh.",
-                              verdict.state, verdict.fresh, verdict.intended)
+    def _record_universe_coverage(self) -> None:
+        """Grade the WIDE capture universe, and never block on it.
+
+        THIS USED TO BLOCK, AND THAT WAS THE RULE INVERTED (operator decision
+        2026-08-22). It required a fresh tick from every one of ~242 symbols
+        before any entry. The tiers are drawn on OPEN INTEREST and are
+        deliberately wider than trading alone justifies --
+        `capture_universe.builder`'s own measurement records six of eighteen
+        expiries trading zero contracts all day -- so one legitimately quiet
+        far strike refused the whole session. A naturally inactive contract is
+        silence, and silence out there proves nothing about the feed.
+
+        The operator's rule: capture wide, require narrow. The wide universe
+        is still evaluated and still WRITTEN, because "which symbols went
+        quiet today" is exactly the evidence the tick journal and the Gate 1
+        measurement need. It simply is not a veto. What vetoes is
+        `_band_coverage_permits_entry`, scoped to the contracts the decision
+        actually rests on.
+        """
+        from bujji.production_runtime.universe_coverage import evaluate_coverage
+
+        if self._universe_error is not None:
+            state = ("NOT_APPLICABLE" if self._universe_error.startswith("NOT_APPLICABLE")
+                     else "UNKNOWN")
+            self._governor_result_summary["universe_coverage"] = {
+                "state": state, "blocking": False, "detail": self._universe_error}
+            return
+
+        intended = list(getattr(self._universe, "symbols", ()) or ())
+        verdict = evaluate_coverage(intended, self._universe_requested,
+                                    self._tick_ages_for(intended), self._max_tick_age())
+        payload = verdict.as_dict()
+        # RECORDED, NOT ENFORCED -- and the artifact says so in its own words,
+        # so a later reader cannot mistake a wide-universe verdict for a veto.
+        payload["blocking"] = False
+        self._governor_result_summary["universe_coverage"] = payload
+        self._logger.info(
+            "UNIVERSE COVERAGE (recorded, not blocking) -- %s: %d/%d fresh, "
+            "%d silent, %d stale.",
+            verdict.state, verdict.fresh, verdict.intended,
+            len(verdict.silent), len(verdict.stale))
+
+    def _band_coverage_permits_entry(self, chain) -> bool:
+        """THE BLOCKING SCOPE: every contract the selector may choose from.
+
+        The operator's rule, verbatim: "Before Bujji selects a strike, it must
+        have fresh market data for the underlying, VIX where relevant, and
+        every contract in the configured eligible selection band -- not merely
+        a pair it has not selected yet."
+
+        NOT MERELY THE LEGS. `_build_strike_evidence` ranks the whole band and
+        `_candidates_for_type` picks from it, so a stale price on a contract
+        that is NOT chosen still corrupts the choice: it changes which strike
+        looked closest to the target delta. Checking only the chosen legs would
+        validate the answer while leaving the question corrupt.
+
+        VIX IS NOT REQUIRED TODAY, and that is a measured claim rather than an
+        omission. `bujji_options_os_runner.py` never reads VIX; the production
+        regime path constructs `vix=VixSnapshot(value=None)` and lists "vix" in
+        its own `_ABSENT` tuple (bujji/regime_stability/warmup.py). Nothing in
+        selection, sizing or risk consumes it, so by the operator's own
+        relaxation it cannot block a decision that never relied on it.
+        `test_vix_is_still_not_an_entry_input` fails the day that stops being
+        true, which is what keeps this an assertion instead of an assumption.
+        """
+        from bujji.capture_universe.builder import KIND_SPOT
+        from bujji.production_runtime.selection_band import selection_band
+        from bujji.production_runtime.universe_coverage import evaluate_coverage
+
+        # NO FEED IS NOT A SILENT FEED. Replay and store sources have no
+        # websocket by design; there is no per-symbol evidence to demand.
+        # Mirrors the universe gate rather than implying the question away.
+        if self._universe_error is not None and \
+                self._universe_error.startswith("NOT_APPLICABLE"):
+            self._governor_result_summary["band_coverage"] = {
+                "state": "NOT_APPLICABLE", "detail": self._universe_error}
             return True
 
-        self._governor_result_summary["entry_blocked_by"] = "UNIVERSE_COVERAGE"
+        band = selection_band(chain, self._as_of_date)
+        self._governor_result_summary["selection_band"] = band.as_dict()
+        if not band.usable:
+            self._governor_result_summary["entry_blocked_by"] = "SELECTION_BAND"
+            self._logger.critical(
+                "ENTRY BLOCKED -- the eligible selection band could not be "
+                "determined (%s): %s", band.state, band.detail)
+            return False
+
+        # THE UNDERLYING IS PART OF THE DECISION, not context around it: every
+        # delta in `_build_strike_evidence` is computed against spot, so a
+        # stale spot mis-ranks the entire band at once.
+        required = list(band.symbols)
+        for inst in (getattr(self._universe, "instruments", ()) or ()):
+            if getattr(inst, "kind", None) == KIND_SPOT and inst.symbol not in required:
+                required.append(inst.symbol)
+
+        # CONTAINMENT IS CHECKED, NOT ASSUMED. The band comes from the chain
+        # FYERS returns; the subscription comes from the instrument master.
+        # The two agree today (verified byte-identical across every live
+        # expiry), but they are independently configured -- `strike_count`
+        # widens the band, the tier table widens the universe -- so a band
+        # symbol that was never subscribed is a CONFIGURATION defect, and it
+        # would otherwise surface as a permanent, unexplained refusal.
+        unsubscribed = [s for s in required if s not in set(self._universe_requested)]
+        if unsubscribed:
+            self._governor_result_summary["band_coverage"] = {
+                "state": "BAND_NOT_SUBSCRIBED",
+                "missing_count": len(unsubscribed),
+                "missing_sample": unsubscribed[:10],
+                "band": len(required),
+            }
+            self._governor_result_summary["entry_blocked_by"] = "BAND_NOT_SUBSCRIBED"
+            self._logger.critical(
+                "ENTRY BLOCKED -- %d of %d contracts in the eligible selection band "
+                "were never subscribed (e.g. %s). The capture universe does not "
+                "cover the band the selector ranges over; this gate cannot be "
+                "satisfied until that is reconciled.",
+                len(unsubscribed), len(required), ", ".join(unsubscribed[:5]))
+            return False
+
+        verdict = evaluate_coverage(required, self._universe_requested,
+                                    self._tick_ages_for(required), self._max_tick_age())
+        payload = verdict.as_dict()
+        payload["blocking"] = True
+        payload["expiry"] = band.expiry
+        self._governor_result_summary["band_coverage"] = payload
+        if verdict.permits_entry:
+            self._logger.info(
+                "BAND COVERAGE -- %s: all %d eligible contracts at expiry %s are "
+                "fresh within %.0fs.",
+                verdict.state, verdict.intended, band.expiry, self._max_tick_age())
+            return True
+
+        self._governor_result_summary["entry_blocked_by"] = "BAND_COVERAGE"
         self._logger.critical(
-            "ENTRY BLOCKED -- universe coverage %s (%d/%d fresh): %s",
-            verdict.state, verdict.fresh, verdict.intended, " | ".join(verdict.reasons))
+            "ENTRY BLOCKED -- band coverage %s (%d/%d fresh at expiry %s): %s",
+            verdict.state, verdict.fresh, verdict.intended, band.expiry,
+            " | ".join(verdict.reasons))
         return False
 
     def _data_quality_permits_entry(self) -> bool:
@@ -2202,8 +2311,7 @@ class OptionsOSRunner:
         # truth and data quality, because a universe that is not covered makes
         # every later judgement rest on prices that never arrived.
         self._ensure_universe_subscribed()
-        if not self._universe_coverage_permits_entry():
-            return False
+        self._record_universe_coverage()
 
         # ESTABLISH POSITION TRUTH BEFORE THE FIRST ENTRY, ON DEMAND.
         #
@@ -2410,6 +2518,19 @@ class OptionsOSRunner:
             self._governor_result_summary["chain_age_seconds_at_entry"] = round(chain_age, 1)
             self._logger.info("ENTRY -- option chain is %.0fs old at strike selection.",
                               chain_age)
+
+        # STAGE 1, AND IT HAS TO BE HERE. The band is derived from THIS chain
+        # -- the one `construct_trade` is about to range over -- so the gate
+        # cannot check a different set than the selector uses. That is only
+        # possible after the snapshot, which is why this is not up with the
+        # other data-quality checks.
+        #
+        # CHAIN AGE IS NOT PER-CONTRACT FRESHNESS. The age above is the age of
+        # the FETCH. A contract that has not traded in an hour returns an
+        # hour-old price inside a book fetched five seconds ago, and the bulk
+        # age cannot tell the two apart. Only per-symbol tick evidence can.
+        if not self._band_coverage_permits_entry(chain):
+            return False
 
         # PART 2 (shadow): record what the parity-based IV derivation WOULD
         # have chosen, beside what the canonical engine actually chooses.

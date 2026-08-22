@@ -39,24 +39,6 @@ COVERAGE_UNKNOWN = "UNKNOWN"
 
 
 @dataclass(frozen=True)
-class SymbolCoverage:
-    """One intended symbol's state. `fresh` is the only thing that counts."""
-
-    symbol: str
-    requested: bool
-    tick_age_seconds: Optional[float]
-    fresh: bool
-
-    def as_dict(self) -> Dict[str, object]:
-        return {
-            "symbol": self.symbol,
-            "requested": self.requested,
-            "tick_age_seconds": self.tick_age_seconds,
-            "fresh": self.fresh,
-        }
-
-
-@dataclass(frozen=True)
 class CoverageVerdict:
     state: str
     permits_entry: bool

@@ -204,7 +204,7 @@ class TestTheRunnerActuallyRefuses:
         def _ensure_universe_subscribed(self):
             return None
 
-        def _universe_coverage_permits_entry(self):
+        def _record_universe_coverage(self):
             return True
 
         def _reconcile_broker_positions(self, stage_label):  # pragma: no cover

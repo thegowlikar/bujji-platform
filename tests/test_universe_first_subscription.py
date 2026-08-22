@@ -130,28 +130,78 @@ def _runner(feed=None, universe=None, error=None):
     return mod, r
 
 
-class TestTheGateIsWiredAtTheChokePoint:
-    def test_a_fully_ticking_universe_permits(self):
+class TestTheWideUniverseIsRecordedNotEnforced:
+    """RESCOPED 2026-08-22, and these tests changed direction on purpose.
+
+    They used to assert that a silent WIDE universe blocked entry. That was
+    the operator's rule inverted: the capture tiers are drawn on open interest
+    and are deliberately wider than trading justifies, so one legitimately
+    quiet far strike refused the whole session.
+
+    The blocking scope moved to the eligible selection band -- see
+    tests/test_selection_band_gate.py, which now carries the "silence blocks"
+    assertions at the scope where silence actually means something. What is
+    asserted HERE is the other half of the rule: the wide universe is still
+    graded and still written, because which symbols went quiet is the evidence
+    the tick journal needs.
+    """
+
+    def test_a_fully_ticking_universe_is_recorded_complete(self):
         _m, r = _runner(_Feed({s: 1.0 for s in U}), _Universe())
-        assert r._universe_coverage_permits_entry() is True
+        r._record_universe_coverage()
         assert r._governor_result_summary["universe_coverage"]["state"] == "COMPLETE"
+        assert "entry_blocked_by" not in r._governor_result_summary
 
-    def test_a_silent_universe_blocks_and_is_recorded(self):
+    def test_a_silent_universe_is_RECORDED_and_does_NOT_block(self):
+        """The inverted assertion, stated in its corrected form. A far strike
+        that never prints is silence out where silence proves nothing."""
         _m, r = _runner(_Feed({s: None for s in U}), _Universe())
-        assert r._universe_coverage_permits_entry() is False
-        assert r._governor_result_summary["entry_blocked_by"] == "UNIVERSE_COVERAGE"
+        r._record_universe_coverage()
+        payload = r._governor_result_summary["universe_coverage"]
+        assert payload["state"] == "UNKNOWN"        # still graded honestly
+        assert payload["blocking"] is False         # and explicitly not a veto
+        assert payload["silent_count"] == len(U)    # still written for the journal
+        assert "entry_blocked_by" not in r._governor_result_summary
 
-    def test_an_unbuilt_universe_blocks(self):
+    def test_an_unbuilt_universe_is_recorded_UNKNOWN(self):
         _m, r = _runner(_Feed({}), None, error="BUILD_FAILED: boom")
-        assert r._universe_coverage_permits_entry() is False
+        r._record_universe_coverage()
         assert r._governor_result_summary["universe_coverage"]["state"] == "UNKNOWN"
 
-    def test_an_offline_source_is_NOT_APPLICABLE_not_blocked(self):
+    def test_an_offline_source_is_NOT_APPLICABLE_not_a_silent_feed(self):
         """Replay and paper_synthetic are deliberately offline sources, not
         silent feeds. Recorded explicitly rather than implied."""
         _m, r = _runner(None, None, error="NOT_APPLICABLE: no websocket tick feed configured")
-        assert r._universe_coverage_permits_entry() is True
+        r._record_universe_coverage()
         assert r._governor_result_summary["universe_coverage"]["state"] == "NOT_APPLICABLE"
+
+
+class TestAnUnusableUniverseStillBlocks:
+    """Recording instead of vetoing must not become "nothing blocks". A
+    universe that could not be BUILT or SUBSCRIBED is not a quiet far strike --
+    it is the absence of any evidence at all, and it still refuses. It does so
+    through the band gate's containment check, because a band symbol that was
+    never subscribed cannot be proven fresh."""
+
+    def _chain(self):
+        from dataclasses import dataclass
+
+        @dataclass(frozen=True)
+        class Row:
+            expiry: str
+            strike: float
+            option_type: str
+            instrument_symbol: str
+            symbol_provenance: str = "BROKER_AUTHORITATIVE"
+
+        return [Row("2026-08-25", 24000.0, t, f"NSE:NIFTY2608252400{i}{t}")
+                for i, t in enumerate(("CE", "PE"))]
+
+    def test_a_build_failure_blocks_because_nothing_was_subscribed(self):
+        _m, r = _runner(_Feed({}), None, error="BUILD_FAILED: boom")
+        r._as_of_date = "2026-08-24"
+        assert r._band_coverage_permits_entry(self._chain()) is False
+        assert r._governor_result_summary["entry_blocked_by"] == "BAND_NOT_SUBSCRIBED"
 
     def test_no_spot_blocks_rather_than_guessing_a_centre(self):
         _m, r = _runner(_Feed({}), None)
@@ -160,7 +210,7 @@ class TestTheGateIsWiredAtTheChokePoint:
         r._as_of_date = "2026-08-24"
         r._ensure_universe_subscribed()
         assert r._universe_error.startswith("NO_SPOT")
-        assert r._universe_coverage_permits_entry() is False
+        assert r._band_coverage_permits_entry(self._chain()) is False
 
 
 class TestTheGateRunsBeforeStrategySelection:
@@ -179,7 +229,10 @@ class TestTheGateRunsBeforeStrategySelection:
                       and getattr(c.func, "attr", None) == "select_and_lock_strategy")
         assert gate < select, "the entry gate runs AFTER strategy selection"
 
-    def test_the_universe_gate_is_first_inside_that_gate(self):
+    def test_the_universe_is_recorded_before_position_truth_is_read(self):
+        """Unchanged in intent, updated for the rename: a book that never
+        ticked makes the position read moot, so the universe verdict is
+        captured first even though it no longer vetoes."""
         import ast
 
         src = (REPO_ROOT / "bujji_options_os_runner.py").read_text()
@@ -188,8 +241,8 @@ class TestTheGateRunsBeforeStrategySelection:
                   and n.name == "_data_quality_permits_entry")
         calls = [(c.lineno, getattr(c.func, "attr", None)) for c in ast.walk(fn)
                  if isinstance(c, ast.Call)]
-        uni = min(l for l, n in calls if n == "_universe_coverage_permits_entry")
+        uni = min(l for l, n in calls if n == "_record_universe_coverage")
         recon = [l for l, n in calls if n == "_reconcile_broker_positions"]
         assert not recon or uni < min(recon), (
-            "position truth is established before universe coverage; a book "
+            "position truth is established before the universe is recorded; a book "
             "that never ticked makes that read moot")
