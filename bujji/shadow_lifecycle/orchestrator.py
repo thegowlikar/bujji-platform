@@ -84,11 +84,26 @@ def _append(store: EventStore, event_id: str, event_type: str, session_id: str, 
 
 def _contract_for_leg(leg, underlying_symbol: str, lot_size: Optional[int]) -> OptionContract:
     """Builds the OptionContract PaperBroker needs from the leg's OWN
-    real, already-solved fields (Phase 14) -- nothing invented."""
+    real, already-solved fields (Phase 14) -- nothing invented.
+
+    FIXED 2026-08-22: the sentence above was not true. This built
+    f"{underlying_symbol}{int(leg.strike)}{leg.option_type}" -- a venue-SHAPED
+    string with no expiry -- and stamped the expiry as the literal "WEEKLY",
+    while `leg.expiry` sat right there carrying the real, already-solved
+    value. Both were invented.
+
+    Two things kept it hidden. The forbidden-pattern detector matched the
+    literal placeholder `{underlying}`, and this file writes
+    `{underlying_symbol}` -- one identifier longer, and invisible. And the
+    module is not reachable from any entry point, so nothing exercised it.
+    """
     from bujji.core.enums import OptionType
+    from bujji.options_observation import taxonomy as opt_taxonomy
     option_type = OptionType.CE if leg.option_type == "CE" else OptionType.PE
-    symbol = f"{underlying_symbol}{int(leg.strike)}{leg.option_type}"
-    return OptionContract(symbol, underlying_symbol, leg.strike, option_type, "WEEKLY", lot_size or 1)
+    expiry = getattr(leg, "expiry", None) or opt_taxonomy.UNRESOLVED_EXPIRY
+    symbol = opt_taxonomy.unresolved_symbol(
+        underlying_symbol, expiry, int(leg.strike), leg.option_type)
+    return OptionContract(symbol, underlying_symbol, leg.strike, option_type, expiry, lot_size or 1)
 
 
 async def open_position_from_candidate(

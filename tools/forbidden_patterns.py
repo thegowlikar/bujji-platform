@@ -56,8 +56,15 @@ PATTERNS: Dict[str, re.Pattern] = {
     # `{underlying}` joined directly to a strike or expiry with no separator is
     # a VENUE symbol. A pipe-delimited identity (`NIFTY|2026-08-25|24000|CE`) is
     # this codebase's canonical internal identity and is deliberately excluded.
+    # `underlying[a-z_]*` and not a bare `underlying`: the first version
+    # matched the literal placeholder name, so
+    # `f"{underlying_symbol}{int(leg.strike)}{leg.option_type}"` in
+    # bujji/shadow_lifecycle/orchestrator.py -- the same defect, same shape,
+    # one identifier longer -- was invisible to it. A detector that matches a
+    # VARIABLE NAME rather than a SHAPE is defeated by renaming, which is the
+    # one edit most likely to happen by accident.
     "broker-symbol-built": re.compile(
-        r"""f["'][^"'|]*\{underlying\}[^"'|]*\{[^"']*(strike|expiry)"""),
+        r"""f["'][^"'|]*\{underlying[a-z_]*\}[^"'|]*\{[^"']*(strike|expiry)"""),
     "independent-atm": re.compile(
         r"def\s+_atm_strike|def\s+_atm\b|def\s+_atm_strikes_grid"
         r"|round\([^)]*\/\s*50\s*\)\s*\*\s*50"),

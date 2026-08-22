@@ -133,14 +133,14 @@ are deliberately absent from the table above.
 starts, which modules production can reach. Current measurement:
 
 ```
-python files            1826
-  test modules           553
-  production modules    1273
+python files            1828
+  test modules           554
+  production modules    1274
 
 REACHABLE                550   (43.2% of production)
-orphaned                 723
+orphaned                 724
   test-only              512
-  unreferenced           211
+  unreferenced           212
 ```
 
 **`test-only` is a classification, not a verdict.** It means exactly one thing:
@@ -195,7 +195,6 @@ silently.
 | Module | Patterns | Status |
 | --- | --- | --- |
 | `bujji.market_timeseries.subscription` | fixed-strike-count, broker-symbol-built | QUARANTINED |
-| `bujji.replay.broker` | broker-symbol-built | QUARANTINED |
 | `bujji.trading_brain.nifty_contract_builder.engine` | independent-atm | QUARANTINED |
 | `scripts.certify_fyers_optionchain_reality_access` | fixed-strike-count | QUARANTINED |
 | `scripts.gate1.build_universe` | independent-atm | QUARANTINED |
@@ -213,17 +212,52 @@ safe-looking direction and an entry cannot sit resolved-but-listed forever.
 
 | Module | Pattern | Clears in |
 | --- | --- | --- |
-| `bujji.broker.paper` | broker-symbol-built | M3 |
 | `bujji.core.orchestrator` | fixed-strike-count | M1 |
 | `bujji.shadow_runtime.intelligence_pipeline_adapter` | independent-atm | M1 |
 | `bujji.trading_brain.risk_governor.msi_entry_bridge` | broker-symbol-built | M1 |
 | `run_live_shadow` | fixed-strike-count | M1 |
 
-`bujji.broker.paper` clears in **M3** rather than M1 because its symbols are
-part of the broker-truth boundary, not of universe construction. It is worth
-naming what is wrong with it: it builds `f"{underlying}{strike}{opt.value}"`
-with **no expiry at all**, so a paper symbol can never equal a real venue
-symbol, and any reconciliation comparing the two matches nothing — silently.
+**`bujji.broker.paper` cleared in M3 (2026-08-22).** It built
+`f"{underlying}{strike}{opt.value}"` — `"NIFTY24500CE"` — with no expiry and
+no exchange prefix, and stamped the contract's expiry as the literal
+`"WEEKLY"`. Two defects in one shape. A strike alone is not a contract: every
+ledger the simulator owns keys on the symbol string and the position row has
+no expiry field, so a short near leg and a long far leg at the same strike
+merged into one row and **netted to no position at all** — a phantom flat
+manufactured by the simulator itself, demonstrated live before the fix. And
+the string was venue-*shaped* without being a venue symbol (a real one is
+`NSE:NIFTY26AUG24500CE`), so any comparison against a real symbol matched
+nothing, silently.
+
+Both simulators — `bujji.broker.paper` and `bujji.replay.broker` — now return
+the ABSENT sentinel this codebase already owned:
+`UNRESOLVED|NIFTY|2026-08-27|24500|CE`, via
+`options_observation.taxonomy.unresolved_symbol()`. Pipe-delimited, because no
+exchange vocabulary in use here contains a `|`; it carries the expiry, so two
+expiries cannot collide; and `option_symbol_resolver` already refuses ABSENT
+provenance permanently, so a leak into a real order path is refused loudly
+rather than failing silently. A simulator cannot know which contracts are
+listed — that answer is in the instrument master, a network download it must
+not make — so when no expiry is supplied it says `UNRESOLVED-EXPIRY` instead
+of inventing one.
+
+**Scope, stated honestly:** the collision was never reachable. The option
+chain is filtered to `min(expiry)` before any strategy sees it
+(`market_perception/option_chain_adapter.py`), so no proposal can span two
+expiries, and no systemd-run service calls a paper broker's
+`resolve_atm_contract` at all — production contracts come from
+`SymbolIndex.resolve_leg()`, which returns the chain row's symbol verbatim.
+This fix disarms a trap; it did not repair a live failure.
+
+**A detector blind spot found while fixing it.** The `broker-symbol-built`
+pattern matched the literal placeholder `{underlying}`, so
+`bujji.shadow_lifecycle.orchestrator`'s
+`f"{underlying_symbol}{int(leg.strike)}{leg.option_type}"` — the same defect,
+one identifier longer — was invisible to it, while that function's docstring
+claimed it invented nothing and `leg.expiry` sat unused beside it. The
+detector now matches the shape rather than the variable name, and that module
+is fixed too. A detector defeated by a rename is defeated by the single most
+likely accidental edit.
 
 ---
 

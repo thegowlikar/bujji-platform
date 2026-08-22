@@ -19,6 +19,7 @@ from __future__ import annotations
 
 from typing import Optional
 
+from ..options_observation import taxonomy as opt_taxonomy
 from ..core.clock import now_ist
 from ..core.enums import OptionType, OrderStatus, Side
 from ..core.models import Candle, OptionContract, OrderRequest, OrderResult
@@ -38,7 +39,11 @@ class ReplayBroker(Broker):
                  margin_schedule: Optional[dict[int, float]] = None,
                  lot_size_schedule: Optional[dict[int, int]] = None,
                  option_volume: float = 5_000_000.0,
-                 option_volume_schedule: Optional[dict[int, float]] = None) -> None:
+                 option_volume_schedule: Optional[dict[int, float]] = None,
+                 # See PaperBroker.__init__ -- a replay does not know which
+                 # contracts were listed on the replayed day unless told.
+                 simulated_expiry: Optional[str] = None) -> None:
+        self._simulated_expiry = simulated_expiry
         self._spot = 0.0
         self._time_value = base_time_value
         self._decay = decay_per_candle
@@ -104,9 +109,13 @@ class ReplayBroker(Broker):
         self._check_auth()
         strike = self.atm_strike(spot, strike_interval)
         opt = self.option_type_for(direction)
-        symbol = f"{underlying}{strike}{opt.value}"
+        # Same fix, same reasons as PaperBroker.resolve_atm_contract -- see
+        # that docstring. A replay is a simulation too: it does not know which
+        # contracts were listed on the replayed day unless it is told.
+        expiry = self._simulated_expiry or opt_taxonomy.UNRESOLVED_EXPIRY
+        symbol = opt_taxonomy.unresolved_symbol(underlying, expiry, strike, opt.value)
         effective_lot_size = int(self._scheduled(self._lot_size_schedule, lot_size))
-        return OptionContract(symbol, underlying, strike, opt, "WEEKLY", effective_lot_size)
+        return OptionContract(symbol, underlying, strike, opt, expiry, effective_lot_size)
 
     def _price(self, contract: OptionContract) -> float:
         if contract.option_type is OptionType.PE:
