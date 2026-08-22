@@ -3312,8 +3312,45 @@ class OptionsOSRunner:
         """
         self._stage = RunnerStage.EOD_CLOSE
         self._logger.info("EOD_CLOSE")
-        self._run_one_management_pass("EOD_CLOSE")
+
+        # THE BACKSTOP MUST NOT BE GATED ON THE STRATEGY EXIT.
+        #
+        # These were two bare statements in sequence, so ANY exception from the
+        # management pass meant `_run_eod_closure()` never ran at all. That is
+        # backwards: the management pass is the strategy-aware exit, an
+        # optimisation that prices legs from the valuation; the closure machine
+        # is the broker-truth backstop that flattens whatever the strategy did
+        # not. Gating the backstop on the optimisation succeeding removes it
+        # exactly when it is needed.
+        #
+        # The paths that raise here are not exotic. `positions_for_group()` and
+        # `get_group_reality()` go to the broker through PositionRealityRegistry
+        # and do NOT catch, so a live position read that fails -- the single
+        # most likely reason a position is still open at 15:30 -- would take the
+        # closure machine down with it. `_run_eod_closure()` is itself fully
+        # guarded and records BROKER_TRUTH_UNKNOWN rather than claiming
+        # flatness, so reaching it is always better than not reaching it.
+        pending_signal = None
+        try:
+            self._run_one_management_pass("EOD_CLOSE")
+        except BaseException as exc:  # noqa: BLE001 -- the backstop runs regardless
+            self._governor_result_summary["eod_management_pass_error"] = (
+                f"{type(exc).__name__}: {exc}")
+            self._logger.critical(
+                "EOD_CLOSE -- the final management pass raised (%s: %s). Running the "
+                "broker-truth closure machine ANYWAY; the strategy exit is an "
+                "optimisation, the closure machine is the backstop.",
+                type(exc).__name__, exc)
+            if not isinstance(exc, Exception):
+                # KeyboardInterrupt / SystemExit: a real termination request.
+                # Honour it -- but AFTER the flatten attempt, never instead of
+                # one. Masking it would be worse than delaying it.
+                pending_signal = exc
+
         self._run_eod_closure()
+
+        if pending_signal is not None:
+            raise pending_signal
 
     def _run_eod_closure(self) -> None:
         """Drive the closure state machine and gate COMPLETE on its verdict."""
