@@ -139,6 +139,22 @@ providers:
     # Strikes each side of ATM. Wider than the 5 used for OI
     # reconciliation: construction needs both short legs and both wings.
     strike_count: 20
+    # HOW OLD THE LIVE BOOK MAY BE.
+    #
+    # The provider used to load the chain ONCE at ~09:15 and serve it for the
+    # whole session, so a continuous session taking entries until 14:30 could
+    # select strikes from a book more than five hours old. A 20-delta strike
+    # chosen against a five-hour-old spot is not a 20-delta strike.
+    #
+    # chain_refresh_after_seconds: refetch when the book is older than this.
+    #   30s means a new decision cycle always re-reads, while repeated reads
+    #   inside one cycle reuse the same fetch (which is what keeps the chain
+    #   and the spot internally consistent).
+    # chain_max_age_seconds: the HARD limit. Past this, a failed refresh
+    #   raises MarketDataUnavailableError and no entry can be constructed --
+    #   fail closed, never a stale book presented as current.
+    chain_refresh_after_seconds: 30
+    chain_max_age_seconds: 120
 
   # Live per-leg prices for revaluation. Without this every cycle is
   # BLIND (revalued from entry prices) and the runner says so loudly.

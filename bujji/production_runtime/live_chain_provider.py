@@ -77,11 +77,35 @@ class LiveChainProvider(MarketDataProvider):
     place both short legs and both wings of a condor.
     """
 
+    # A live chain that is never refetched is a replay chain wearing a live
+    # label. These bound how old the book may be before it stops being
+    # evidence about the market that exists right now.
+    DEFAULT_REFRESH_AFTER_SECONDS = 30.0
+    DEFAULT_MAX_AGE_SECONDS = 120.0
+
     def __init__(self, broker, underlying: str = "NIFTY", strike_count: int = 20,
-                 logger=None) -> None:
+                 logger=None, refresh_after_seconds: float | None = None,
+                 max_age_seconds: float | None = None, clock=None) -> None:
         self._broker = broker
         self._underlying = underlying
         self._strike_count = strike_count
+        self._refresh_after = float(
+            self.DEFAULT_REFRESH_AFTER_SECONDS if refresh_after_seconds is None
+            else refresh_after_seconds)
+        self._max_age = float(
+            self.DEFAULT_MAX_AGE_SECONDS if max_age_seconds is None else max_age_seconds)
+        if self._max_age < self._refresh_after:
+            raise ValueError(
+                f"max_age_seconds ({self._max_age}) is below refresh_after_seconds "
+                f"({self._refresh_after}) -- the book would be refused before a "
+                f"refresh was ever attempted")
+        import time as _time
+
+        # Monotonic: a wall-clock step (NTP, DST) must not make a stale book
+        # look fresh. Injectable so freshness is testable without sleeping.
+        self._clock = clock or _time.monotonic
+        self._fetched_at: Optional[float] = None
+        self._last_as_of: Optional[str] = None
         # A component that cannot explain itself fails silently -- the exact
         # defect that cost three blind cycles on 2026-08-21, when
         # WebsocketTickProvider's diagnostics went to a logger the session
@@ -95,16 +119,92 @@ class LiveChainProvider(MarketDataProvider):
 
     # -- MarketDataProvider ------------------------------------------- #
     def get_option_chain(self, as_of_date: str) -> Sequence:
-        self._ensure_loaded(as_of_date)
+        self._ensure_fresh(as_of_date)
         return self._chain
 
     def get_spot(self) -> Optional[float]:
+        # Spot went through NO freshness path at all -- it returned whatever
+        # the first fetch of the day had put there. It now travels with the
+        # chain it was read from and is subject to the same limits.
+        if self._last_as_of is not None:
+            self._ensure_fresh(self._last_as_of)
         return self._spot
 
+    # -- freshness ----------------------------------------------------- #
+    def snapshot(self, as_of_date: str):
+        """`(chain, spot, age_seconds)` from ONE fetch.
+
+        `get_option_chain()` followed by `get_spot()` is two calls, and a
+        refresh landing between them would pair a chain from fetch N with a
+        spot from fetch N+1 -- an internally inconsistent book, which is
+        exactly what strike selection must never run on. This returns the
+        triple atomically.
+        """
+        self._ensure_fresh(as_of_date)
+        return self._chain, self._spot, self.age_seconds()
+
+    def age_seconds(self) -> Optional[float]:
+        """How old the served book is, or None if nothing has been fetched."""
+        if self._fetched_at is None:
+            return None
+        return max(0.0, self._clock() - self._fetched_at)
+
     # -- internals ----------------------------------------------------- #
-    def _ensure_loaded(self, as_of_date: str) -> None:
-        if self._chain is not None:
+    def _ensure_fresh(self, as_of_date: str) -> None:
+        """Refetch when the book is older than the refresh interval, and
+        REFUSE when it is older than the hard limit.
+
+        THE DEFECT THIS REPLACES. `_ensure_loaded` opened with
+        `if self._chain is not None: return` -- loaded once at ~09:15 and never
+        again. Every entry for the rest of the session selected its strikes and
+        read its premiums from that one snapshot; in a continuous session
+        admitting entries until 14:30 the book could be more than five hours
+        old. A 20-delta strike chosen against a five-hour-old spot is not a
+        20-delta strike, and the module docstring already promised the
+        opposite: a live session "must refuse to trade rather than fall back to
+        a stale or synthetic chain".
+
+        Fails CLOSED on both edges: the first load raises if it cannot fetch,
+        and a refresh failure raises once the cached book passes `max_age`.
+        Between `refresh_after` and `max_age` a failed refresh keeps serving
+        the previous book and says so -- one missed poll is not a reason to
+        abandon a position mid-session, but an unbounded run of them is.
+        """
+        self._last_as_of = as_of_date
+        now = self._clock()
+
+        if self._chain is None or self._fetched_at is None:
+            chain, spot = self._fetch(as_of_date)
+            self._chain, self._spot, self._fetched_at = chain, spot, self._clock()
             return
+
+        age = now - self._fetched_at
+        if age < self._refresh_after:
+            return
+
+        try:
+            chain, spot = self._fetch(as_of_date)
+        except MarketDataUnavailableError as exc:
+            age = self._clock() - self._fetched_at
+            if age > self._max_age:
+                # Drop the stale book so nothing downstream can read it.
+                self._chain = None
+                self._spot = None
+                self._fetched_at = None
+                raise MarketDataUnavailableError(
+                    f"live option chain for {self._underlying!r} is {age:.0f}s old "
+                    f"(limit {self._max_age:.0f}s) and the refresh failed ({exc}) -- "
+                    f"refusing to serve a stale book to strike selection"
+                ) from exc
+            self._logger.warning(
+                "live chain refresh failed (%s); serving the previous book, now "
+                "%.0fs old (hard limit %.0fs).", exc, age, self._max_age)
+            return
+
+        self._chain, self._spot, self._fetched_at = chain, spot, self._clock()
+
+    def _fetch(self, as_of_date: str):
+        """One raw call -> (chain, spot). Raises rather than returning partial."""
         try:
             raw = asyncio.run(
                 self._broker.get_option_chain_raw(self._underlying, strike_count=self._strike_count))
@@ -125,7 +225,7 @@ class LiveChainProvider(MarketDataProvider):
             raise MarketDataUnavailableError(
                 f"live option chain carried no usable underlying price for {self._underlying!r}"
             )
-        self._chain, self._spot = tuple(chain), spot
+        return tuple(chain), spot
 
     def _build(self, raw: dict, as_of_date: str):
         from bujji.options_observation import taxonomy as opt_taxonomy

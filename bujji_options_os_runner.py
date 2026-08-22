@@ -386,6 +386,7 @@ def _resolve_exchange_lot_size(session_cfg: dict, log=None, cache_dir=None) -> i
     cache_dir = cache_dir or session_cfg.get("instrument_master_dir")
     master = InstrumentMaster(
         Path(cache_dir) if cache_dir else REPO_ROOT / "data" / "instrument_master", log)
+
     try:
         real = master.lot_size_for(underlying)
     except Exception as exc:
@@ -886,6 +887,11 @@ class OptionsOSRunner:
                 chain_broker, underlying=underlying,
                 strike_count=int(market_data_cfg.get("strike_count", 20)),
                 logger=self._logger,
+                # How old the live book may be. Defaults live on the provider;
+                # an operator may tighten them, and max_age below refresh_after
+                # is rejected there rather than silently accepted.
+                refresh_after_seconds=market_data_cfg.get("chain_refresh_after_seconds"),
+                max_age_seconds=market_data_cfg.get("chain_max_age_seconds"),
             )
         else:
             bhavcopy_path = market_data_cfg.get("bhavcopy_path")
@@ -2026,6 +2032,22 @@ class OptionsOSRunner:
             return False
         return True
 
+    def _chain_snapshot(self):
+        """`(chain, spot, age_seconds)` for the entry path.
+
+        Live providers answer `snapshot()` atomically and enforce their own
+        freshness limits, raising MarketDataUnavailableError rather than
+        serving a book past `max_age`. Dated providers (replay, store) have no
+        `snapshot` and no notion of age; they return None for it, and nothing
+        downstream treats that as "fresh" -- it means "freshness does not
+        apply to this source", which is only ever true off the live path.
+        """
+        provider = self._market_data_provider
+        snapshot = getattr(provider, "snapshot", None)
+        if callable(snapshot):
+            return snapshot(self._as_of_date)
+        return (provider.get_option_chain(self._as_of_date), provider.get_spot(), None)
+
     def _risk_budget(self) -> Dict[str, float]:
         """The rupee figures for THIS position, scaled by the lots taken.
 
@@ -2110,8 +2132,51 @@ class OptionsOSRunner:
                               trend_regime, volatility_regime)
             return False
 
-        chain = self._market_data_provider.get_option_chain(self._as_of_date)
-        spot = self._market_data_provider.get_spot()
+        # ONE SNAPSHOT, NOT TWO READS.
+        #
+        # These were separate calls. With a provider that can refresh, a
+        # refresh landing between them pairs a chain from fetch N with a spot
+        # from fetch N+1 -- an internally inconsistent book, and strike
+        # selection is the last place that should run on one. `snapshot()`
+        # returns the pair from a single fetch, plus its age.
+        #
+        # A provider without `snapshot` is a deliberately DATED source
+        # (ReplayChainProvider, StoreChainProvider): its book is historical by
+        # construction, freshness is not a meaningful question, and the two
+        # reads cannot disagree because nothing refreshes.
+        # STALE DATA BLOCKS THE ENTRY, IT DOES NOT END THE SESSION.
+        #
+        # `_chain_snapshot()` raises MarketDataUnavailableError when the live
+        # book is past its hard age limit. Letting that propagate would kill a
+        # session that may be holding a position and still managing it from
+        # tick data -- so it is caught HERE, at the same choke point
+        # `_data_quality_permits_entry` uses, and turned into "no entry this
+        # cycle". A later cycle whose refresh succeeds may still enter.
+        #
+        # The import is function-local because `MarketDataUnavailableError` is
+        # imported that way throughout this runner; a name used outside the
+        # function that imported it is the exact NameError shape that took the
+        # emergency brake down on 2026-08-21 (see tools/undefined_name_guard.py).
+        from bujji.production_runtime.market_data_provider import (
+            MarketDataUnavailableError,
+        )
+
+        try:
+            chain, spot, chain_age = self._chain_snapshot()
+        except MarketDataUnavailableError as exc:
+            self._logger.critical(
+                "ENTRY BLOCKED -- the option chain is not fresh enough to trade on "
+                "(%s). Constructing an order from a stale book would pick strikes "
+                "against a spot the market has already left.", exc)
+            self._governor_result_summary["entry_allowed"] = False
+            self._governor_result_summary["entry_blocked_reason"] = (
+                f"STALE_MARKET_DATA: {exc}")
+            return False
+
+        if chain_age is not None:
+            self._governor_result_summary["chain_age_seconds_at_entry"] = round(chain_age, 1)
+            self._logger.info("ENTRY -- option chain is %.0fs old at strike selection.",
+                              chain_age)
 
         # PART 2 (shadow): record what the parity-based IV derivation WOULD
         # have chosen, beside what the canonical engine actually chooses.
