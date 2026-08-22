@@ -92,6 +92,14 @@ class ConfigurationError(Exception):
     patched with a guessed value."""
 
 
+# The NIFTY option strike grid, in index points. Passed EXPLICITLY to
+# `build_capture_universe` rather than relying on its default, and asserted
+# equal to that default by test_chain_band_is_contained_by_construction -- so
+# the tier arithmetic here and the universe the builder actually constructs
+# can never disagree silently about how wide a strike is.
+_UNIVERSE_GRID_STEP = 50
+
+
 class RunnerStage:
     STARTUP = "STARTUP"
     PRE_MARKET_CHECK = "PRE_MARKET_CHECK"
@@ -948,6 +956,9 @@ class OptionsOSRunner:
                 # is rejected there rather than silently accepted.
                 refresh_after_seconds=market_data_cfg.get("chain_refresh_after_seconds"),
                 max_age_seconds=market_data_cfg.get("chain_max_age_seconds"),
+                # WIRED, not merely available. Without this the resolver would
+                # be one more thing this codebase built and never called.
+                expiry_resolver=self._master_expiry_resolver(),
             )
         else:
             bhavcopy_path = market_data_cfg.get("bhavcopy_path")
@@ -2047,6 +2058,57 @@ class OptionsOSRunner:
         # homes and let them drift.
         self._attempt_entry(trend_regime, volatility_regime)
 
+    def _master_expiry_resolver(self):
+        """symbol -> ISO expiry, from the FYERS instrument master.
+
+        WHY THE MASTER AND NOT THE PAYLOAD. The chain response carries ONE
+        `expiryData` list and no per-row expiry, so `_build` had to stamp a
+        single value on every row. The master knows each real contract's real
+        expiry, which makes the stamp a verified per-row fact instead of an
+        inference from a subscript.
+
+        LAZY, so constructing the provider does not pay a 14 MB CSV read, and
+        so a session that never fetches a chain never loads it at all.
+
+        FAILS CLOSED, DELIBERATELY. If the master cannot be read, every symbol
+        resolves to None, every row is dropped, and `_fetch` refuses with
+        "produced zero usable rows" rather than trading on unverified expiries.
+        That is consistent with the rest of the runner: the master is already a
+        hard startup requirement -- lot size refuses to be guessed from YAML
+        (2026-07-19 audit) -- so its absence here is an anomaly, not a mode.
+        """
+        state = {"rows": None, "failed": False}
+
+        def resolve(symbol):
+            if state["rows"] is None and not state["failed"]:
+                try:
+                    from bujji.broker.instrument_master import InstrumentMaster
+
+                    master = InstrumentMaster(
+                        REPO_ROOT / "data" / "instrument_master", self._logger)
+                    underlying = self._session_cfg.get("underlying", "NIFTY")
+                    state["rows"] = {
+                        row.symbol: row.expiry_date.isoformat()
+                        for row in master._rows_for(underlying)
+                    }
+                    self._logger.info(
+                        "CHAIN EXPIRY -- %d %s contracts loaded from the instrument "
+                        "master; each chain row's expiry is resolved against it "
+                        "rather than stamped from expiryData.",
+                        len(state["rows"]), underlying)
+                except Exception as exc:  # noqa: BLE001 -- see docstring
+                    state["failed"] = True
+                    self._logger.critical(
+                        "CHAIN EXPIRY -- the instrument master could not be read "
+                        "(%s: %s). Every chain row will be dropped and the session "
+                        "will refuse rather than trade on unverified expiries.",
+                        type(exc).__name__, exc)
+            if state["failed"] or not state["rows"]:
+                return None
+            return state["rows"].get(symbol)
+
+        return resolve
+
     def _ensure_universe_subscribed(self) -> None:
         """Build the session universe ONCE and subscribe to all of it.
 
@@ -2088,15 +2150,51 @@ class OptionsOSRunner:
             from pathlib import Path as _Path
 
             from bujji.broker.instrument_master import InstrumentMaster
-            from bujji.capture_universe.builder import build_capture_universe
+            from bujji.capture_universe.builder import (
+                DEFAULT_TIERS, ROLE_FRONT, ROLE_SECOND, build_capture_universe,
+            )
 
             master = InstrumentMaster(REPO_ROOT / "data" / "instrument_master", self._logger)
             # `_rows_for` is the accessor the existing caller uses
             # (scripts/build_capture_universe.py:58). Kept identical rather
             # than adding a public alias in this commit.
             rows = master._rows_for(self._session_cfg.get("underlying", "NIFTY"))
+
+            # CONTAINMENT BY CONSTRUCTION, not by coincidence.
+            #
+            # The eligible selection band is bounded by the chain FETCH
+            # (`providers.market_data.strike_count`), while the subscription is
+            # bounded by this tier table. They are configured independently, so
+            # today's fit -- band +/-1000 inside a +/-1500 front tier -- is an
+            # accident of two numbers, not a guarantee. Raising strike_count
+            # alone would silently push band contracts outside the universe and
+            # the band gate would refuse the session every day with
+            # BAND_NOT_SUBSCRIBED.
+            #
+            # Deriving the floor from the same knob removes the coincidence.
+            #
+            # FRONT AND SECOND ONLY. `select_expiry` picks the nearest expiry
+            # with DTE >= 1, which is FRONT, or SECOND on expiry day when FRONT
+            # is the 0-DTE contract. MONTHLY can never be that expiry -- it
+            # deliberately reaches FORWARD past any weekly already taken -- so
+            # widening it would subscribe symbols no selection can ever range
+            # over. Today the floor is 1000 and neither tier moves.
+            strike_count = int(
+                (self._config.get("providers", {}).get("market_data", {}) or {})
+                .get("strike_count", 20))
+            band_points = strike_count * _UNIVERSE_GRID_STEP
+            tiers = dict(DEFAULT_TIERS)
+            for role in (ROLE_FRONT, ROLE_SECOND):
+                if tiers.get(role, 0) < band_points:
+                    self._logger.warning(
+                        "UNIVERSE -- widening the %s tier from %d to %d index points so "
+                        "it covers the %d-strike chain the selector will range over.",
+                        role, tiers.get(role, 0), band_points, strike_count)
+                    tiers[role] = band_points
+
             universe = build_capture_universe(
-                rows, float(spot), _dt.date.fromisoformat(self._as_of_date))
+                rows, float(spot), _dt.date.fromisoformat(self._as_of_date),
+                tiers=tiers, step=_UNIVERSE_GRID_STEP)
         except Exception as exc:  # noqa: BLE001 -- an unbuilt universe blocks entry, never ends the session
             self._universe_error = f"BUILD_FAILED: {type(exc).__name__}: {exc}"
             self._logger.critical(
