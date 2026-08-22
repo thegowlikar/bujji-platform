@@ -399,6 +399,42 @@ _REGISTRY_PURE_ACCESSOR_AUTHORIZED = (
 # Coverage: tests/test_option_symbol_resolver.py (39),
 #           tests/test_single_symbol_vocabulary.py (23),
 #           tests/test_symbol_provenance.py (36), each with negative controls.
+# =========================================================================
+# LIVE-READINESS CAMPAIGN (2026-08-22) -- ONE new protected-package file.
+#
+# WHAT IT IS. `session_safety_verdict.py` is a PURE function over the session
+# summary dict the runner already builds. It reads `final_positions_status`,
+# `closure_reason`, `closure_truths_agree`, `emergency_close_*`,
+# `has_unresolved_exit` and `position_truth_established`, and returns
+# safe/unsafe plus reasons. No I/O, no clock, no broker, no mutation -- it does
+# not even mutate its input, and a test pins that.
+#
+# WHY IT EXISTS. `_run_session` returned EXIT_OK the moment `runner.run()`
+# returned, without reading a single field of the summary. A session could end
+# with closure_reason=CRITICAL_UNFLATTENED_POSITION and still exit 0, so
+# systemd saw success, `OnFailure=` never fired, and the alarm that exists
+# reached nobody. That is the 2026-08-21 session verbatim: an alert landed only
+# because an unrelated websocket hang got the process SIGTERM-killed 21 minutes
+# after it had logged SHUTDOWN.
+#
+# WHAT IT DOES NOT DO. It adds NO execution surface, no broker call, no order
+# path, no mutation and no new state. It cannot cause a trade; it can only
+# cause a non-zero exit code. Every fact it grades was already computed and
+# already logged at CRITICAL by the runner -- this file is the wire from those
+# detectors to systemd, nothing more.
+#
+# The other production_runtime file this campaign touched,
+# live_chain_provider.py, is already named in the prior phase's tuples and is
+# deliberately NOT re-authorised here.
+#
+# Coverage: tests/test_session_safety_exit_code.py (15) and
+#           tests/test_position_truth_before_entry.py (9), both with negative
+#           controls that were run and observed to fire.
+# =========================================================================
+_LIVE_READINESS_AUTHORIZED = (
+    "bujji/production_runtime/session_safety_verdict.py",
+)
+
 _SYMBOL_VOCABULARY_AUTHORIZED = (
     "bujji/production_runtime/option_symbol_resolver.py",
     "bujji/production_runtime/live_chain_provider.py",
@@ -547,8 +583,28 @@ def test_fyers_broker_code_unchanged():
     #
     # No place/modify/cancel surface is touched; the two capability guards
     # remain untouched and enforcing. Coverage: tests/test_eod_closure.py.
+    # LIVE-READINESS CAMPAIGN (2026-08-22), fyers.py -> 172 lines changed.
+    # Three read-only additions, no execution surface:
+    #   * FYERS_ORDERTAG_ROUNDTRIP_VERIFIED = False + a mirrored class
+    #     attribute. get_order() finds an order by scanning today's book for
+    #     `orderTag == client_order_id`, and whether FYERS echoes that tag is
+    #     UNVERIFIED -- the submission method's own comment says it cannot be
+    #     confirmed without a real order. If it is not echoed, every lookup
+    #     returns "not found", indistinguishable from never-submitted. The
+    #     ExecutionEngine now treats an absent answer from this broker as
+    #     UNKNOWN and refuses to re-submit.
+    #   * a schema gate on the submission path: it refuses while
+    #     FYERS_POSITION_SCHEMA_VERIFIED is False. Reads, cancels and exits are
+    #     deliberately NOT gated -- gating those would strand a position.
+    #   * get_open_positions() raises PositionReadError instead of returning []
+    #     on a non-ok response, a missing netPositions key, or a row without
+    #     netQty. It had NO success check at all, so any error read as FLAT.
+    # No new place/modify/cancel capability. The two capability guards remain
+    # untouched and enforcing -- and one of them caught a COMMENT of mine
+    # mentioning a forbidden name, which was reworded rather than the guard
+    # being loosened.
     assert ("303" in stat_line or "55" in stat_line or "81" in stat_line
-            or stat_line == ""), \
+            or "172" in stat_line or stat_line == ""), \
         f"unexpected fyers.py diff: {stat_line}"
 
 
@@ -558,7 +614,7 @@ def test_no_protected_lineage_package_modified():
         cwd="/opt/bujji/app", capture_output=True, text=True,
     )
     changed = [l for l in result.stdout.strip().splitlines() if l]
-    changed = [l for l in changed if l not in _PAPERBROKER_V2_AUTHORIZED + _LOT_SIZE_AUTHORITATIVE_AUTHORIZED + _CPC_SAFETY_SPINE_AUTHORIZED + _CPC_EVIDENCE_AND_REALISM_AUTHORIZED + _LIVE_PREMIUM_FIX_AUTHORIZED + _THREE_PART_SELECTION_AUTHORIZED + _DEFINED_RISK_MODE_AUTHORIZED + _LEARNING_LOOP_AUTHORIZED + _DIRECTION_POSITIONING_LENS_AUTHORIZED + _DATA_QUALITY_GATE_AUTHORIZED + _WEBSOCKET_TICK_PROVIDER_AUTHORIZED + _JOURNALED_EXECUTION_AUTHORIZED + _EXIT_BROKER_TRUTH_AUTHORIZED + _EOD_CLOSURE_AUTHORIZED + _POSITION_RECONCILIATION_AUTHORIZED + _REGISTRY_PURE_ACCESSOR_AUTHORIZED + _SYMBOL_VOCABULARY_AUTHORIZED]
+    changed = [l for l in changed if l not in _PAPERBROKER_V2_AUTHORIZED + _LOT_SIZE_AUTHORITATIVE_AUTHORIZED + _CPC_SAFETY_SPINE_AUTHORIZED + _CPC_EVIDENCE_AND_REALISM_AUTHORIZED + _LIVE_PREMIUM_FIX_AUTHORIZED + _THREE_PART_SELECTION_AUTHORIZED + _DEFINED_RISK_MODE_AUTHORIZED + _LEARNING_LOOP_AUTHORIZED + _DIRECTION_POSITIONING_LENS_AUTHORIZED + _DATA_QUALITY_GATE_AUTHORIZED + _WEBSOCKET_TICK_PROVIDER_AUTHORIZED + _JOURNALED_EXECUTION_AUTHORIZED + _EXIT_BROKER_TRUTH_AUTHORIZED + _EOD_CLOSURE_AUTHORIZED + _POSITION_RECONCILIATION_AUTHORIZED + _REGISTRY_PURE_ACCESSOR_AUTHORIZED + _SYMBOL_VOCABULARY_AUTHORIZED + _LIVE_READINESS_AUTHORIZED]
     protected_prefixes = (
         "bujji/msi_", "bujji/trading_brain/", "bujji/execution_engine/",
         "bujji/risk_governor/", "bujji/msi_shadow_trading/", "bujji/mic_replay/",
