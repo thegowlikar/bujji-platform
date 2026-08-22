@@ -44,6 +44,11 @@ class _Stub:
             self._governor_result_summary["strategy_selected"] = family
         self._config = {"position_management": mgmt or {}}
         self._entry_prices = {"X": 1.0} if entry else {}
+        # Production signals closure through the BROKER, not through local
+        # state -- see `_position_management`. This stub used to end the loop
+        # by emptying `_entry_prices`, which is the exact signal the loop
+        # stopped trusting, so it now closes the way production closes.
+        self._broker_flat = False
         self._now = now or datetime.datetime(2026, 8, 20, 9, 30, tzinfo=IST)
         self._stage = None
         self._emergency_closed = False
@@ -52,9 +57,16 @@ class _Stub:
     def _clock(self):
         return self._now
 
+    def _broker_reports_flat(self):
+        return (self._broker_flat, "stub")
+
     def _run_one_management_pass(self, label):
         self.passes += 1
-        self._entry_prices = {}          # close immediately; we only measure setup
+        # Close immediately; we only measure setup. `_entry_prices` is NOT
+        # emptied: production never clears it -- it is the durable
+        # did-we-ever-open flag, and a stub that cleared it would model a
+        # transition production cannot make.
+        self._broker_flat = True
 
 
 def _risk(family):

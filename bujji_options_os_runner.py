@@ -3844,9 +3844,57 @@ class OptionsOSRunner:
                 break
             self._run_one_management_pass(f"POSITION_MANAGEMENT[{cycles + 1}]")
             cycles += 1
-            if not self._entry_prices:
-                self._logger.info("Position closed during management -- ending monitoring loop.")
-                break
+            # STAGE 3 TERMINATION: THE BROKER PROVES FLAT, OR MONITORING RUNS ON.
+            #
+            # The operator's rule (2026-08-22): once a position exists, its
+            # legs and hedges "remain mandatory until the broker proves the
+            # account is flat."
+            #
+            # This read `if not self._entry_prices` -- LOCAL state, and the
+            # weakest possible kind. `_entry_prices` is assigned at three
+            # sites and cleared at NONE, so after the first fill the branch
+            # was unreachable and its log line ("Position closed during
+            # management") could never be printed truthfully. Monitoring did
+            # continue to monitor_until, but by accident rather than by rule:
+            # the moment anything cleared that dict, the loop would have
+            # stopped watching a position on local belief alone.
+            #
+            # `_broker_reports_flat` is three-valued and already refuses to
+            # turn "I could not ask" into "there is nothing there". It had
+            # exactly ONE caller, on the emergency-close path. This is the
+            # second, and it is the one that governs the ordinary day.
+            #
+            # THE GUARD IS A PRECONDITION, AND IT SHORT-CIRCUITS THE READ.
+            # A first version broke on `flat is True` alone and the regression
+            # suite caught it: on a NO-TRADE day the broker is flat from the
+            # first pass, so monitoring stopped at cycle one -- defeating the
+            # reason this loop was made unconditional on 2026-08-21, that "the
+            # case reconciliation exists for is 'Bujji believes it holds
+            # nothing while the broker holds something'". A broker flat at
+            # 09:20 says nothing about a position appearing at 11:00.
+            #
+            # `_entry_prices` is sound HERE precisely because it is never
+            # cleared: it can only ever say "something was opened", never
+            # "nothing is open", so it cannot end monitoring on its own. That
+            # was the defect in the condition it replaces; here it only gates,
+            # and broker truth decides. Gating the READ as well keeps a
+            # no-trade day from making one broker call per cycle whose answer
+            # could never end the loop -- `_reconcile_broker_positions` at the
+            # top of each pass already carries the read such a day needs.
+            if self._entry_prices:
+                flat, flat_detail = self._broker_reports_flat()
+                if flat is True:
+                    self._logger.info(
+                        "POSITION_MANAGEMENT -- a position was opened and the broker "
+                        "now proves the account is flat (%s); ending monitoring.",
+                        flat_detail)
+                    break
+                if flat is None:
+                    # UNKNOWN IS NOT FLAT. Monitoring continues, loudly: a
+                    # position we cannot see is the case this loop exists for.
+                    self._logger.warning(
+                        "POSITION_MANAGEMENT -- could not establish flatness (%s). "
+                        "Monitoring CONTINUES: UNKNOWN is not flat.", flat_detail)
             now_t = self._clock().time()
             if now_t >= end_t:
                 self._logger.info("Reached monitor_until=%s -- ending monitoring loop.", end_time_s)
