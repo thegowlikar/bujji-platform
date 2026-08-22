@@ -103,14 +103,14 @@ are deliberately absent from the table above.
 starts, which modules production can reach. Current measurement:
 
 ```
-python files            1811
+python files            1812
   test modules           549
-  production modules    1262
+  production modules    1263
 
 REACHABLE                449   (35.6% of production)
-orphaned                 813
+orphaned                 814
   test-only              557
-  unreferenced           256
+  unreferenced           257
 ```
 
 **`test-only` is a classification, not a verdict.** It means exactly one thing:
@@ -128,6 +128,72 @@ exercises is not what runs.
 `__import__`, a module named in config) are not followed, so the reachable set
 is a lower bound. Anything reported reachable is; anything reported orphaned
 should be confirmed by grep before being acted on.
+
+---
+
+## 3a. Forbidden universe patterns, and the ratchet on them
+
+Four patterns let a component decide for itself which contracts exist or what
+they are called, instead of deriving that from the canonical universe model.
+Two components that each answer "which contracts?" will eventually answer
+differently, and the difference surfaces as a strike nobody can price, a symbol
+the venue rejects, or a reconciliation that silently matches nothing.
+
+| Pattern | What it is |
+| --- | --- |
+| `expiry-by-list-order` | Taking a broker response's expiry list by POSITION. Assumes the broker sorts, and that the returned rows belong to whichever entry sits first. |
+| `fixed-strike-count` | A hardcoded number of strikes. The master steps by 50 near expiry and 1500 for LEAPS, so "N each side" is a different width per expiry — and a different width from what was subscribed. |
+| `broker-symbol-built` | Constructing a venue symbol from parts rather than selecting a real one. A symbol that does not exist cannot be priced, ordered or reconciled, and the failure looks like an absent position. |
+| `independent-atm` | Computing an at-the-money strike locally. The ATM the universe was centred on is the only one whose band is actually subscribed. |
+
+`tools/forbidden_patterns.py` reports every occurrence, split by reachability.
+Docstrings are stripped before matching — an earlier version reported five false
+positives, all of them prose explaining these very defects.
+
+### Quarantine — dormant, and must stay dormant
+
+These modules carry a forbidden pattern but are **not reachable** from any
+systemd entry point, so they cannot define what production trades today. They
+are NOT deleted and NOT rewritten. They are fenced.
+
+**The ratchet:** `tests/test_architecture_contract.py` fails if any of these
+becomes reachable. Wiring one into a production path breaks the build until it
+is either migrated (the pattern removed) or explicitly and visibly taken out of
+quarantine here. A dormant forbidden pattern cannot re-enter the runtime
+silently.
+
+| Module | Patterns | Status |
+| --- | --- | --- |
+| `bujji.market_timeseries.subscription` | fixed-strike-count, broker-symbol-built | QUARANTINED |
+| `bujji.replay.broker` | broker-symbol-built | QUARANTINED |
+| `bujji.trading_brain.nifty_contract_builder.engine` | independent-atm | QUARANTINED |
+| `scripts.certify_fyers_optionchain_reality_access` | fixed-strike-count | QUARANTINED |
+| `scripts.gate1.build_universe` | independent-atm | QUARANTINED |
+| `scripts.verify_fo_access` | fixed-strike-count | QUARANTINED |
+
+### Known reachable violations — declared, and shrinking
+
+These DO define what production trades. Each is declared with the milestone
+that clears it.
+
+**The ratchet, both ways:** the test asserts the set of reachable violations
+equals EXACTLY this table. A new violation fails, because it is undeclared. A
+fixed violation left declared here also fails, so the table cannot rot in the
+safe-looking direction and an entry cannot sit resolved-but-listed forever.
+
+| Module | Pattern | Clears in |
+| --- | --- | --- |
+| `bujji.broker.paper` | broker-symbol-built | M3 |
+| `bujji.core.orchestrator` | fixed-strike-count | M1 |
+| `bujji.shadow_runtime.intelligence_pipeline_adapter` | independent-atm | M1 |
+| `bujji.trading_brain.risk_governor.msi_entry_bridge` | broker-symbol-built | M1 |
+| `run_live_shadow` | fixed-strike-count | M1 |
+
+`bujji.broker.paper` clears in **M3** rather than M1 because its symbols are
+part of the broker-truth boundary, not of universe construction. It is worth
+naming what is wrong with it: it builds `f"{underlying}{strike}{opt.value}"`
+with **no expiry at all**, so a paper symbol can never equal a real venue
+symbol, and any reconciliation comparing the two matches nothing — silently.
 
 ---
 

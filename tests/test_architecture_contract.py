@@ -170,3 +170,119 @@ def test_test_only_is_defined_as_a_classification_not_a_verdict():
     assert "cannot support a claim about production safety" in text
     tool = (REPO_ROOT / "tools" / "reachability.py").read_text(encoding="utf-8")
     assert "never recommends deleting" in tool
+
+
+# --------------------------------------------------------------- quarantine
+_QUARANTINE_ROW = re.compile(r"^\|\s*`([\w.]+)`\s*\|\s*([a-z, -]+?)\s*\|\s*QUARANTINED\s*\|\s*$")
+_VIOLATION_ROW = re.compile(r"^\|\s*`([\w.]+)`\s*\|\s*([a-z-]+)\s*\|\s*(M\d)\s*\|\s*$")
+
+
+def _quarantined():
+    return {m.group(1): [p.strip() for p in m.group(2).split(",")]
+            for m in (_QUARANTINE_ROW.match(l.strip()) for l in ARCH.read_text(encoding="utf-8").splitlines())
+            if m}
+
+
+def _declared_violations():
+    out = {}
+    for line in ARCH.read_text(encoding="utf-8").splitlines():
+        m = _VIOLATION_ROW.match(line.strip())
+        if m:
+            out.setdefault(m.group(1), set()).add(m.group(2))
+    return out
+
+
+@pytest.fixture(scope="module")
+def patterns():
+    spec = importlib.util.spec_from_file_location(
+        "bujji_forbidden", REPO_ROOT / "tools" / "forbidden_patterns.py")
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod
+
+
+def test_the_detector_finds_a_known_instance(patterns):
+    """POSITIVE CONTROL. A detector that finds nothing would pass every test
+    below while proving nothing at all."""
+    known = REPO_ROOT / "bujji" / "trading_brain" / "risk_governor" / "msi_entry_bridge.py"
+    hits = patterns.scan_source(patterns.executable_source(known))
+    assert any(k == "broker-symbol-built" for k, _ in hits), \
+        "the detector no longer finds the symbol construction in msi_entry_bridge"
+
+
+def test_the_detector_ignores_prose(patterns):
+    """The reason docstrings are stripped: this repository's own explanations
+    of why `expiryData[0]` is forbidden must not read as committing it."""
+    code = 'def f():\n    """We used to read expiryData[0] and strike_count=5."""\n    return 1\n'
+    import ast as _ast, tempfile, os
+    with tempfile.NamedTemporaryFile("w", suffix=".py", delete=False) as fh:
+        fh.write(code); path = Path(fh.name)
+    try:
+        assert patterns.scan_source(patterns.executable_source(path)) == []
+    finally:
+        os.unlink(path)
+
+
+def test_no_quarantined_module_is_reachable_from_production(report, patterns):
+    """THE RATCHET. A dormant forbidden pattern must not re-enter the runtime
+    silently. Wiring one of these into a systemd path fails here until it is
+    migrated or explicitly removed from quarantine."""
+    reachable = set(report["reachable_modules"])
+    breached = sorted(set(_quarantined()) & reachable)
+    assert not breached, (
+        "quarantined modules are now reachable from production:\n  "
+        + "\n  ".join(breached)
+        + "\nEither remove the forbidden pattern, or take the module out of "
+          "quarantine in ARCHITECTURE.md with the reason.")
+
+
+def test_quarantined_modules_still_exist_and_still_carry_their_pattern(patterns):
+    """A quarantine entry for a module that no longer has the pattern is
+    stale, and stale fences teach people to ignore fences."""
+    stale = []
+    tool = _load_tool()
+    mods = tool.module_map(REPO_ROOT)
+    for module, declared in _quarantined().items():
+        if module not in mods:
+            stale.append(f"{module}: no such module")
+            continue
+        found = {k for k, _ in patterns.scan_source(patterns.executable_source(mods[module]))}
+        missing = set(declared) - found
+        if missing:
+            stale.append(f"{module}: no longer carries {sorted(missing)} -- remove the entry")
+    assert not stale, "stale quarantine entries:\n  " + "\n  ".join(stale)
+
+
+def test_reachable_violations_match_the_declaration_exactly(report, patterns):
+    """THE RATCHET, BOTH WAYS. Undeclared violations fail because they are new.
+    Declared violations that no longer exist also fail, so the table cannot rot
+    in the safe-looking direction."""
+    reachable = set(report["reachable_modules"])
+    actual = {}
+    for module, hits in patterns.scan_repo(REPO_ROOT).items():
+        if module in reachable:
+            actual[module] = {k for k, _ in hits}
+    declared = _declared_violations()
+
+    undeclared = {m: sorted(v) for m, v in actual.items() if m not in declared}
+    resolved = {m: sorted(v) for m, v in declared.items() if m not in actual}
+    changed = {m: (sorted(declared[m]), sorted(actual[m]))
+               for m in set(declared) & set(actual) if declared[m] != actual[m]}
+
+    assert not undeclared, (
+        "NEW reachable forbidden patterns, undeclared:\n  "
+        + "\n  ".join(f"{m}: {v}" for m, v in undeclared.items()))
+    assert not resolved, (
+        "declared reachable violations that no longer exist -- remove them:\n  "
+        + "\n  ".join(f"{m}: {v}" for m, v in resolved.items()))
+    assert not changed, (
+        "declared patterns differ from what is present:\n  "
+        + "\n  ".join(f"{m}: declared {d}, found {a}" for m, (d, a) in changed.items()))
+
+
+def test_every_declared_violation_names_a_milestone():
+    text = ARCH.read_text(encoding="utf-8")
+    assert _declared_violations(), "no reachable violations declared -- the table format changed"
+    for module in _declared_violations():
+        assert re.search(rf"`{re.escape(module)}`\s*\|[^|]+\|\s*M\d\s*\|", text), \
+            f"{module} is declared without a clearing milestone"
