@@ -1,0 +1,47 @@
+# =========================================================================
+# BUJJI PRICE-LEVELS REFRESH
+#
+# Rebuilds the dated structure map (levels + zones) from the COMPLETED bars
+# in the normalized store, so a trading session reads a map instead of
+# re-deriving one inside every five-minute decision cycle.
+#
+# WHY THIS UNIT EXISTS. scripts/refresh_price_levels.py describes itself as a
+# "Daily price-levels refresh" that "RUNS AFTER THE CLOSE, on purpose" -- and
+# nothing scheduled it. It had been run by hand exactly once, on 2026-08-19,
+# and the map had aged silently ever since. Built, never wired.
+#
+# OBSERVATION ONLY, AND THAT IS LOAD-BEARING HERE. Nothing in the decision
+# chain reads this map -- verified three ways: its only consumer is
+# `level_context=` into build_thesis_artifact(); that artifact is write-only
+# (built -> record_market_thesis() -> discarded); and the regime provider is
+# constructed from the thesis and volatility regime without it.
+# bujji/shadow_observatory/thesis_artifact.py states it at the field:
+# "OBSERVATION ONLY -- nothing in the decision chain reads it."
+#
+# So a failure here is NOT a trading emergency. It costs an entry in the
+# evidence trail whose purpose is to answer, at the operator gate, "would
+# levels have helped?" -- a question that must be answered from a real trail
+# rather than from argument. A silently ageing map answers it wrongly.
+#
+# NO CREDENTIALS. The script reads a local SQLite store and touches no broker
+# (verified: zero FYERS references in it). Deliberately no EnvironmentFile and
+# no network dependency -- this job cannot be taken down by a dead token, and
+# must not be able to consume one.
+#
+# EXIT CODES, from the script's own docstring: 0 built (INCLUDING an honest
+# INSUFFICIENT_HISTORY snapshot), 2 no usable bars at all, 3 unexpected
+# failure. No SuccessExitStatus= is set, so only 0 is success and 2/3 fail the
+# unit and reach OnFailure=. That is correct: "I could not build a map" is a
+# fact an operator should be told, not one to absorb.
+#
+# Never enable this unit directly; enable the .timer.
+# =========================================================================
+[Unit]
+Description=Bujji price-levels refresh — rebuild the structure map from completed bars
+
+[Service]
+Type=oneshot
+User=bujji
+Group=bujji
+WorkingDirectory=/opt/bujji/app
+ExecStart=/opt/bujji/.venv/bin/python scripts/refresh_price_levels.py

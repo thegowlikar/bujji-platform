@@ -1,0 +1,35 @@
+# =========================================================================
+# WHY 16:00, AND WHY WEEKDAYS ONLY.
+#
+# The builder reads FINISHED bars; running it mid-session would build a map
+# from a partly-formed final bar and the last "level" would be an artifact of
+# when the job happened to run. So it must sit after the close.
+#
+# 16:00 IST is chosen from measurement, not preference:
+#   15:40  F&O close (bujji.market_calendar.FO_MARKET_CLOSE)
+#   15:41  observed last write to the normalized store the builder reads
+#          (mtime 2026-08-21 15:40:57; last 5-minute bar 15:25)
+#   16:00  this job -- ~19 minutes after the data lands
+#   16:30  bujji-backup.timer
+#
+# Weekdays only, because a weekend run would rebuild the identical map from
+# the identical bars and stamp it with a non-trading date. `latest_snapshot_path`
+# selects the newest snapshot on or before the session date, so a Monday
+# session correctly reads Friday's map -- one trading day old, which is what
+# a map built from completed bars is supposed to be.
+#
+# Persistent=true, matching bujji-backup.timer: this reads history, so a
+# catch-up run after downtime is harmless and produces a current map. That is
+# the opposite of the trading timers, where Persistent=false exists precisely
+# so a missed SESSION is never caught up.
+# =========================================================================
+[Unit]
+Description=Post-close trigger for the Bujji price-levels refresh (weekdays only)
+
+[Timer]
+OnCalendar=Mon..Fri 16:00 Asia/Kolkata
+AccuracySec=5min
+Persistent=true
+
+[Install]
+WantedBy=timers.target
