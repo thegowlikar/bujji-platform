@@ -90,7 +90,49 @@ class _Broker:
         return item
 
 
+def _universe_admitting(*symbols, selection_band_points=1000, atm=24500):
+    """A REAL CaptureUniverse admitting exactly `symbols`.
+
+    Not a mock. The provider derives its request width from
+    `selection_band_points` and admits only contracts the universe selected, so
+    a stand-in that skipped either would exercise a provider nobody runs. These
+    fixtures therefore name the contracts they expect to survive -- which is
+    also what makes the drop-what-the-universe-never-chose behaviour visible
+    here rather than only in its own test.
+    """
+    from bujji.capture_universe.builder import (
+        CaptureInstrument, CaptureUniverse, KIND_OPTION, ROLE_FRONT)
+    return CaptureUniverse(
+        as_of_date="2026-08-13", spot=float(atm), atm_strike=atm,
+        instruments=tuple(
+            CaptureInstrument(symbol=s, kind=KIND_OPTION, role=ROLE_FRONT,
+                              expiry="2026-08-25", strike=float(atm), option_type="CE")
+            for s in symbols),
+        roles_resolved={ROLE_FRONT: "2026-08-25"}, collapsed_roles=(),
+        expiries_available=1, expiries_excluded=0,
+        selection_band_points=selection_band_points)
+
+
+def _symbols_in(payloads):
+    """Every broker symbol appearing in these raw payloads.
+
+    Derived from the fixture rather than hardcoded, so a fixture that gains a
+    strike does not silently start testing the drop path instead of the path
+    it was written for."""
+    out = []
+    for raw in payloads if isinstance(payloads, (list, tuple)) else [payloads]:
+        if not isinstance(raw, dict):
+            continue
+        for row in (raw.get("data") or {}).get("optionsChain") or []:
+            sym = row.get("symbol")
+            if sym and row.get("option_type") in ("CE", "PE"):
+                out.append(sym)
+    return out
+
+
 def _provider(script, clock, **kw):
+    kw.setdefault("universe_source",
+                  lambda: _universe_admitting(*_symbols_in(script)))
     return LiveChainProvider(_Broker(script), underlying="NIFTY", clock=clock, **kw)
 
 
@@ -206,7 +248,8 @@ class TestConfigurationIsRefusedNotAccepted:
         """Otherwise the book would be refused before a refresh was ever
         attempted -- a config that can only ever fail closed on itself."""
         with pytest.raises(ValueError) as exc:
-            LiveChainProvider(_Broker([]), refresh_after_seconds=120,
+            LiveChainProvider(_Broker([]), universe_source=lambda: _universe_admitting(),
+                              refresh_after_seconds=120,
                               max_age_seconds=30)
         assert "below refresh_after_seconds" in str(exc.value)
 
@@ -218,7 +261,7 @@ class TestConfigurationIsRefusedNotAccepted:
         md = cfg["providers"]["market_data"]
         assert md["chain_max_age_seconds"] > md["chain_refresh_after_seconds"]
         LiveChainProvider(
-            _Broker([]),
+            _Broker([]), universe_source=lambda: _universe_admitting(),
             refresh_after_seconds=md["chain_refresh_after_seconds"],
             max_age_seconds=md["chain_max_age_seconds"])
 
@@ -227,7 +270,8 @@ class TestTheClockIsMonotonic:
     def test_a_wall_clock_step_cannot_make_a_stale_book_look_fresh(self):
         import time
 
-        p = LiveChainProvider(_Broker([_raw(1.0, 1.0)]))
+        p = LiveChainProvider(_Broker([_raw(1.0, 1.0)]),
+                              universe_source=lambda: _universe_admitting(*_symbols_in([_raw(1.0, 1.0)])))
         assert p._clock is time.monotonic, (
             "a wall-clock source would let an NTP or DST step reset the age of "
             "a book that has not been refetched")

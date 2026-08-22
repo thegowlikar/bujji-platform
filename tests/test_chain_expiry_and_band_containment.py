@@ -30,9 +30,25 @@ _HAVE = CAPTURE.exists()
 AS_OF = "2026-08-13"
 
 
-def _provider(resolver=None, strike_count=20):
-    return LiveChainProvider(object(), underlying="NIFTY", strike_count=strike_count,
-                             expiry_resolver=resolver)
+def _universe_admitting(*symbols, selection_band_points=1000, atm=24000):
+    """A REAL CaptureUniverse admitting exactly `symbols`."""
+    from bujji.capture_universe.builder import (
+        CaptureInstrument, CaptureUniverse, KIND_OPTION, ROLE_FRONT)
+    return CaptureUniverse(
+        as_of_date=AS_OF, spot=float(atm), atm_strike=atm,
+        instruments=tuple(
+            CaptureInstrument(symbol=x, kind=KIND_OPTION, role=ROLE_FRONT,
+                              expiry="2026-08-18", strike=float(atm), option_type="CE")
+            for x in symbols),
+        roles_resolved={ROLE_FRONT: "2026-08-18"}, collapsed_roles=(),
+        expiries_available=1, expiries_excluded=0,
+        selection_band_points=selection_band_points)
+
+
+def _provider(resolver=None, admits=None):
+    return LiveChainProvider(
+        object(), underlying="NIFTY", expiry_resolver=resolver,
+        universe_source=lambda: _universe_admitting(*(admits or [])))
 
 
 def _raw(expiry_entries, rows):
@@ -51,7 +67,8 @@ def test_the_nearest_expiry_is_computed_not_taken_by_position():
         [{"date": "25-08-2026"}, {"date": "18-08-2026"}, {"date": "01-09-2026"}],
         [_row(24000.0, "CE", "NSE:NIFTY2681824000CE")],
     )
-    chain, _spot = _provider()._build(raw, AS_OF)
+    syms = [r["symbol"] for r in raw["data"]["optionsChain"]]
+    chain, _spot = _provider(admits=syms)._build(raw, AS_OF, admissible=set(syms))
     assert chain[0].observation.identity.timestamp  # sanity: a real observation
     assert _expiry_of(chain[0]) == "2026-08-18", "position 0 was 25-08, the nearest is 18-08"
 
@@ -59,7 +76,8 @@ def test_the_nearest_expiry_is_computed_not_taken_by_position():
 def test_unparseable_expiry_entries_are_skipped_not_trusted():
     raw = _raw([{"date": "garbage"}, {"date": "18-08-2026"}],
                [_row(24000.0, "CE", "NSE:NIFTY2681824000CE")])
-    chain, _ = _provider()._build(raw, AS_OF)
+    syms = [r["symbol"] for r in raw["data"]["optionsChain"]]
+    chain, _ = _provider(admits=syms)._build(raw, AS_OF, admissible=set(syms))
     assert _expiry_of(chain[0]) == "2026-08-18"
 
 
@@ -77,7 +95,8 @@ def test_the_resolver_stamps_each_row_with_its_own_real_expiry():
     raw = _raw([{"date": "18-08-2026"}],
                [_row(24000.0, "CE", "NSE:NIFTY2681824000CE"),
                 _row(24000.0, "PE", "NSE:NIFTY2682524000PE")])
-    chain, _ = _provider(resolver=truth.get)._build(raw, AS_OF)
+    syms = [r["symbol"] for r in raw["data"]["optionsChain"]]
+    chain, _ = _provider(resolver=truth.get, admits=syms)._build(raw, AS_OF, admissible=set(syms))
     got = sorted(_expiry_of(c) for c in chain)
     assert got == ["2026-08-18", "2026-08-25"], got
 
@@ -90,7 +109,8 @@ def test_a_symbol_the_master_does_not_list_is_dropped_not_borrowed():
                [_row(24000.0, "CE", "NSE:NIFTY2681824000CE"),
                 _row(24000.0, "PE", "NSE:NIFTYUNKNOWNPE")])
     resolver = {"NSE:NIFTY2681824000CE": "2026-08-18"}.get
-    chain, _ = _provider(resolver=resolver)._build(raw, AS_OF)
+    syms = [r["symbol"] for r in raw["data"]["optionsChain"]]
+    chain, _ = _provider(resolver=resolver, admits=syms)._build(raw, AS_OF, admissible=set(syms))
     assert len(chain) == 1
     assert chain[0].instrument_symbol == "NSE:NIFTY2681824000CE"
 
@@ -99,7 +119,8 @@ def test_without_a_resolver_the_uniform_stamp_still_applies():
     """The resolver is additive. Callers that wire none keep prior behaviour
     rather than silently losing their chain."""
     raw = _raw([{"date": "18-08-2026"}], [_row(24000.0, "CE", "NSE:NIFTY2681824000CE")])
-    chain, _ = _provider()._build(raw, AS_OF)
+    syms = [r["symbol"] for r in raw["data"]["optionsChain"]]
+    chain, _ = _provider(admits=syms)._build(raw, AS_OF, admissible=set(syms))
     assert len(chain) == 1 and _expiry_of(chain[0]) == "2026-08-18"
 
 
@@ -135,48 +156,61 @@ RUNNER_PATH = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__fil
 RUNNER_SRC = io.open(RUNNER_PATH, encoding="utf-8").read()
 
 
-def test_the_runner_grid_step_matches_the_builder_default():
-    """The tier arithmetic and the universe the builder constructs must not
-    disagree about how wide a strike is."""
-    import inspect
-    from bujji.capture_universe import builder
-    import bujji_options_os_runner as runner
-
-    default_step = inspect.signature(builder.build_capture_universe).parameters["step"].default
-    assert runner._UNIVERSE_GRID_STEP == default_step
-
-
-def test_tiers_are_derived_from_strike_count_not_left_to_coincidence():
-    src = RUNNER_SRC
-    assert "band_points = strike_count * _UNIVERSE_GRID_STEP" in src
-    assert "tiers=tiers" in src, "the derived tiers must actually reach the builder"
+def test_the_chain_width_derives_from_the_selection_band():
+    """REPLACES the tier-derivation tests. Those asserted the opposite
+    authority: capture TIERS derived from a `strike_count` constant, so a
+    chain-request number decided how much of the book was subscribed. The
+    universe now states its own selection band and the request derives from
+    THAT."""
+    from bujji.capture_universe.builder import selection_strikes_each_side
+    for points, expected in ((1000, 20), (1500, 30), (500, 10)):
+        u = _universe_admitting(selection_band_points=points)
+        assert selection_strikes_each_side(u, step=50) == expected
 
 
-def test_only_front_and_second_are_widened():
-    """MONTHLY reaches FORWARD past any weekly already taken, so it can never
-    be the expiry `select_expiry` chooses. Widening it would subscribe symbols
-    no selection can range over."""
-    tree = ast.parse(RUNNER_SRC)
-    fn = next(n for n in ast.walk(tree)
-              if isinstance(n, ast.FunctionDef) and n.name == "_ensure_universe_subscribed")
-    src = ast.unparse(fn)
-    assert "ROLE_FRONT, ROLE_SECOND" in src
-    assert "ROLE_MONTHLY" not in src
+def test_the_provider_requests_exactly_the_selection_width():
+    """The number that reaches the broker is the universe's, not a config's."""
+    import ast
+    src = io.open(os.path.join(os.path.dirname(RUNNER_PATH), "bujji",
+                               "production_runtime", "live_chain_provider.py"),
+                  encoding="utf-8").read()
+    fn = next(n for n in ast.walk(ast.parse(src))
+              if isinstance(n, ast.FunctionDef) and n.name == "_fetch")
+    body = ast.unparse(fn)
+    assert "selection_strikes_each_side(universe)" in body
+    assert "strike_count=strike_count" in body
+    assert "self._strike_count" not in body, "a configured width still reaches the request"
 
 
-def test_a_wider_chain_would_widen_the_tier():
-    """The invariant, exercised arithmetically: raising strike_count past the
-    tier must raise the tier, not push band contracts outside the universe."""
-    from bujji.capture_universe.builder import DEFAULT_TIERS, ROLE_FRONT
-    import bujji_options_os_runner as runner
+def test_a_selection_band_wider_than_capture_is_refused_at_build_time():
+    """The containment invariant, ENFORCED rather than assumed. Without it the
+    failure is invisible: a strategy could select a contract that was never
+    subscribed, so stage 1 would refuse every cycle for a reason no one could
+    trace to its cause."""
+    import datetime, logging
+    from pathlib import Path
+    from bujji.broker.instrument_master import InstrumentMaster
+    from bujji.capture_universe.builder import (
+        build_capture_universe, DEFAULT_TIERS, ROLE_FRONT, UniverseConstructionError)
 
-    step = runner._UNIVERSE_GRID_STEP
-    for strike_count in (20, 30, 40, 60):
-        band_points = strike_count * step
-        tiers = dict(DEFAULT_TIERS)
-        if tiers[ROLE_FRONT] < band_points:
-            tiers[ROLE_FRONT] = band_points
-        assert tiers[ROLE_FRONT] >= band_points, (strike_count, tiers[ROLE_FRONT])
+    master_dir = Path("/opt/bujji/app/data/instrument_master")
+    if not (master_dir / "fyers_fo_NSE.csv").exists():
+        pytest.skip("instrument master cache not present")
+    rows = InstrumentMaster(master_dir, logging.getLogger("t"))._rows_for("NIFTY")
+    too_wide = DEFAULT_TIERS[ROLE_FRONT] + 500
+    with pytest.raises(UniverseConstructionError, match="exceeds the FRONT capture tier"):
+        build_capture_universe(rows, 24216.65, datetime.date(2026, 8, 24),
+                               selection_band_points=too_wide)
+
+
+def test_the_obsolete_strike_count_key_is_refused_not_ignored():
+    """No compatibility default. A config still carrying the key that USED to
+    be the selection band must fail to start, naming its replacement."""
+    src = io.open(RUNNER_PATH, encoding="utf-8").read()
+    assert '"strike_count" in market_data_cfg' in src
+    assert "selection_band_points" in src
+    assert 'market_data_cfg.get("strike_count", 20)' not in src, \
+        "the obsolete key is still readable as a value"
 
 
 def test_the_expiry_resolver_is_actually_wired_into_the_live_provider():

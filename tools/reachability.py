@@ -129,9 +129,34 @@ def _resolve(dep: str, graph: Dict[str, Set[str]]) -> str | None:
     return None
 
 
+def _with_package_ancestors(module: str, graph: Dict[str, Set[str]]) -> Set[str]:
+    """`a.b.c` plus every package along the way that exists as a module.
+
+    Importing `a.b.c` EXECUTES `a/__init__.py` and `a/b/__init__.py`. A graph
+    that marked only the leaf reported those packages as unreachable while
+    Python was running their code every time -- which is not a nuance, it is a
+    module claiming to be dormant while executing in production.
+
+    Found when `bujji.capture_universe` moved from test-only to UNREFERENCED
+    merely because a test started importing `bujji.capture_universe.builder`
+    instead of the package. Nothing about the package's participation had
+    changed; the graph was simply wrong about it.
+    """
+    out = {module}
+    parts = module.split(".")
+    for i in range(1, len(parts)):
+        prefix = ".".join(parts[:i])
+        if prefix in graph:
+            out.add(prefix)
+    return out
+
+
 def reachable_from(entries: Iterable[str], graph: Dict[str, Set[str]]) -> Set[str]:
     seen: Set[str] = set()
-    stack = [e for e in entries if e in graph]
+    stack: list[str] = []
+    for entry in entries:
+        if entry in graph:
+            stack.extend(_with_package_ancestors(entry, graph))
     while stack:
         module = stack.pop()
         if module in seen:
@@ -139,8 +164,11 @@ def reachable_from(entries: Iterable[str], graph: Dict[str, Set[str]]) -> Set[st
         seen.add(module)
         for dep in graph[module]:
             target = _resolve(dep, graph)
-            if target and target not in seen:
-                stack.append(target)
+            if not target:
+                continue
+            for name in _with_package_ancestors(target, graph):
+                if name not in seen:
+                    stack.append(name)
     return seen
 
 
@@ -215,12 +243,56 @@ def render(report: dict) -> str:
     return "\n".join(lines) + "\n"
 
 
+def architecture_block(report: dict) -> str:
+    """The fenced figures block as ARCHITECTURE.md carries it."""
+    t = report["totals"]
+    pct = 100.0 * t["reachable"] / max(1, t["production_modules"])
+    return (
+        "```\n"
+        f"python files            {t['python_files']}\n"
+        f"  test modules           {t['test_modules']}\n"
+        f"  production modules    {t['production_modules']}\n"
+        "\n"
+        f"REACHABLE                {t['reachable']}   ({pct:.1f}% of production)\n"
+        f"orphaned                 {t['orphaned']}\n"
+        f"  test-only              {t['test_only']}\n"
+        f"  unreferenced           {t['unreferenced']}\n"
+        "```"
+    )
+
+
+def write_architecture(root: Path, report: dict) -> None:
+    """Rewrite the figures block in ARCHITECTURE.md in place.
+
+    The document is enforced -- `test_the_reachability_figures_in_the_document_
+    are_current` fails when it drifts -- so regenerating it has to be one
+    command rather than a hand edit. A living document nobody can cheaply
+    refresh becomes a stale document.
+    """
+    path = root / "ARCHITECTURE.md"
+    text = path.read_text(encoding="utf-8")
+    start = text.index("```\npython files")
+    end = text.index("```", text.index("unreferenced", start)) + 3
+    path.write_text(text[:start] + architecture_block(report) + text[end:], encoding="utf-8")
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--root", default=str(Path(__file__).resolve().parent.parent))
     ap.add_argument("--json", action="store_true", help="emit the full report as JSON")
+    ap.add_argument("--write-architecture", action="store_true",
+                    help="rewrite the figures block in ARCHITECTURE.md in place")
     args = ap.parse_args()
-    report = analyse(Path(args.root))
+    root = Path(args.root)
+    report = analyse(root)
+    if args.write_architecture:
+        write_architecture(root, report)
+        t = report["totals"]
+        pct = 100.0 * t["reachable"] / max(1, t["production_modules"])
+        sys.stdout.write(
+            f"ARCHITECTURE.md updated: {t['reachable']}/{t['production_modules']} "
+            f"({pct:.1f}%) reachable\n")
+        return 0
     if args.json:
         json.dump(report, sys.stdout, indent=2)
         sys.stdout.write("\n")

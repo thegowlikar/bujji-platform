@@ -947,9 +947,27 @@ class OptionsOSRunner:
             ))
             import asyncio as _asyncio
             _asyncio.run(chain_broker.connect())
+            # OBSOLETE KEY, REFUSED RATHER THAN IGNORED. `strike_count` used
+            # to BE the eligible selection band: a chain-request constant that
+            # decided, independently of anything subscribed, what a strategy
+            # could range over. It is replaced by the universe's own
+            # `selection_band_points`. Leaving it readable would let a stale
+            # config silently keep the old authority, so a config that still
+            # carries it fails to start and says what to write instead.
+            if "strike_count" in market_data_cfg:
+                raise ConfigurationError(
+                    "providers.market_data.strike_count is obsolete -- the chain "
+                    "request now derives its width from the canonical universe. "
+                    "Replace it with providers.market_data.selection_band_points "
+                    f"(index points; {int(market_data_cfg['strike_count']) * 50} "
+                    "preserves the current width)."
+                )
             self._market_data_provider = LiveChainProvider(
                 chain_broker, underlying=underlying,
-                strike_count=int(market_data_cfg.get("strike_count", 20)),
+                # THE UNIVERSE DECIDES THE REQUEST. Resolved lazily: the
+                # universe is centred on spot, which is not known when this
+                # provider is constructed.
+                universe_source=lambda: self._universe,
                 logger=self._logger,
                 # How old the live book may be. Defaults live on the provider;
                 # an operator may tighten them, and max_age below refresh_after
@@ -1743,6 +1761,23 @@ class OptionsOSRunner:
         _trend, _vol = self._regime_provider.get_regime()
         self._persist_thesis(_trend, _vol)
 
+        # THE UNIVERSE IS BUILT BEFORE THE FIRST CHAIN IS REQUESTED, because
+        # the request derives its width, its expiry and its admissible
+        # contracts from the universe. This used to run the other way round --
+        # a chain pulled here at startup, and a universe built lazily hours
+        # later at the first entry attempt -- so the pre-market book was
+        # requested against nothing authoritative.
+        #
+        # Spot for centring comes from the broker's own endpoint, not from this
+        # chain: deriving spot from the chain and the chain from the universe
+        # is circular.
+        self._ensure_universe_built()
+        if self._universe is None:
+            raise ConfigurationError(
+                f"the canonical universe could not be built pre-market "
+                f"({self._universe_error}) -- refusing to start a session whose "
+                f"chain requests would have nothing authoritative behind them.")
+
         try:
             self._market_data_provider.get_option_chain(self._as_of_date)
         except Exception as exc:  # noqa: BLE001 -- re-raise as ConfigurationError, uniform exit code
@@ -2151,16 +2186,47 @@ class OptionsOSRunner:
         Never raises: a universe that cannot be built leaves `_universe` None,
         which the coverage gate reads as UNKNOWN and refuses to enter on.
         """
-        if self._universe is not None or self._universe_error is not None:
+        self._ensure_universe_built()
+        if self._universe is None:
             return
         if self._tick_feed is None:
-            # No live feed configured at all (replay / paper_synthetic). This
-            # is a deliberately offline source, not a silent feed, so the
-            # coverage gate does not apply -- recorded rather than implied.
+            # Offline by design. The universe was still built -- the chain
+            # request needs it -- but nothing can prove per-symbol coverage,
+            # and that is recorded rather than implied.
             self._universe_error = "NOT_APPLICABLE: no websocket tick feed configured"
             return
+        self._subscribe_universe()
 
+    def _ensure_universe_built(self) -> None:
+        """Build the canonical universe. NO TICK FEED REQUIRED.
+
+        WHY THIS IS SEPARATE FROM SUBSCRIBING. The two were one method, and
+        that conflated two different needs: the CHAIN REQUEST derives its
+        width, its expiry and its admissible contracts from the universe
+        whether or not a websocket exists, while SUBSCRIBING obviously needs
+        one. A replay or store-backed session has no feed by design, and used
+        to get no universe either -- so its chain request had nothing
+        authoritative behind it.
+
+        SPOT COMES FROM THE BROKER, NOT FROM THE CHAIN. Centering the universe
+        needs a spot; deriving that spot from the chain, and the chain from the
+        universe, is circular. The broker's own spot endpoint breaks it.
+        """
+        if self._universe is not None or self._universe_error is not None:
+            return
         spot = getattr(self, "_last_spot", None)
+        if not spot:
+            # THE CIRCULARITY BREAKER. Ask the broker directly rather than
+            # waiting for a chain that cannot be requested without a universe.
+            try:
+                import asyncio as _aio_spot
+                spot = _aio_spot.run(
+                    self._broker.get_spot(self._session_cfg.get("underlying", "NIFTY")))
+            except Exception as exc:  # noqa: BLE001 -- no spot is a refusal, never a guess
+                self._universe_error = (
+                    f"NO_SPOT: universe cannot be centred without a spot "
+                    f"({type(exc).__name__}: {exc})")
+                return
         if not spot:
             self._universe_error = "NO_SPOT: universe cannot be centred without a spot"
             return
@@ -2171,7 +2237,7 @@ class OptionsOSRunner:
 
             from bujji.broker.instrument_master import InstrumentMaster
             from bujji.capture_universe.builder import (
-                DEFAULT_TIERS, ROLE_FRONT, ROLE_SECOND, build_capture_universe,
+                DEFAULT_SELECTION_BAND_POINTS, build_capture_universe,
             )
 
             master = InstrumentMaster(REPO_ROOT / "data" / "instrument_master", self._logger)
@@ -2199,22 +2265,19 @@ class OptionsOSRunner:
             # deliberately reaches FORWARD past any weekly already taken -- so
             # widening it would subscribe symbols no selection can ever range
             # over. Today the floor is 1000 and neither tier moves.
-            strike_count = int(
-                (self._config.get("providers", {}).get("market_data", {}) or {})
-                .get("strike_count", 20))
-            band_points = strike_count * _UNIVERSE_GRID_STEP
-            tiers = dict(DEFAULT_TIERS)
-            for role in (ROLE_FRONT, ROLE_SECOND):
-                if tiers.get(role, 0) < band_points:
-                    self._logger.warning(
-                        "UNIVERSE -- widening the %s tier from %d to %d index points so "
-                        "it covers the %d-strike chain the selector will range over.",
-                        role, tiers.get(role, 0), band_points, strike_count)
-                    tiers[role] = band_points
-
+            # CAPTURE WIDE, SELECT NARROW -- and the universe owns both.
+            #
+            # This used to derive the capture TIERS from `strike_count`, which
+            # had the authority backwards: a chain-request constant decided how
+            # much of the book was subscribed. Now the universe states its own
+            # selection band, the builder enforces SELECTION <= CAPTURE(FRONT),
+            # and the chain request derives its width from the selection band.
+            md_cfg = (self._config.get("providers", {}).get("market_data", {}) or {})
+            selection_band = int(md_cfg.get("selection_band_points",
+                                            DEFAULT_SELECTION_BAND_POINTS))
             universe = build_capture_universe(
                 rows, float(spot), _dt.date.fromisoformat(self._as_of_date),
-                tiers=tiers, step=_UNIVERSE_GRID_STEP)
+                step=_UNIVERSE_GRID_STEP, selection_band_points=selection_band)
         except Exception as exc:  # noqa: BLE001 -- an unbuilt universe blocks entry, never ends the session
             self._universe_error = f"BUILD_FAILED: {type(exc).__name__}: {exc}"
             self._logger.critical(
@@ -2224,6 +2287,17 @@ class OptionsOSRunner:
             return
 
         self._universe = universe
+
+    def _subscribe_universe(self) -> None:
+        """Subscribe every contract the universe selected. Requires a feed.
+
+        NO FEED IS NOT AN UNBUILT UNIVERSE. Replay and store-backed sessions
+        are deliberately offline, so per-symbol coverage does not apply to
+        them -- but the universe still exists and still decides the chain
+        request. The two used to be conflated, and an offline session got
+        neither.
+        """
+        universe = self._universe
         symbols = list(universe.symbols)
         try:
             self._tick_feed.subscribe(symbols)

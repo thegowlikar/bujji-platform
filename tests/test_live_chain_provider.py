@@ -45,6 +45,46 @@ class _Broker:
         return self._raw
 
 
+def _universe_admitting(*symbols, selection_band_points=1000, atm=24500):
+    """A REAL CaptureUniverse admitting exactly `symbols`.
+
+    Not a mock. The provider derives its request width from
+    `selection_band_points` and admits only contracts the universe selected, so
+    a stand-in that skipped either would exercise a provider nobody runs. These
+    fixtures therefore name the contracts they expect to survive -- which is
+    also what makes the drop-what-the-universe-never-chose behaviour visible
+    here rather than only in its own test.
+    """
+    from bujji.capture_universe.builder import (
+        CaptureInstrument, CaptureUniverse, KIND_OPTION, ROLE_FRONT)
+    return CaptureUniverse(
+        as_of_date="2026-08-13", spot=float(atm), atm_strike=atm,
+        instruments=tuple(
+            CaptureInstrument(symbol=s, kind=KIND_OPTION, role=ROLE_FRONT,
+                              expiry="2026-08-25", strike=float(atm), option_type="CE")
+            for s in symbols),
+        roles_resolved={ROLE_FRONT: "2026-08-25"}, collapsed_roles=(),
+        expiries_available=1, expiries_excluded=0,
+        selection_band_points=selection_band_points)
+
+
+def _symbols_in(payloads):
+    """Every broker symbol appearing in these raw payloads.
+
+    Derived from the fixture rather than hardcoded, so a fixture that gains a
+    strike does not silently start testing the drop path instead of the path
+    it was written for."""
+    out = []
+    for raw in payloads if isinstance(payloads, (list, tuple)) else [payloads]:
+        if not isinstance(raw, dict):
+            continue
+        for row in (raw.get("data") or {}).get("optionsChain") or []:
+            sym = row.get("symbol")
+            if sym and row.get("option_type") in ("CE", "PE"):
+                out.append(sym)
+    return out
+
+
 class TestExpiryParsing:
     def test_fyers_ddmmyyyy_becomes_iso(self):
         assert _to_iso_expiry("18-08-2026") == "2026-08-18"
@@ -65,7 +105,7 @@ class TestPositive:
 
 class TestFailsClosed:
     def test_no_data_refuses_rather_than_serving_an_empty_book(self):
-        provider = LiveChainProvider(_Broker(None))
+        provider = LiveChainProvider(_Broker(None), universe_source=lambda: _universe_admitting())
         with pytest.raises(MarketDataUnavailableError, match="no data"):
             provider.get_option_chain(AS_OF)
 
@@ -74,7 +114,7 @@ class TestFailsClosed:
             async def get_option_chain_raw(self, *a, **k):
                 raise RuntimeError("token expired")
         with pytest.raises(MarketDataUnavailableError, match="request failed"):
-            LiveChainProvider(Broken()).get_option_chain(AS_OF)
+            LiveChainProvider(Broken(), universe_source=lambda: _universe_admitting()).get_option_chain(AS_OF)
 
     def test_rows_without_an_underlying_price_refuse(self):
         # The row carries a `symbol`, as every real FYERS row does (the
@@ -86,7 +126,7 @@ class TestFailsClosed:
              "symbol": "NSE:NIFTY2681824100CE"},
         ], "expiryData": [{"date": "18-08-2026"}]}}
         with pytest.raises(MarketDataUnavailableError, match="underlying price"):
-            LiveChainProvider(_Broker(raw)).get_option_chain(AS_OF)
+            LiveChainProvider(_Broker(raw), universe_source=lambda: _universe_admitting(*_symbols_in(raw))).get_option_chain(AS_OF)
 
     def test_a_row_without_a_broker_symbol_is_dropped_not_fabricated(self):
         """This builder used to do `row.get("symbol") or f"{u}{strike}{type}"`.
@@ -105,7 +145,7 @@ class TestFailsClosed:
             {"strike_price": 24200, "option_type": "PE", "ltp": 90.0,
              "symbol": "NSE:NIFTY2681824200PE"},
         ], "expiryData": [{"date": "18-08-2026"}]}}
-        chain = LiveChainProvider(_Broker(raw)).get_option_chain(AS_OF)
+        chain = LiveChainProvider(_Broker(raw), universe_source=lambda: _universe_admitting(*_symbols_in(raw))).get_option_chain(AS_OF)
         symbols = [getattr(r, "instrument_symbol", None) for r in chain]
         assert symbols == ["NSE:NIFTY2681824200PE"]
         # And nothing synthetic leaked in.
@@ -117,7 +157,7 @@ class TestFailsClosed:
             {"strike_price": 24100, "option_type": "CE", "ltp": 100.0},          # no symbol
         ], "expiryData": [{"date": "18-08-2026"}]}}
         with pytest.raises(MarketDataUnavailableError):
-            LiveChainProvider(_Broker(raw)).get_option_chain(AS_OF)
+            LiveChainProvider(_Broker(raw), universe_source=lambda: _universe_admitting(*_symbols_in(raw))).get_option_chain(AS_OF)
 
     def test_the_drop_is_reported_not_silent(self):
         """This builder already drops rows with no `ltp`. A second uncounted
@@ -139,7 +179,7 @@ class TestFailsClosed:
             {"strike_price": 24200, "option_type": "PE", "ltp": 90.0,
              "symbol": "NSE:NIFTY2681824200PE"},
         ], "expiryData": [{"date": "18-08-2026"}]}}
-        LiveChainProvider(_Broker(raw), logger=log).get_option_chain(AS_OF)
+        LiveChainProvider(_Broker(raw), logger=log, universe_source=lambda: _universe_admitting(*_symbols_in(raw))).get_option_chain(AS_OF)
         assert any("no broker symbol" in m for m in records), records
         assert any("CE24100" in m for m in records), "the dropped strike is not named"
 
@@ -147,7 +187,8 @@ class TestFailsClosed:
 @pytest.mark.skipif(not _HAVE_CAPTURE, reason="real FYERS capture present only on the VPS")
 class TestAgainstTheRealCapture:
     def _provider(self):
-        return LiveChainProvider(_Broker(_raw()), underlying="NIFTY")
+        return LiveChainProvider(_Broker(_raw()), underlying="NIFTY",
+                                  universe_source=lambda: _universe_admitting(*_symbols_in(_raw())))
 
     def test_a_real_chain_is_built_from_the_live_response(self):
         provider = self._provider()
@@ -191,7 +232,7 @@ class TestAgainstTheRealCapture:
 
     def test_chain_is_cached_so_one_session_makes_one_request(self):
         broker = _Broker(_raw())
-        provider = LiveChainProvider(broker)
+        provider = LiveChainProvider(broker, universe_source=lambda: _universe_admitting(*_symbols_in(_raw())))
         provider.get_option_chain(AS_OF)
         provider.get_option_chain(AS_OF)
         assert len(broker.calls) == 1, "a live entry must not re-hit the API per lookup"
@@ -200,5 +241,5 @@ class TestAgainstTheRealCapture:
         """Construction needs both short legs and both wings; the 5-strike
         default written for OI reconciliation is too narrow for a condor."""
         broker = _Broker(_raw())
-        LiveChainProvider(broker).get_option_chain(AS_OF)
+        LiveChainProvider(broker, universe_source=lambda: _universe_admitting(*_symbols_in(_raw()))).get_option_chain(AS_OF)
         assert broker.calls[0][1] >= 20
