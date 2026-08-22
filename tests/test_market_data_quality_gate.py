@@ -180,6 +180,21 @@ class TestTheRunnerActuallyRefuses:
             self._data_quality = verdict
             self._intelligence_origin = origin
             self._governor_result_summary = {}
+            # POSITION TRUTH IS NOW A PRECONDITION OF THE SAME GATE.
+            #
+            # `_data_quality_permits_entry` establishes broker position truth
+            # on demand before grading data quality: an entry taken while the
+            # account cannot be read is unsafe regardless of how good the
+            # market data is. These tests are about the DATA-QUALITY verdict,
+            # so the stub models truth as already established and unblocked --
+            # stating the precondition rather than removing it.
+            self._last_reconciliation = object()
+            self._reconciliation_blocks_entry = False
+
+        def _reconcile_broker_positions(self, stage_label):  # pragma: no cover
+            raise AssertionError(
+                "reconciliation should not be re-run: this stub already has "
+                "_last_reconciliation set")
 
     def test_a_refusing_verdict_blocks_entry(self):
         mod = self._runner_module()

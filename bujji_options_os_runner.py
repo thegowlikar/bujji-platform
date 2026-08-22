@@ -514,7 +514,23 @@ class OptionsOSRunner:
         # position can exist before the first pass runs; the first
         # reconciliation sets the real value.
         self._last_reconciliation = None
-        self._reconciliation_blocks_entry = False
+        # UNKNOWN UNTIL ESTABLISHED, never the other way round.
+        #
+        # This started False, so before any reconciliation had run the gate in
+        # `_data_quality_permits_entry` read "not blocked" and the first entry
+        # of a session could be taken with NO broker-truth check at all. That
+        # is UNKNOWN silently treated as FLAT, at the one moment it matters
+        # most: a process that crashed yesterday, or was restarted mid-session,
+        # begins with an empty in-memory registry and no knowledge of what the
+        # broker is already holding. Taking a fresh position on top of an
+        # unmanaged one is the compounding case reconciliation exists to stop.
+        #
+        # `_continuous_session` does reconcile at the top of every cycle, so
+        # production happened to be covered -- but `_entry_window` never
+        # reconciles at all, and this runner has twice shipped a gate that was
+        # live on one branch and dead on the other. The default is now the safe
+        # one, and `_data_quality_permits_entry` establishes truth on demand.
+        self._reconciliation_blocks_entry = True
         self._journal_path = None
 
         self._entry_prices: Dict[str, float] = {}
@@ -2027,11 +2043,30 @@ class OptionsOSRunner:
         passing silently: a session trading without a data-quality boundary
         is a fact an operator must be able to read afterwards.
         """
+        # ESTABLISH POSITION TRUTH BEFORE THE FIRST ENTRY, ON DEMAND.
+        #
+        # `_continuous_session` reconciles at the top of every cycle;
+        # `_entry_window` never reconciles at all. Rather than rely on which
+        # branch the config selects -- a bet this runner has already lost twice
+        # -- the choke point BOTH modes share establishes it itself if nothing
+        # has yet. On a restart this is what discovers a position the broker is
+        # holding and this process knows nothing about.
+        if getattr(self, "_last_reconciliation", None) is None and \
+                not getattr(self, "_reconciliation_ran", False):
+            self._reconciliation_ran = True
+            self._logger.info(
+                "PRE_ENTRY -- no reconciliation has run yet this session; "
+                "establishing position truth from the broker before any entry.")
+            self._reconcile_broker_positions("PRE_ENTRY")
+
+        self._governor_result_summary["position_truth_established"] = (
+            getattr(self, "_last_reconciliation", None) is not None)
+
         # RECONCILIATION IS A SAFETY CONTROL, not an observability feature.
         # Taking new risk while the broker holds exposure Bujji is not
         # managing -- or while position truth cannot be established at all --
         # compounds an already-unmanaged position with a fresh one.
-        if getattr(self, "_reconciliation_blocks_entry", False):
+        if getattr(self, "_reconciliation_blocks_entry", True):
             last = getattr(self, "_last_reconciliation", None)
             self._logger.warning(
                 "ENTRY REFUSED -- position reconciliation %s. %s",

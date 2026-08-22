@@ -86,11 +86,33 @@ def evaluate_session_safety(summary: Dict[str, Any]) -> SessionSafetyVerdict:
             position_existed=False,
         )
 
+    # POSITION TRUTH IS UNSAFE TO LACK EVEN WITH NO LOCAL POSITION.
+    #
+    # `position_truth_established` is written by the entry choke point: True
+    # once a reconciliation has run, False when one was attempted and could
+    # not establish what the broker holds. An explicit False means an entry
+    # was considered while this process could not see the account -- so the
+    # broker may be holding exposure nothing is managing, and the fact that
+    # THIS process opened nothing is not evidence of safety.
+    #
+    # Checked BEFORE the no-position early return, and keyed on an explicit
+    # False rather than a missing key: a session that never reached an entry
+    # decision has no opinion to record, and firing on every quiet day would
+    # train the operator to ignore the alarm.
+    truth_reasons = []
+    if summary.get("position_truth_established") is False:
+        truth_reasons.append(
+            "position truth could not be established -- an entry was considered "
+            "while the broker's account could not be read, so exposure this "
+            "process is not managing may exist")
+
     had_position = _position_existed(summary)
     if not had_position:
-        return SessionSafetyVerdict(safe=True, reasons=(), position_existed=False)
+        return SessionSafetyVerdict(
+            safe=not truth_reasons, reasons=tuple(truth_reasons),
+            position_existed=False)
 
-    reasons = []
+    reasons = list(truth_reasons)
 
     status = summary.get("final_positions_status")
     if status != _PROVES_FLAT:
