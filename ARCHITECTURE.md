@@ -70,8 +70,8 @@ is true.
 | Spot snapshot | `SpotSnapshot` | `bujji.market_perception.models` | CONTESTED |
 | VIX snapshot | `VixSnapshot` | `bujji.market_perception.models` | CONTESTED |
 | Market snapshot | `MarketSnapshot` | `bujji.market_perception.models` | CONTESTED |
-| Leg quote | `LegQuote` | `bujji.production_runtime.leg_readiness` | CONTESTED |
-| Leg state | `LegState` | `bujji.production_runtime.leg_readiness` | CONTESTED |
+| Leg quote (readiness) | `ReadinessQuote` | `bujji.production_runtime.leg_readiness` | OWNED |
+| Leg state (readiness) | `ReadinessLegState` | `bujji.production_runtime.leg_readiness` | OWNED |
 | Decision trace | `DecisionTrace` | `bujji.core.decision_trace` | CONTESTED |
 | Session store | `SessionStore` | `bujji.shadow_observatory.session_store` | CONTESTED |
 
@@ -79,10 +79,16 @@ is true.
 
 | Type | Competing definitions | Resolution |
 | --- | --- | --- |
-| `LegQuote`, `LegState` | `bujji.execution_reality.models`, `bujji.trading_brain.risk_governor.position_group_fold` | **M0** — introduced by the market-data campaign; the newer names move. |
 | `SpotSnapshot`, `VixSnapshot`, `MarketSnapshot` | `bujji.market_reality_snapshot.models`, `bujji.broker.simulation.market_snapshot` | **M1** — one market model family; the perception family is the one on the entry path. |
 | `OrderRequest` | `bujji.trading_brain.order_construction.models` | **M3** — resolved with the broker-truth boundary, which is what consumes it. |
 | `DecisionTrace`, `SessionStore` | `bujji.trading_brain.risk_governor.risk_governor_pipeline`, `bujji.core.session_state` | **M6** — resolved with the session evidence package. |
+
+**Resolved.** `LegQuote` and `LegState` were introduced by the market-data
+campaign and collided with `execution_reality.models` and
+`risk_governor.position_group_fold` — both older, both reachable, both meaning
+something different. The newcomers moved to `ReadinessQuote` and
+`ReadinessLegState`; the originals were not touched. A recently introduced
+duplicate is not left behind an indefinite CONTESTED label.
 
 **Not conflicts.** `Explanation`, `Contradiction` and `LensOpinion` are defined
 once per `msi_*` package by convention — twenty, four and two definitions

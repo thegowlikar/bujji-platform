@@ -464,7 +464,7 @@ class TradingBrainRuntime:
         else:
             from bujji.msi_trade_construction.engine import _premium_for
             from bujji.production_runtime.leg_readiness import (
-                LegQuote, evaluate_leg_readiness,
+                ReadinessQuote, evaluate_leg_readiness,
             )
 
             class _LegRef:
@@ -494,7 +494,7 @@ class TradingBrainRuntime:
                 if not symbol:
                     continue
                 premium, _basis = _premium_for(row)
-                quotes[symbol] = LegQuote(premium=premium,
+                quotes[symbol] = ReadinessQuote(premium=premium,
                                           bid=getattr(row, "bid", None),
                                           ask=getattr(row, "ask", None))
 
