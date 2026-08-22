@@ -75,7 +75,8 @@ class BrokerPositionTruth:
         return unknown(detail, self._source)
 
     def read(self) -> BrokerTruth:
-        """Ask the broker. Never raises: every failure is an UNKNOWN answer.
+        """Ask the broker, synchronously. Never raises: every failure is an
+        UNKNOWN answer.
 
         Raising here would push each caller into its own try/except, which is
         precisely how the four divergent readings arose. The answer type
@@ -86,7 +87,30 @@ class BrokerPositionTruth:
         except Exception as exc:  # noqa: BLE001 -- a failed read is an answer, not a crash
             return self._unknown(
                 f"position read failed: {type(exc).__name__}: {exc}")
+        return self._interpret(rows)
 
+    async def read_async(self) -> BrokerTruth:
+        """The same answer, awaited.
+
+        Both doors exist because the consumers genuinely differ: the registry
+        and lifecycle layers are async, while the EOD closure and the runner's
+        own checks are synchronous. `read()` would raise inside a running loop
+        (asyncio.run refuses to nest), and an async-only boundary would push
+        every synchronous caller back into growing its own asyncio.run --
+        which is the duplication this boundary exists to remove.
+
+        Transport is the ONLY difference. Interpretation is shared, so the two
+        doors cannot drift into disagreeing about what a payload means.
+        """
+        try:
+            rows = await self._broker.get_open_positions()
+        except Exception as exc:  # noqa: BLE001 -- a failed read is an answer, not a crash
+            return self._unknown(
+                f"position read failed: {type(exc).__name__}: {exc}")
+        return self._interpret(rows)
+
+    def _interpret(self, rows) -> BrokerTruth:
+        """Turn whatever the broker returned into one of three answers."""
         if rows is None:
             return self._unknown("broker returned no position list at all")
         if not isinstance(rows, Iterable) or isinstance(rows, (str, bytes)):
@@ -122,7 +146,8 @@ class BrokerPositionTruth:
                 symbol=str(symbol), quantity=quantity,
                 side=row.get("side"),
                 average_price=_optional_float(row.get("avg_price",
-                                                      row.get("average_price")))))
+                                                      row.get("average_price"))),
+                raw=dict(row)))
 
         if not legs:
             return flat("broker reports no open legs", self._source,
@@ -168,4 +193,43 @@ def for_fyers_read_only(broker, *, run_async=None, logger=None) -> BrokerPositio
     return BrokerPositionTruth(
         broker, source="fyers_read_only",
         schema_verified=bool(FYERS_POSITION_SCHEMA_VERIFIED),
+        run_async=run_async, logger=logger)
+
+
+def for_broker(broker, *, run_async=None, logger=None) -> BrokerPositionTruth:
+    """The right adapter for a broker this caller did not choose.
+
+    Exists so components that are handed a broker (the registry, for one) get
+    a correctly LABELLED reader without every construction site having to know
+    which broker it holds.
+
+    An unrecognised broker gets schema_verified=False. A row shape this
+    codebase has never confirmed is precisely the case where a verification
+    claim would be a guess, and the fallback must be the honest one.
+    """
+    try:
+        from bujji.broker.paper import PaperBroker
+        if isinstance(broker, PaperBroker):
+            return for_paper(broker, run_async=run_async, logger=logger)
+    except ImportError:  # pragma: no cover -- paper is always importable
+        pass
+    try:
+        from bujji.broker.hybrid import HybridPaperBroker
+        if isinstance(broker, HybridPaperBroker):
+            # Real market data, paper ledger: the position rows are this
+            # codebase's own, so their shape is not a guess -- but the source
+            # says "hybrid" so no reader mistakes it for a live account.
+            return BrokerPositionTruth(
+                broker, source="hybrid_paper_ledger", schema_verified=True,
+                run_async=run_async, logger=logger)
+    except ImportError:  # pragma: no cover
+        pass
+    try:
+        from bujji.broker.fyers import FyersBroker
+        if isinstance(broker, FyersBroker):
+            return for_fyers_read_only(broker, run_async=run_async, logger=logger)
+    except ImportError:  # pragma: no cover
+        pass
+    return BrokerPositionTruth(
+        broker, source=type(broker).__name__, schema_verified=False,
         run_async=run_async, logger=logger)

@@ -458,6 +458,32 @@ def build_logger(namespace: str) -> logging.Logger:
     return logger
 
 
+def _position_truth_for(owner):
+    """This process's one reader for "what does the account hold".
+
+    Module-level rather than a method so it is reachable from a minimal
+    stand-in for the runner. OptionsOSRunner assembles config, feeds, a broker
+    and a state machine; the position read is three lines of decision, and the
+    existing tests exercise it by calling the unbound method against a stub.
+    A read that can only be tested by constructing the whole runner is a read
+    that will stop being tested.
+
+    The reader is cached on the owner so every caller in a session shares one
+    labelled source; a stand-in that refuses attribute assignment simply pays
+    for a new one.
+    """
+    reader = getattr(owner, "_broker_truth_reader", None)
+    if reader is None:
+        from bujji.broker_truth import for_broker
+
+        reader = for_broker(owner._broker)
+        try:
+            owner._broker_truth_reader = reader
+        except AttributeError:      # a slotted or frozen stand-in
+            pass
+    return reader
+
+
 class OptionsOSRunner:
     """Orchestrates exactly one shadow session through the 8-stage
     lifecycle. Holds no trading decision of its own -- every decision-
@@ -3681,31 +3707,30 @@ class OptionsOSRunner:
             "close. The session is NOT complete and the position is NOT confirmed closed. "
             "Operator intervention required.", stage_label, flat, detail)
 
+    def _position_truth(self):
+        """This runner's reader. See `_position_truth_for`."""
+        return _position_truth_for(self)
+
     def _broker_reports_flat(self):
         """(True|False|None, detail). None means we could not establish it.
 
-        UNFILTERED. Every other position read on this path goes through
-        PositionRealityRegistry, which intersects broker positions with an
-        in-memory table of registered symbols -- so a position Bujji never
-        registered is invisible to it by construction. This asks the broker
-        what it actually holds.
+        UNFILTERED. `PositionRealityRegistry` answers "is THIS strategy still
+        on", scoped to the symbols this process registered. That is a
+        different question, and a position Bujji never registered cannot be
+        seen through it. This asks what the account actually holds.
 
         A read that fails returns None, never False: "I could not ask" must
         never become "there is nothing there".
-        """
-        import asyncio as _asyncio
 
-        try:
-            positions = _asyncio.run(self._broker.get_open_positions())
-        except Exception as exc:  # noqa: BLE001
-            return None, f"position read failed: {type(exc).__name__}: {exc}"
-        if positions is None:
-            return None, "broker returned no position list"
-        open_legs = [p for p in positions if int(p.get("qty", 0) or 0) > 0]
-        if not open_legs:
-            return True, "broker reports no open legs"
-        return False, "open legs: " + ", ".join(
-            f"{p.get('symbol')}x{p.get('qty')}" for p in open_legs)
+        M3 (2026-08-22): the three-valued parsing moved to
+        `bujji.broker_truth`, which this now adapts to the (True|False|None)
+        shape its two callers already branch on. The rule did not change; the
+        number of places implementing it did.
+        """
+        answer = _position_truth_for(self).read()
+        if answer.is_unknown:
+            return None, answer.detail
+        return answer.is_flat, answer.detail
 
     def _current_leg_prices(self, as_of: str):
         """Live per-leg prices for this cycle, and whether they are real

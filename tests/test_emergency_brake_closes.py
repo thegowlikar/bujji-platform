@@ -36,6 +36,10 @@ from bujji.production_runtime.trade_lifecycle_executor import (
 CLK = lambda: dt.datetime(2026, 8, 21, 15, 0)
 
 
+from bujji.broker_truth import STATE_CONFIRMED_FLAT, STATE_CONFIRMED_OPEN
+from bujji.production_runtime.position_reality_registry import PositionGroupReality
+
+
 def _pos(symbol, qty):
     return {"symbol": symbol, "qty": qty, "avg_price": 120.0, "side": "SELL"}
 
@@ -51,9 +55,19 @@ class _Registry:
         return object()
 
     async def get_group_reality(self, pg):
-        class _R:
-            is_open = bool([p for p in self._p if p["qty"] > 0])
-        return _R()
+        # A REAL PositionGroupReality, not a stub with a hardcoded bool. The
+        # old stub could not express the difference between "the broker
+        # answered and holds none of these legs" and "the broker could not be
+        # read" -- and the executor's closure decision now turns on exactly
+        # that difference.
+        held = tuple(p["symbol"] for p in self._p if p["qty"] > 0)
+        return PositionGroupReality(
+            position_group_id=pg, strategy_family="STRANGLE",
+            symbols=held or ("NSE:CE",), initial_risk=1000.0,
+            entry_timestamp="2026-08-21T09:20:00",
+            truth_state=STATE_CONFIRMED_OPEN if held else STATE_CONFIRMED_FLAT,
+            open_symbols=held,
+        )
 
 
 class _Lifecycle:
@@ -263,14 +277,44 @@ class TestFlatIsVerifiedNotAssumed:
         assert self._flat(_B())[0] is None
 
     def test_the_read_is_unfiltered(self):
-        """Every other read goes through the registry, which intersects with
-        an in-memory table of registered symbols -- so an unregistered
-        position is invisible to it by construction."""
+        """A position this process never registered must still be seen.
+
+        The registry answers "is THIS strategy still on", scoped to the
+        symbols this process registered -- so an unregistered leg is invisible
+        through it BY CONSTRUCTION. This read must not be routed that way.
+
+        REWRITTEN 2026-08-22 (M3). This asserted the literal text
+        `self._broker.get_open_positions()` inside the function body. The
+        parsing moved behind `bujji.broker_truth`, so the string vanished
+        while the property it stood for held -- and a substring assertion
+        would equally have passed on a read that was filtered but happened to
+        contain that call. It now asserts the property directly.
+        """
+        class _B:
+            async def get_open_positions(self):
+                return [_pos("NSE:NEVER-REGISTERED", 75)]
+
+        flat, detail = self._flat(_B())
+        assert flat is False, (
+            "a leg this process never registered was invisible to the "
+            "unfiltered read")
+        assert "NSE:NEVER-REGISTERED" in detail
+
+    def test_the_read_does_not_go_through_the_registry(self):
+        """The other half, structurally -- as AST, not as a substring. A
+        substring check would accept `_registry` sitting in a comment, or
+        miss it behind an alias."""
+        import ast
+
         src = (REPO_ROOT / "bujji_options_os_runner.py").read_text()
-        i = src.index("def _broker_reports_flat")
-        block = src[i:i + 1400]
-        assert "self._broker.get_open_positions()" in block
-        assert "_registry" not in block
+        fn = next(
+            n for n in ast.walk(ast.parse(src))
+            if isinstance(n, ast.FunctionDef) and n.name == "_broker_reports_flat")
+        touched = {
+            n.attr for n in ast.walk(fn) if isinstance(n, ast.Attribute)
+        } | {n.id for n in ast.walk(fn) if isinstance(n, ast.Name)}
+        leaked = {t for t in touched if "registry" in t.lower()}
+        assert not leaked, f"the unfiltered read reached the registry: {leaked}"
 
 
 class TestCloseSequenceIsIdempotent:

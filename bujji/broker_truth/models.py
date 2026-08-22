@@ -51,12 +51,23 @@ class BrokerTruthUnknownError(Exception):
 
 @dataclass(frozen=True)
 class OpenLeg:
-    """One leg the broker reports as held. `quantity` is always > 0."""
+    """One leg the broker reports as held. `quantity` is always > 0.
+
+    `raw` is the row exactly as the broker gave it, carried so that callers
+    needing broker-native fields -- valuation wants entry price and timestamp,
+    not just symbol and quantity -- can have them WITHOUT a second read. Two
+    reads is the hazard this avoids: a position closing between them lets the
+    two halves of a comparison disagree and manufactures a false divergence.
+
+    This boundary's own decisions never look at `raw`. It is a pass-through,
+    not a second opinion.
+    """
 
     symbol: str
     quantity: int
     side: Optional[str] = None
     average_price: Optional[float] = None
+    raw: Optional[Dict[str, Any]] = None
 
     def as_dict(self) -> Dict[str, Any]:
         return {"symbol": self.symbol, "quantity": self.quantity,

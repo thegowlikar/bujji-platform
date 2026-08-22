@@ -204,3 +204,77 @@ def test_the_injector_can_substitute_a_payload_shape():
     book = ControllablePaperPositions(_Book([]))
     book.return_instead({"netPositions": []})
     assert for_paper(book).read().state == STATE_UNKNOWN
+
+
+# --------------------------------------------------------------------------
+# Both doors, one interpretation.
+# --------------------------------------------------------------------------
+
+@pytest.mark.asyncio
+async def test_the_async_door_gives_the_same_answers():
+    """The registry and lifecycle layers are async; read() would raise inside
+    a running loop. Both doors must agree, or the boundary has two meanings."""
+    rows = [{"symbol": "NIFTY-CE", "qty": 75}]
+    assert (await for_paper(_Book(rows)).read_async()).state == STATE_CONFIRMED_OPEN
+    assert (await for_paper(_Book([])).read_async()).state == STATE_CONFIRMED_FLAT
+    assert (await for_paper(_Book(None)).read_async()).state == STATE_UNKNOWN
+
+
+@pytest.mark.asyncio
+async def test_the_async_door_turns_a_raise_into_unknown_too():
+    class _Broken:
+        async def get_open_positions(self):
+            raise ConnectionError("reset")
+
+    truth = await for_paper(_Broken()).read_async()
+    assert truth.state == STATE_UNKNOWN and "reset" in truth.detail
+
+
+@pytest.mark.asyncio
+async def test_the_sync_door_refuses_inside_a_running_loop_rather_than_lying():
+    """asyncio.run cannot nest. The failure must present as UNKNOWN, not as a
+    flat account -- a caller that used the wrong door must not be told the
+    book is empty."""
+    assert for_paper(_Book([{"symbol": "X", "qty": 1}])).read().state == STATE_UNKNOWN
+
+
+# --------------------------------------------------------------------------
+# Dispatch: a branch that never fires is worse than no branch.
+# --------------------------------------------------------------------------
+
+def test_for_broker_labels_each_broker_it_recognises():
+    """This caught a real defect: the hybrid branch imported a class name that
+    does not exist, so its ImportError was swallowed and it never fired."""
+    from bujji.broker.hybrid import HybridPaperBroker
+    from bujji.broker.paper import PaperBroker
+    from bujji.broker_truth import for_broker
+
+    assert for_broker(PaperBroker()).source == "paper"
+
+    hybrid = HybridPaperBroker.__new__(HybridPaperBroker)
+    reader = for_broker(hybrid)
+    assert reader.source == "hybrid_paper_ledger"
+    assert reader.schema_verified is True, "its rows come from this codebase"
+
+
+def test_for_broker_labels_fyers_as_read_only_and_unverified():
+    from bujji.broker.fyers import FyersBroker
+    from bujji.broker_truth import for_broker
+
+    reader = for_broker(FyersBroker.__new__(FyersBroker))
+    assert reader.source == "fyers_read_only"
+    assert reader.schema_verified is False
+
+
+def test_an_unrecognised_broker_is_never_claimed_as_schema_verified():
+    class SomeFutureBroker:
+        async def get_open_positions(self):
+            return []
+
+    from bujji.broker_truth import for_broker
+
+    reader = for_broker(SomeFutureBroker())
+    assert reader.source == "SomeFutureBroker"
+    assert reader.schema_verified is False, (
+        "a row shape this codebase has never confirmed is exactly where a "
+        "verification claim would be a guess")

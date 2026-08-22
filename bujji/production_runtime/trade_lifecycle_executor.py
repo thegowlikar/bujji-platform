@@ -215,12 +215,20 @@ class TradeLifecycleExecutor:
         status = self._aggregate_status(order_results)
         # A group is marked CLOSED only when the broker itself reports no open
         # leg. Deliberately NOT attempted on STATUS_UNKNOWN: with an
-        # unresolved leg, `is_open == False` may simply mean the exit order
+        # unresolved leg, an absent position may simply mean the exit order
         # has not settled yet, and marking closed there is exactly the
         # phantom-flat state this whole layer exists to prevent.
+        #
+        # M3 (2026-08-22): this was `if not reality.is_open`, and that made a
+        # SECOND phantom-flat path the comment above did not cover. `is_open`
+        # was False both when the broker said "no such leg" and when the
+        # broker could not be read at all, so an account we failed to reach
+        # closed the group just as surely as a confirmed exit. The two
+        # readings now differ: `is_confirmed_flat` requires that the broker
+        # actually answered.
         if status in (STATUS_EXECUTED, STATUS_PARTIAL):
             reality = await self._registry.get_group_reality(pg_id)
-            if not reality.is_open:
+            if reality.is_confirmed_flat:
                 self._lifecycle_runtime.mark_closed(pg_id)
 
         self._publish("LIFECYCLE_ACTION_COMPLETED" if status != STATUS_REJECTED else "LIFECYCLE_ACTION_FAILED",

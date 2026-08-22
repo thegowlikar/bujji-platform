@@ -93,27 +93,31 @@ class EodClosureResult:
         }
 
 
-def discover_broker_positions(broker, run_async) -> Tuple[Optional[List[Dict[str, Any]]], str]:
+from bujji.broker_truth import for_broker  # noqa: E402
+
+
+def discover_broker_positions(broker, run_async, truth=None
+                              ) -> Tuple[Optional[List[Dict[str, Any]]], str]:
     """(positions, detail). None means the read FAILED -- never an empty list.
 
     Collapsing a failed read into `[]` is the single most dangerous
     transformation available here: it reads as "flat" and closes the session.
+
+    M3 (2026-08-22): this rule is unchanged, but it is no longer implemented
+    HERE. The same three-valued read was hand-written in three places -- this
+    one, `_broker_reports_flat` in the runner, and (wrongly) the registry --
+    and three copies of a safety rule is three chances for one of them to
+    drift. The parsing now lives in `bujji.broker_truth`; this function is the
+    adapter that keeps its (list|None, detail) shape for existing callers.
+
+    The RETURN SHAPE is deliberately preserved: these rows feed order
+    construction and valuation, which want the broker's own fields.
     """
-    try:
-        positions = run_async(broker.get_open_positions())
-    except Exception as exc:  # noqa: BLE001
-        return None, f"position read failed: {type(exc).__name__}: {exc}"
-    if positions is None:
-        return None, "broker returned no position list"
-    live = []
-    for p in positions:
-        try:
-            qty = int(p.get("qty", 0) or 0)
-        except (TypeError, ValueError):
-            # A malformed row is not evidence of flatness.
-            return None, f"malformed position row: {p!r}"
-        if qty > 0:
-            live.append(dict(p))
+    reader = truth if truth is not None else for_broker(broker, run_async=run_async)
+    answer = reader.read()
+    if answer.is_unknown:
+        return None, answer.detail
+    live = [dict(leg.raw or leg.as_dict()) for leg in answer.legs]
     return live, f"{len(live)} open leg(s)"
 
 

@@ -144,9 +144,44 @@ class TestTheSharedPrinciple:
 
     def test_is_open_is_still_broker_derived(self):
         """The filter that makes a superset safe. If is_open ever becomes a
-        cached flag, registering unsure legs would assert positions."""
-        import inspect
+        cached flag, registering unsure legs would ASSERT positions rather
+        than merely ask about them.
 
-        from bujji.production_runtime.position_reality_registry import PositionRealityRegistry
-        src = inspect.getsource(PositionRealityRegistry.get_group_reality)
-        assert "_open_symbols" in src
+        REWRITTEN 2026-08-22 (M3). This asserted that the string
+        `_open_symbols` appeared in the method's source. That helper was the
+        very thing M3 removed -- it intersected the broker's answer with a
+        local symbol table and had no notion of a read that failed -- so the
+        assertion outlived the property it stood for. Registration is now
+        exercised against a changing broker instead.
+        """
+        import asyncio
+        import datetime as _dt
+
+        from bujji.broker_truth import for_paper
+        from bujji.production_runtime.position_reality_registry import (
+            PositionRealityRegistry)
+
+        class _Book:
+            rows = []
+
+            async def get_open_positions(self):
+                return list(self.rows)
+
+            def get_realized_pnl(self, symbol):
+                return 0.0
+
+        book = _Book()
+        reg = PositionRealityRegistry(book, truth=for_paper(book))
+        reg.register_entry("PG-1", "STRANGLE", ["NSE:CE"], 1000.0,
+                           lambda: _dt.datetime(2026, 8, 22, 9, 20))
+
+        # Registered, broker holds nothing: registration alone asserts nothing.
+        assert asyncio.run(reg.get_group_reality("PG-1")).is_open is False
+
+        # The ONLY thing that changed is the broker's answer.
+        book.rows = [{"symbol": "NSE:CE", "qty": 75, "avg_price": 1.0}]
+        assert asyncio.run(reg.get_group_reality("PG-1")).is_open is True
+
+        # And it changes back -- so it cannot be a flag set once at entry.
+        book.rows = []
+        assert asyncio.run(reg.get_group_reality("PG-1")).is_open is False
