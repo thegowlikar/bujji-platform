@@ -1,274 +1,198 @@
-# BUJJI Options OS — Architecture
+# Bujji Options OS — Architecture
 
-**Read this first**: this repo holds **three coexisting architectural generations**. They share `bujji/core/` and some infrastructure but are otherwise independent. Know which one a file belongs to before touching it.
+**This file is the canonical architecture document.** `docs/ARCHITECTURE.md` is
+deprecated and describes a strategy generation this system replaced; see
+[Deprecations](#deprecations).
 
----
-
-## System Diagram
-
-```
-┌─────────────────────────────────────────────────────────────────────┐
-│ GENERATION 1 — Legacy ORB-VWAP ATM Seller (README.md-documented)     │
-│                                                                       │
-│  config/config.yaml ──► bujji/core/orchestrator.py (FSM: WAITING ──► │
-│    READY ──► CONFIRMED ──► IN_POSITION ──► EXITING ──► DONE_FOR_DAY) │
-│         │              │                    │                        │
-│         ▼              ▼                    ▼                        │
-│  bujji/signal/    bujji/trade/        bujji/execution/               │
-│  (Signal Engine)  (Trade Manager)     (Execution Engine)             │
-│         │              │                    │                        │
-│         └──────────────┴────────► bujji/broker/ (paper|fyers)        │
-│                                                                       │
-│  Coupled only via bujji/core/models.py immutable dataclasses.        │
-│  bujji/tick/ (continuous IN_POSITION monitoring), bujji/market/      │
-│  (shared VWAP/ORB state), bujji/dashboard/ (read-only HTTP status),  │
-│  bujji/ops/ (alerting), bujji/capital/ (margin-aware sizing,         │
-│  LIVE-CERTIFIED against real FYERS SPAN margin API).                 │
-└─────────────────────────────────────────────────────────────────────┘
-
-┌─────────────────────────────────────────────────────────────────────┐
-│ GENERATION 2 — MSI / Intelligence Observatory arc (Series 73-110)    │
-│                                                                       │
-│  run_live_shadow.py ──► bujji/live_shadow_operator/ (SessionDriver)  │
-│         │                                                             │
-│         ▼                                                             │
-│  bujji/broker/fyers_ws.py (FyersTickFeed + TickSilenceWatchdog)      │
-│         │                                                             │
-│         ▼                                                             │
-│  bujji/live_observation/ ──► bujji/live_market_events/ ──►           │
-│  bujji/market_episode/  (raw fact-only pipeline, no interpretation)  │
-│         │                                                             │
-│         ▼                                                             │
-│  ~30 bujji/msi_* packages (see table below) — perception → reasoning │
-│  → decision synthesis → strategy selection → trade/position          │
-│  construction → execution planning → learning/evidence/governance    │
-│         │                                                             │
-│         ▼                                                             │
-│  bujji/trading_brain/portfolio_valuation/ + exit_engine/  (NEW,      │
-│  built in this engagement, wired into run_live_shadow.py's tick loop)│
-│         │                                                             │
-│         ▼                                                             │
-│  bujji/broker/paper.py (PaperBroker) — but NO entry-order-           │
-│  construction path exists here yet, so positions never spontaneously │
-│  appear in a real run_live_shadow.py session today.                  │
-└─────────────────────────────────────────────────────────────────────┘
-
-┌─────────────────────────────────────────────────────────────────────┐
-│ GENERATION 3 — Trading Brain v3 (TRADING_BRAIN_CONSTITUTION.md)      │
-│                                                                       │
-│  bujji/production_runtime/runtime.py (run_shadow / run_read_only /   │
-│  verify_production_ready_construction)                               │
-│         │                                                             │
-│         ▼                                                             │
-│  Evidence Interpreter ─► Market State ─► Strategy Selector ─►        │
-│  Risk Brain ─► Capital Brain ─► Execution Planner ─►                 │
-│  (trading_brain) Execution Engine ─► Broker Adapter                  │
-│         │                                                             │
-│         ▼                                                             │
-│  Nifty Contract Builder ─► Position Sizing ─► Order Construction     │
-│         │                                                             │
-│         ▼                                                             │
-│  bujji/runtime_execution/ (dispatch) ─► bujji/integration/            │
-│  execution_adapter.py (ProductionExecutionAdapter) ─►                │
-│  bujji/execution/engine.py (REAL ExecutionEngine, idempotent,        │
-│  partial-fill-aware, retry/timeout/cancel logic) ─► Broker            │
-│  (PaperBroker today; FyersBroker exists, real, but never proven      │
-│  against a real network call)                                        │
-│                                                                       │
-│  PROVEN end-to-end with real market data (EQ1 sprint) -- but NOT     │
-│  wired into run_live_shadow.py. Two separate live entry points.      │
-│  KNOWN GAP: RuntimeConfig has no structural guard preventing         │
-│  mode=SHADOW + broker_name=fyers from constructing a real,           │
-│  unguarded FyersBroker -- confirmed live, unresolved (BLOCKER).      │
-└─────────────────────────────────────────────────────────────────────┘
-
-           Shared infrastructure (used across generations):
-  bujji/core/ (models, enums, config, clock, event_bus, state_machine)
-  bujji/journal/ (per-module append-only JSONL journals)
-  bujji/broker/ (base.py ABC, paper.py, fyers.py, hybrid.py, guard.py,
-                 fyers_ws.py, fyers_token_manager.py, instrument_master.py)
-  bujji/replay/, bujji/qualification/ (historical replay/qualification)
-```
+This document records four things and is expected to change whenever any of
+them does: the **safety contract**, the **ownership of truth**, the **state
+machine**, and the **acceptance criteria** by which a session is judged.
 
 ---
 
-## Every Key File / Package — One Line Each
+## 1. Safety contract
 
-### Generation 1 — Legacy ORB-VWAP (`bujji/core/`, `signal/`, `trade/`, `execution/`, `tick/`, `market/`, `dashboard/`, `ops/`, `capital/`)
+Bujji may eventually trade real money. It may do so only when it can prove that
+it is seeing the market it acts on, knows what it holds at the broker, bounds
+risk continuously, records enough evidence to reconstruct every decision, and
+fails closed whenever reality is uncertain.
 
-| Path | Purpose |
-|---|---|
-| `bujji/core/models.py` | Immutable domain dataclasses (`Signal`, `TradeDecision`, `OrderRequest`, `OrderResult`) — the contract between modules. |
-| `bujji/core/enums.py` | Pure value-type enums (`State`, `Side`, `OptionType`, `OrderStatus`), dependency-free. |
-| `bujji/core/config.py` | Central `AppConfig`, loaded from `config/config.yaml` + env-var secret overrides. |
-| `bujji/core/clock.py` | Explicit Asia/Kolkata timezone handling — single source of "now." |
-| `bujji/core/orchestrator.py` | Wires Signal/Trade/Execution via the FSM; owns no trading logic. (7 stale `.pre_sprintN_backup` snapshot files sit alongside it — cleanup candidate.) |
-| `bujji/core/state_machine.py` | FSM enforcing legal session-state transitions, logs every one. |
-| `bujji/core/event_bus.py` | Lightweight async pub/sub — orchestrator publishes, journaling/dashboard/logging subscribe. |
-| `bujji/core/decision_trace.py` | Structured self-describing record of how a decision was reached. |
-| `bujji/core/position_codec.py` | Serializes/deserializes a live `Position` for crash recovery. |
-| `bujji/core/session_state.py` | Atomic JSON snapshot of FSM state + open position, reconciled against broker on restart. |
-| `bujji/core/process_lock.py` | Single-instance lock preventing two orchestrators on the same account. |
-| `bujji/signal/` | Signal Engine — ORB/VWAP breakout detection, emits `Signal`. Never places orders. |
-| `bujji/trade/` | Trade Manager — owns the position, per-candle thesis reassessment, emits `TradeDecision`. Never talks to a broker. |
-| `bujji/execution/engine.py` | **Real, broker-touching** `ExecutionEngine` — idempotent placement, partial-fill handling, timeout-cancel, retry/backoff, auth-fast-fail. Reused by Generation 3 too. |
-| `bujji/tick/` | Tick Engine — continuous risk monitoring while IN_POSITION, separate from candle-driven Signal Engine. |
-| `bujji/market/` | "Market Brain" — shared direction-neutral market-state interpreter (VWAP/ORB/tape control). |
-| `bujji/dashboard/` | Read-only stdlib HTTP status dashboard (legacy system's own, distinct from the newer `portfolio_valuation` dashboard rendering). |
-| `bujji/ops/` | Alert Engine — fires on state transitions/one-shot events, never trading actions. |
-| `bujji/capital/` | Capital Management Engine — margin-aware position sizing; **live-certified** against a real FYERS SPAN margin API call (`docs/AUDIT_LOG.md` Pass 8). |
+Six rules follow from that, and nothing in this repository may contradict them.
 
-### Generation 2 — MSI / Intelligence Observatory (`bujji/msi_*`, `live_shadow_operator/`, observation chain)
-
-| Package | Purpose |
-|---|---|
-| `live_observation/` | Series 74 — produces the raw observation contract. |
-| `live_market_events/` | Series 75 — derives "what objectively changed" between observations; fact-only. |
-| `market_episode/` | Series 76 — groups events into coherent Episodes over time; still fact-only. |
-| `msi_price_structure` (78) | MSI Brain 1: trend/swing/compression/expansion/balance from Episode data. |
-| `msi_market_structure` (79) | MSI Brain 2: support/resistance/breakout/breakdown/retest. |
-| `msi_market_direction` (85) | Market Direction Intelligence brain. |
-| `msi_participant_positioning` (86) | Market Participant Positioning Intelligence. |
-| `msi_volatility_structure` (88) | Volatility Structure Bridge; reuses legacy Black-Scholes IV/Greeks math. |
-| `msi_consensus` (81) | Multi-Domain Consensus: coherence/agreement across MSI brain outputs. |
-| `msi_decision_synthesis` (77) | Fuses domain signals into one `MarketOpportunityAssessment`; never trades. |
-| `msi_strategy_eligibility` (82) | Which strategy families are permissible; defines solution space only. |
-| `msi_trade_intent` (83) | One eligible family → `TradeIntentAssessment` (exposure/bias/risk); no strikes/sizing. |
-| `msi_trade_thesis` (92) | Builds the market thesis between MSI and Strategy Selection. |
-| `msi_strategy_selection_foundation` (87) | Strategy-family suitability only, no ranking. |
-| `msi_strategy_selector` (89) | Chooses best-fit strategy via market-state matching, no return-optimization. |
-| `msi_strategy_expression` (93) | Validated thesis → exposure characteristics (directional/vol bias, theta/convexity). |
-| `msi_trade_construction` (90) | Fully specified position (expiry/strikes/prices/risk); never places orders. |
-| `msi_position_construction` (95) | Position SHAPE (single/spread/straddle/condor) + expiry/strike philosophy. |
-| `msi_portfolio_construction` (91) | Portfolio-admission gate: approve/reject/defer + size against capital. |
-| `msi_margin_bridge` (97) | Deterministic per-lot margin estimator, replay + production. |
-| `msi_position_lifecycle` (96) | Open position's day-over-day health/adjustment/exit classification. |
-| `msi_execution_planning` (98) | Deterministic execution plan (sequencing, dependency graph); never calls a broker. |
-| `msi_strategy_optimization` (108) | Strike/expiry/roll optimization guidance, read-only, atop the frozen engine. |
-| `msi_dynamic_management` (109) | 6 independent roll/adjustment/exit assessments per position per day. |
-| `msi_position_recomposition` (110) | Composes the above read-only to produce the exact new position from a roll decision. |
-| `msi_decision_auditor` (99) | Permanent flight recorder: DecisionRecord + OutcomeRecord pairs; never scores/ranks. |
-| `msi_shadow_trading` (100) | Paper-trades approved decisions with real entry/settlement prices; no broker calls. |
-| `msi_evidence_packet` (101) | Immutable, content-hashed fact/measurement store; isolated from Production. |
-| `msi_market_learning` (100 Phase 1.0) | Converts outcome pairs into disclosed Knowledge Candidates; pure evidence, never adaptive. |
-| `msi_counterfactual_replay` (102) | Replays real causal alternative decision paths through the frozen pipeline. |
-| `msi_market_phenomena` (103) | Causal, declarative classification of "what objectively happened" (10/21 phenomena implemented). |
-| `msi_knowledge_validation` (105) | 7-state hypothesis validation; zero cross-package imports, most isolated package. |
-| `msi_opportunity_assessment` (104) | 5-state decision-quality classification; zero cross-package imports. |
-| `msi_performance_analytics` (101) | Observer-only descriptive statistics; flags results below reliability threshold. |
-| `msi_engineering_evidence_board` (106) | Final learning-stack layer: INSUFFICIENT_EVIDENCE / CONTINUE_OBSERVING / READY_FOR_ENGINEERING_REVIEW / SUPERSEDED / ARCHIVED. |
-| `live_shadow_operator/` | Sprint 107 — production shadow-mode orchestration; reuses only frozen Series 73-106 logic, adds zero new trading logic. |
-| `run_live_shadow.py` | **The actual live entry point running today** (including LSQ-1). Real FYERS auth/WebSocket, decision cadence, watchdog, portfolio valuation, exit engine. No order-construction path. |
-| `run_daily_observation.py` | Standalone script wiring Series 99→106 for one real day, with a Session Manifest (git/config/replay verification). |
-
-### Generation 3 — Trading Brain v3 (`bujji/trading_brain/`, `production_runtime/`, `integration/`, `runtime_execution/`, `runtime_safety/`, `runtime_session/`, `authentication/`, `broker_adapter/`)
-
-| Package | Purpose |
-|---|---|
-| `trading_brain/evidence_interpreter/` | Translates MIC v2 classification strings into the closed ontology vocabulary. |
-| `trading_brain/market_state/` | Fuses evidence into one market-state conclusion + confidence. |
-| `trading_brain/strategy_selector/` | Deterministic decision table, no scoring/ML, picks one registered strategy or `NO_STRATEGY`. |
-| `trading_brain/risk_brain/` | Gates on market-*condition* trustworthiness — **not** numeric risk limits (real gap). |
-| `trading_brain/capital_brain/` | Capital *policy* (NONE/MINIMAL/REDUCED/STANDARD/FULL) — not a Rupee number. |
-| `trading_brain/execution_planner/` | Abstract workflow description, never order fields. |
-| `trading_brain/execution_engine/` | Abstract orchestration only — despite the name, never touches a broker. |
-| `trading_brain/nifty_contract_builder/` | Resolves strikes against a caller-supplied option chain; carries `last_price` (added this engagement). |
-| `trading_brain/position_sizing/` | Lots-per-leg from a fixed capital-intent lookup table. |
-| `trading_brain/order_construction/` | Broker-neutral `OrderRequest` per leg; carries `reference_price` (added this engagement). |
-| `trading_brain/portfolio_valuation/` | **Built this engagement** — pure, tick-driven MTM revaluation; no broker/network import. |
-| `trading_brain/exit_engine/` | **Built this engagement** — 4 v1 rules (3 real, 1 documented placeholder), consumer-only. |
-| `production_runtime/runtime.py` | The 3 modes: `run_read_only`, `run_shadow`, `verify_production_ready_construction`. |
-| `production_runtime/composition_root.py` | Constructs the full object graph; `broker_name="fyers"` builds a real, **unguarded** `FyersBroker` even in non-production modes. |
-| `production_runtime/config.py` | `RuntimeConfig` — **no cross-validation between `mode` and `broker_name`** (confirmed BLOCKER). |
-| `broker_adapter/` | Translates abstract execution actions to broker operation *names* only — never calls anything. |
-| `integration/execution_adapter.py` | `ProductionExecutionAdapter` — bridges to the real `bujji/execution/engine.py::ExecutionEngine`. |
-| `runtime_execution/` | Validates & dispatches `OrderRequest`s via an injected `ExecutionEngineInterface` Protocol. |
-| `runtime_safety/` | Structural/qualification-consistency gate — **not** a risk/capital-limit engine. |
-| `runtime_session/`, `authentication/` | Session and broker-auth state machines. |
-
-### Shared / Cross-Generation Infrastructure
-
-| Path | Purpose |
-|---|---|
-| `bujji/broker/base.py` | Abstract `Broker` ABC — `place_order`/`get_order`/`cancel_order`/`get_open_positions` + market data methods. |
-| `bujji/broker/paper.py` | `PaperBroker` — real in-memory simulator, ledger with entry timestamp + realized P&L, fills at `reference_price` (priority) → `limit_price` → synthetic default. |
-| `bujji/broker/fyers.py` | Real `FyersBroker` — calls the actual SDK; `place_order`/`get_order`/`cancel_order` implemented but **never proven against a real network call**. |
-| `bujji/broker/fyers_ws.py` | `FyersTickFeed` + `TickSilenceWatchdog` — real-time tick feed with fault-tolerant reconnect, live-proven (Session #3). |
-| `bujji/broker/guard.py` | `disable_live_execution()` — instance-level stub-patching of execution methods; the one **structural** (not just conventional) live-order guard in the whole codebase. |
-| `bujji/broker/hybrid.py` | `HybridPaperBroker` — real market data + paper execution ledger. |
-| `bujji/broker/instrument_master.py` | FYERS symbol-master download/cache — **not wired into `run_live_shadow.py`**. |
-| `bujji/journal/` | One append-only JSONL journal per module (house convention), including `portfolio_valuation_journal.py` (this engagement) with `TradeLifecycleTracker` for peak/trough. |
-| `bujji/replay/`, `bujji/qualification/` | Historical replay/corpus infrastructure and campaign qualification runner. |
-| `docs/` | 141 files — architecture write-ups, audit logs, sprint reports; see individual `docs/*.md` for detail beyond this summary. |
-| `tools/` | Operational scripts — `pre_market_supplementary_checks.py`, `eq1_*.py`, `lsq_*.py` (all this engagement). |
-| `data/` | Runtime state (`0700` perms) — `bujji.db`, large journals, `instrument_master/`, `bhavcopy/`, `live_shadow_journal/`. Contains many stray `*.lock` files from ad-hoc test runs — cleanup candidate. |
-| `qualification/` (top-level, root) | **Distinct from `bujji/qualification/`** — standalone MIC-adapter qualification script + session outputs. Don't conflate the two. |
-| `reports/` | Output artifacts only (daily trading reports, historical campaign results) — not source. |
-| `pipeline_audit.py` | Standalone Sprint 8 tool verifying the Decision Pipeline Refactor (Sprints 1-7) still holds; not part of the running app. |
+1. **UNKNOWN is not FLAT, and UNKNOWN is not SAFE.** A read that failed, a
+   symbol that never ticked, a position query that timed out — none of these
+   may resolve to "there is nothing there". Every uncertain state blocks.
+2. **Local process state is never broker truth.** A dictionary in this process
+   records what we believe. Only the broker can say what is held.
+3. **Subscribed is not covered; acknowledged is not filled; a fetch timestamp
+   is not a price age.** Evidence of a request is never evidence of a result.
+4. **Refusing to trade is cheaper than trading on unverified state.** Where the
+   two conflict, refuse.
+5. **A claim must name its evidence.** "Verified" from code inspection or from
+   a passing test is not verification; it is a hypothesis with a test attached.
+6. **Silence is not success.** A session that could not act must say so through
+   a channel that reaches an operator, not only through a log line.
 
 ---
 
-## MCP Server
+## 2. Ownership of truth
 
-**None exists in this repo** — confirmed by a repo-wide grep for `mcp.server`/`FastMCP`/`@mcp.tool` (zero matches). If you're looking for an MCP server + scanner, that's a different, separate project — not this one.
+One concept, one owner. A second module defining an owned type is a defect, not
+a convenience — it is how two parts of the system come to disagree about what
+is true.
+
+`Status` values:
+
+- **OWNED** — exactly one definition, in the module named. Machine-enforced by
+  `tests/test_architecture_contract.py`.
+- **CONTESTED** — more than one definition exists on the reachable path. Each
+  carries the milestone that resolves it. Not yet enforced, because enforcing a
+  rule the code breaks would only mean disabling the test.
+
+| Concept | Type | Owner module | Status |
+| --- | --- | --- | --- |
+| Exchange contract row | `OptionRow` | `bujji.broker.instrument_master` | OWNED |
+| Capture universe | `CaptureUniverse` | `bujji.capture_universe.builder` | OWNED |
+| Capture instrument | `CaptureInstrument` | `bujji.capture_universe.builder` | OWNED |
+| Eligible selection band | `SelectionBand` | `bujji.production_runtime.selection_band` | OWNED |
+| Universe coverage verdict | `CoverageVerdict` | `bujji.production_runtime.universe_coverage` | OWNED |
+| Leg readiness verdict | `LegReadiness` | `bujji.production_runtime.leg_readiness` | OWNED |
+| Order journal | `PositionGroupJournal` | `bujji.journal.position_group_journal` | OWNED |
+| Order journal record | `PositionGroupEvent` | `bujji.journal.position_group_journal` | OWNED |
+| Broker position group | `PositionGroupReality` | `bujji.production_runtime.position_reality_registry` | OWNED |
+| Session strategy lock | `StrategyLock` | `bujji.production_runtime.trading_session_governor.strategy_lock` | OWNED |
+| Option observation | `OptionObservation` | `bujji.options_observation.models` | OWNED |
+| Session safety verdict | `SessionSafetyVerdict` | `bujji.production_runtime.session_safety_verdict` | OWNED |
+| Websocket tick feed | `FyersTickFeed` | `bujji.broker.fyers_ws` | OWNED |
+| Order status | `OrderStatus` | `bujji.core.enums` | OWNED |
+| Position lifecycle state | `PositionLifecycleState` | `bujji.production_runtime.position_lifecycle_runtime` | OWNED |
+| Order request | `OrderRequest` | `bujji.core.models` | CONTESTED |
+| Spot snapshot | `SpotSnapshot` | `bujji.market_perception.models` | CONTESTED |
+| VIX snapshot | `VixSnapshot` | `bujji.market_perception.models` | CONTESTED |
+| Market snapshot | `MarketSnapshot` | `bujji.market_perception.models` | CONTESTED |
+| Leg quote | `LegQuote` | `bujji.production_runtime.leg_readiness` | CONTESTED |
+| Leg state | `LegState` | `bujji.production_runtime.leg_readiness` | CONTESTED |
+| Decision trace | `DecisionTrace` | `bujji.core.decision_trace` | CONTESTED |
+| Session store | `SessionStore` | `bujji.shadow_observatory.session_store` | CONTESTED |
+
+### Contested entries and the milestone that resolves each
+
+| Type | Competing definitions | Resolution |
+| --- | --- | --- |
+| `LegQuote`, `LegState` | `bujji.execution_reality.models`, `bujji.trading_brain.risk_governor.position_group_fold` | **M0** — introduced by the market-data campaign; the newer names move. |
+| `SpotSnapshot`, `VixSnapshot`, `MarketSnapshot` | `bujji.market_reality_snapshot.models`, `bujji.broker.simulation.market_snapshot` | **M1** — one market model family; the perception family is the one on the entry path. |
+| `OrderRequest` | `bujji.trading_brain.order_construction.models` | **M3** — resolved with the broker-truth boundary, which is what consumes it. |
+| `DecisionTrace`, `SessionStore` | `bujji.trading_brain.risk_governor.risk_governor_pipeline`, `bujji.core.session_state` | **M6** — resolved with the session evidence package. |
+
+**Not conflicts.** `Explanation`, `Contradiction` and `LensOpinion` are defined
+once per `msi_*` package by convention — twenty, four and two definitions
+respectively. They are per-package value types, not competing authorities, and
+are deliberately absent from the table above.
 
 ---
 
-## How to Start `run_live_shadow.py` (the actual live entry point)
+## 3. Runtime reachability, and what "test-only" means
 
-```bash
-ssh root@139.59.76.137
-cd /opt/bujji/app
-set -a; source .env.fyers; set +a
-/opt/bujji/.venv/bin/python run_live_shadow.py --live \
-  --bhavcopy data/bhavcopy/BhavCopy_NSE_FO_0_0_0_<YESTERDAY>_F_0000.csv \
-  --bhavcopy-day <YESTERDAY> \
-  --log-file logs/<session>.log
+`tools/reachability.py` computes, from the eight entry points systemd actually
+starts, which modules production can reach. Current measurement:
+
+```
+python files            1811
+  test modules           549
+  production modules    1262
+
+REACHABLE                449   (35.6% of production)
+orphaned                 813
+  test-only              557
+  unreferenced           256
 ```
 
-- **venv Python**: `/opt/bujji/.venv/bin/python` (note: NOT `/opt/bujji/app/.venv` — a real, previously-made mistake; the venv lives one level up from the repo).
-- **`--day YYYY-MM-DD`** mode replays a recorded day instead of going live.
-- Real, pre-market checklist runs automatically and **aborts on any mandatory failure** — never proceeds in a degraded state.
+**`test-only` is a classification, not a verdict.** It means exactly one thing:
+*that module cannot support a claim about production safety.* A passing test
+over a test-only module proves the module works. It proves nothing about the
+system that trades. Whether such a module should be wired, kept as a library
+for future work, or retired is an engineering judgement made per module — this
+document does not license deleting any of them, and neither does the tool.
+
+The number matters because it explains a recurring pattern in this repository:
+a green suite coexisting with a broken runtime. Most of what the suite
+exercises is not what runs.
+
+**Known limit.** The graph is static. Dynamic imports (`importlib`,
+`__import__`, a module named in config) are not followed, so the reachable set
+is a lower bound. Anything reported reachable is; anything reported orphaned
+should be confirmed by grep before being acted on.
 
 ---
 
-## Data Flow: Broker → Decision → Output
+## 4. Session state machine
 
-```
-FYERS WebSocket (real ticks)
-  → FyersTickFeed.latest() / tick_age_seconds()
-  → TickSilenceWatchdog.check() (every loop iteration, market-hours-gated)
-  → op.process_tick() → SessionDriver (MSI Series 99-106 decision chain)
-  → op.run_cadence() every --cadence-seconds (default 900s)
-  → portfolio_valuation.engine.revalue() (on every NEW real tick)
-  → exit_engine.engine.evaluate() (if any position is open — currently never, see gap above)
-  → PortfolioValuationJournal.record_valuation() / record_exit()
-  → EOD: render_health_dashboard() + render_portfolio_dashboard() + render_exit_dashboard()
-```
+Bujji currently runs **two** session-scoped state machines, and this is a known
+defect rather than a design:
+
+| Machine | Module | States |
+| --- | --- | --- |
+| `TradingSessionState` | `…trading_session_governor.session_trading_state` | `ANALYSING_MARKET → STRATEGY_LOCKED → POSITION_ACTIVE → MANAGING → EXITED → SESSION_COMPLETE` |
+| `RuntimeState` | `bujji.production_runtime.runtime_state_machine` | includes its own `POSITION_ACTIVE` |
+
+Both transition to `POSITION_ACTIVE` for the same session, from different call
+sites, with no defined relationship. **M4 collapses them into one journaled
+machine.** Until then, `TradingSessionState` is the machine that gates entry
+(`entry_control.can_enter_trade` reads it) and is therefore the one to trust
+when they disagree.
+
+### Entry gates, in the order they run
+
+1. `_record_universe_coverage` — grades the wide capture universe. **Records; never blocks.**
+2. Position truth — reconciliation must have established what the broker holds.
+3. Data quality — the market snapshot must have been graded.
+4. `select_and_lock_strategy` — one strategy per session, idempotent on retry.
+5. `_band_coverage_permits_entry` — **stage 1.** Every contract in the eligible band, plus spot, must be fresh.
+6. `evaluate_leg_readiness` — **stage 2.** The exact legs and hedges, freshness *and* field-completeness, graded independently.
+7. `_build_order_requests` — the only place a production `OrderRequest` is built.
+
+While a position exists — **stage 3** — those legs stay mandatory, and
+monitoring ends only when the broker proves the account flat. Open legs and
+unestablished flatness both continue.
 
 ---
 
-## Key Constants / Thresholds (Generation 1, `config/config.yaml` — legacy system only, NOT read by `run_live_shadow.py`)
+## 5. Acceptance criteria
 
-```
-market.strike_interval: 50      market.lot_size: 75
-timing.orb_start/end: 09:15-09:20   timing.trading_end/hard_exit: 15:05
-risk.lots: 1 (ceiling, Capital Management Engine may reduce, never increase)
-risk.margin_safety_buffer: 0.90     risk.capital_policy: CERTIFIED (real, live-verified)
-risk.max_mtm_loss: 6000             risk.daily_loss_limit: 6000
-risk.breakout_body_ratio: 0.60      strategy.max_trades_per_day: 1, allow_reentry: false
-broker.name: fyers_paper (live data, paper execution)
-```
+A milestone is complete when its acceptance test passes and failed before.
 
-**`run_live_shadow.py` (Generation 2) and `production_runtime` (Generation 3) do not read this file** — they have their own, separate config surfaces (`ExitRuleConfig`, `RuntimeConfig`). Don't assume one config governs the whole repo.
+| # | Milestone | Acceptance |
+| --- | --- | --- |
+| 0 | Contract written down | A type declared OWNED here that gains a second reachable definition fails `tests/test_architecture_contract.py`. |
+| 1 | One instrument/universe model | The chain request's strike count and expiry are derived from the universe; band ⊆ universe holds for every expiry role, including on expiry day. |
+| 2 | Durable tick journal + replay | A recorded session replays to an identical decision sequence; a corrupted journal refuses rather than degrades. |
+| 3 | One broker-truth boundary | With the broker read forced to fail, no consumer concludes flat; the session refuses and says why. |
+| 4 | One journaled state machine | Killing the process mid-session and restarting reconstructs state from the journal. |
+| 5 | Event-driven protection | An adverse move between poll intervals triggers protection from the tick path; reconciliation runs with the management loop stopped. |
+| 6 | Session evidence package | Every terminal path produces a package; a session that cannot prove closure exits non-zero. |
 
 ---
 
-## External Dependencies
+## 6. Deprecations
 
-| Dependency | Expiry / Renewal behavior |
-|---|---|
-| **FYERS access token** | Real-world ~1 day validity, observed to require daily manual refresh (established morning routine: generate → scp `.env` → extract `FYERS_APP_ID`/`FYERS_ACCESS_TOKEN`/`FYERS_APP_SECRET`/`FYERS_REFRESH_TOKEN` into `.env.fyers`, chmod 600). Automatic refresh via `FYERS_REFRESH_TOKEN` is documented as currently non-functional per FYERS's own SEBI-driven restriction (`docs/FYERS_TOKEN_LIFECYCLE.md`). |
-| **NSE Bhavcopy** | Published EOD only, no live option-chain-structure feed. Fetched daily via a real, working two-step cookie-jar workaround (`curl` against `nseindia.com` for cookies, then `nsearchives.nseindia.com` for the real archive) — NSE blocks datacenter IPs on a plain request. |
-| **NSE holiday calendar** | Self-disclosed as unverified against the real, current NSE circular — every session's pre-market checklist requires a manual cross-check. |
-| **`fyers-apiv3` SDK** | Real, installed, has a confirmed non-daemon-thread lifecycle limitation (leaves a zombie process after "clean" shutdown) and a confirmed `close_connection()` no-op condition — both SDK-owned, not fixable from our side (see `docs/LIFECYCLE_INTEGRITY_PROOF_P5.md`). |
+| Document | Status | Reason |
+| --- | --- | --- |
+| `docs/ARCHITECTURE.md` | **DEPRECATED** | Describes the VWAP Premium Straddle Seller generation and declares itself authoritative. Superseded by this file. Retained for historical reference; a header now says so. |
+| `docs/CHAOS_TESTING_PLAN.md`, `docs/FYERS_TRANSPORT_READINESS.md`, `docs/PAPER_CAMPAIGN_RUNBOOK.md`, `docs/PAPER_TRADING_LIVE_DATA.md`, `docs/TIER1_CAPITAL_PROTECTION.md` | Historical | Describe the earlier ORB-VWAP breakout strategy, per `docs/ARCHITECTURE.md`'s own note. Strategy-specific sections are background, not current behaviour. |
+
+---
+
+## 7. What is not yet true
+
+Recorded here so no reader has to infer it from silence.
+
+- **No tick is persisted anywhere.** No session is replayable. (M2)
+- **The broker boundary is not a boundary.** `self._broker` is hardcoded to
+  `PaperBroker`; every `FyersBroker` is execution-neutered. The three-valued
+  UNKNOWN machinery is correct and untestable, because the read it guards
+  cannot fail. (M3)
+- **`FYERS_POSITION_SCHEMA_VERIFIED = False`** and remains false. No claim in
+  this repository may assume the FYERS position schema is verified.
+- **Risk state is ephemeral.** Recomputed per cycle, never journaled; a restart
+  loses every risk decision and its inputs. (M4)
+- **No gate in this document has met a live feed.** All are structurally tested.
