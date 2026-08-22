@@ -1921,6 +1921,27 @@ class OptionsOSRunner:
             if self._attempt_entry(trend_regime, volatility_regime):
                 entered = True
                 break
+            # A REGISTERED ORPHAN IS A LIVE POSITION AND MUST NOT WAIT FOR
+            # THIS LOOP TO END.
+            #
+            # `_orphan_position_live` was written in three places and read in
+            # NONE -- its own comment says it is "what tells [continuous mode]
+            # a live position exists regardless", and nothing consulted it.
+            # This is the reader.
+            #
+            # It matters because this loop breaks at observe_until (15:30),
+            # not at entry_cutoff: past the cutoff it `continue`s, observing
+            # all day. So an orphan at 09:35 left naked legs sitting while the
+            # loop ran on, and `_position_management()` -- which follows the
+            # loop -- would then start at 15:30 with monitor_until already
+            # past (15:15) and mandatory_exit_time (15:15) already missed. It
+            # runs one pass before its own deadline check ends it.
+            if self._orphan_position_live:
+                self._logger.critical(
+                    "ORPHANED LEGS ARE LIVE -- leaving the entry loop at cycle %d so "
+                    "position management starts NOW rather than at observe_until.",
+                    cycles)
+                break
 
         # An ORPHANED partial entry is a live position even though
         # _attempt_entry returned False. Without this it was never managed at
@@ -2517,6 +2538,27 @@ class OptionsOSRunner:
 
         return True
 
+    def _mark_orphan_deployed(self) -> None:
+        """Move the session to POSITION_ACTIVE because orphaned legs may be live.
+
+        Kept separate from the `_orphan_position_live = True` assignments so
+        those stay literally where they are: two regression tests match on
+        that exact source text, and a refactor that moved them would break
+        the pins without changing behaviour.
+
+        NEVER RAISES. `_register_orphaned_legs` documents that it never
+        raises -- failing to register must not also lose the CRITICAL log
+        that names the orphans -- and this must not weaken that. An illegal
+        transition is reported and swallowed.
+        """
+        try:
+            self._governor.mark_position_deployed("orphaned_legs_registered")
+        except Exception as exc:  # noqa: BLE001 -- see docstring
+            self._logger.critical(
+                "ORPHAN STATE TRANSITION FAILED (%s: %s) -- the session may still "
+                "permit a SECOND entry on top of live orphaned legs. Inspect the "
+                "broker book NOW.", type(exc).__name__, exc)
+
     def _register_orphaned_legs(self, cycle_result, reason: str,
                                 label: str = "PARTIAL_ORPHANED") -> None:
         """Register legs that may be live positions, so management owns them.
@@ -2608,6 +2650,7 @@ class OptionsOSRunner:
             # returns True, and an orphan returns False. This flag is what
             # tells it a live position exists regardless.
             self._orphan_position_live = True
+            self._mark_orphan_deployed()
             self._entry_prices = entry_prices
             self._contracts_by_symbol = contracts
             self._logger.critical(
@@ -2628,6 +2671,7 @@ class OptionsOSRunner:
             # difference between a contained problem and an invisible one if
             # it does.
             self._orphan_position_live = True
+            self._mark_orphan_deployed()
             self._governor_result_summary["orphan_registration_failed"] = {
                 "reason": reason, "label": label,
                 "error": f"{type(exc).__name__}: {exc}",
