@@ -101,9 +101,19 @@ def test_catalog_is_read_only_never_mutates_the_store():
 
 
 def test_real_data_2020_03_23_produces_a_full_lineage_record():
+    # `if not real_db.exists(): return` was TWO defects in one line. It made an
+    # absent store look like a PASS rather than a skip, and it treated
+    # existence as availability -- but constructing HistoricalObservationStore
+    # at this path creates an empty schema'd file, so a sibling test's leftover
+    # made this run against nothing and fail on the second invocation of an
+    # unchanged tree.
+    import pytest
+
+    from tests._real_store_guard import production_store_has_data, skip_reason
+
     real_db = _REPO_ROOT / "data" / "historical_reality" / "normalized" / "historical_observations.db"
-    if not real_db.exists():
-        return
+    if not production_store_has_data(real_db):
+        pytest.skip(skip_reason(real_db))
     store = HistoricalObservationStore(str(real_db))
     catalog = IntradayStructureCatalog(historical_store=store)
     record = catalog.get("NSE:NIFTY50-INDEX", "2020-03-23T15:25:00+05:30")

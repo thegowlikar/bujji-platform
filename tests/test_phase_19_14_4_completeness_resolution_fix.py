@@ -30,10 +30,30 @@ REAL_DATE_WITH_DATA = "2026-08-14"
 
 
 def _store_available() -> bool:
-    return os.path.exists(REAL_STORE_PATH)
+    """Existence is NOT availability.
+
+    This was `os.path.exists(REAL_STORE_PATH)`. But
+    `HistoricalObservationStore.__init__` mkdirs and creates a schema'd SQLite
+    file, so ANY test constructing the store at this relative path leaves a
+    valid, EMPTY database behind. On the next run this returned True, these
+    tests un-skipped, queried an empty store and failed -- same commit, same
+    code, different answer depending on whether the suite had run before.
+
+    The guard now requires real rows, so a leftover artifact can never satisfy
+    it, and it never constructs the store itself.
+    """
+    from tests._real_store_guard import production_store_has_data
+
+    return production_store_has_data(REAL_STORE_PATH)
 
 
-@pytest.mark.skipif(not _store_available(), reason="real production HistoricalObservationStore not present in this environment")
+def _skip_reason() -> str:
+    from tests._real_store_guard import skip_reason
+
+    return skip_reason(REAL_STORE_PATH)
+
+
+@pytest.mark.skipif(not _store_available(), reason=_skip_reason())
 def test_default_resolution_unchanged_still_reports_empty_for_five_minute_only_data():
     """The OLD default (RESOLUTION_DAILY, no as_of_time) must keep
     behaving exactly as before -- this is what proves the fix is
@@ -72,7 +92,7 @@ def _run_real_data_probe(script: str) -> dict:
     return json.loads(result.stdout.strip().splitlines()[-1])
 
 
-@pytest.mark.skipif(not _store_available(), reason="real production HistoricalObservationStore not present in this environment")
+@pytest.mark.skipif(not _store_available(), reason=_skip_reason())
 def test_five_minute_resolution_correctly_finds_real_captured_data():
     """The FIX: passing resolution=RESOLUTION_FIVE_MINUTE + a real
     as_of_time finds the real, already-captured data for a day
@@ -105,7 +125,7 @@ print(json.dumps({{
     assert result["is_complete"] is True
 
 
-@pytest.mark.skipif(not _store_available(), reason="real production HistoricalObservationStore not present in this environment")
+@pytest.mark.skipif(not _store_available(), reason=_skip_reason())
 def test_production_completeness_fn_reports_complete_after_fix():
     """The exact, real, deployed function `run_daily_intelligence_session._make_real_completeness_fn`
     -- not a re-implementation -- now correctly reports COMPLETE for a
