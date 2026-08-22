@@ -79,6 +79,12 @@ class PaperBroker(Broker):
     # execution_journal_bridge.recover_unresolved_at_startup.
     order_book_survives_restart = False
 
+    # PaperBroker keys its own order book on the client_order_id it was given,
+    # in this process, so a lookup by that id is exact. "Absent" from here
+    # really does mean absent, which is what lets the ExecutionEngine retry a
+    # confirmed-absent placement.
+    order_tag_roundtrip_verified = True
+
     def __init__(
         self,
         seed: int = 42,

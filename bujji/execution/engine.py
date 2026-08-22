@@ -155,6 +155,33 @@ class ExecutionEngine:
                         f"against broker truth before any retry. Cause: {exc}"
                     )
 
+                # AN "ABSENT" ANSWER IS ONLY EVIDENCE IF THE LOOKUP CAN
+                # RECOGNISE THE ORDER.
+                #
+                # FyersBroker.get_order() finds an order by scanning today's
+                # book for `orderTag == client_order_id`, and whether FYERS
+                # echoes that tag back is UNVERIFIED -- it cannot be confirmed
+                # without placing a real order. If it does not echo, EVERY
+                # lookup returns "not found", which is indistinguishable from
+                # an order that never reached the exchange. Re-placing on that
+                # is the duplicate-order path wearing a confirmation's clothes.
+                #
+                # Brokers that can recognise their own orders exactly declare
+                # `order_tag_roundtrip_verified = True` (PaperBroker does). The
+                # default is False: an unknown broker's absent-answer is not
+                # trustworthy, and failing closed costs a manual reconciliation
+                # while failing open costs a duplicate live order.
+                if not getattr(self._broker, "order_tag_roundtrip_verified", False):
+                    log_event(self._log, "place_order_absent_but_unverifiable",
+                              cid=cid, attempt=attempt)
+                    raise ExecutionError(
+                        f"place_order failed and the broker reports the order absent "
+                        f"(cid={cid}), but this broker's client-order-id round trip is "
+                        f"UNVERIFIED -- 'not found' cannot be distinguished from 'never "
+                        f"placed'. NOT re-placing. Reconcile against broker truth. "
+                        f"Cause: {exc}"
+                    )
+
                 if attempt >= attempts:
                     raise ExecutionError(
                         f"place_order failed and order absent after {attempts} "

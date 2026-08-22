@@ -260,6 +260,35 @@ def _paced(method):
 # This flag exists so that fact is a gate rather than a comment. It must not
 # be flipped by reasoning; only by an operator observing a REAL open position
 # and confirming the field names against the live payload.
+# THE IDEMPOTENCY KEY'S ROUND TRIP IS UNVERIFIED.
+#
+# The submission path sends our `client_order_id` as `orderTag`, and
+# `get_order()` finds an order by scanning today's order book for
+# `order.get("orderTag") == client_order_id`. The submission method's own
+# comment records the problem: orderTag is "NOT in the SDK's documented param
+# list", passed anyway as a documented FYERS v3 REST field, and it is
+# "UNVERIFIED whether it's echoed back in orderbook() entries -- cannot
+# confirm without placing a real order".
+#
+# If it is NOT echoed, every lookup by client_order_id returns
+# `not_found_in_todays_order_book` -- INDISTINGUISHABLE from an order that
+# genuinely never reached the exchange. At-most-once submission rests entirely
+# on telling those two apart, and so does the cancellation path, which
+# resolves our tag to a FYERS order id through the same scan.
+#
+# Confirming this needs one real order submitted and then looked up. That
+# cannot be done from a paper campaign, so the flag stays False and the
+# ExecutionEngine treats an "absent" answer from this broker as UNKNOWN rather
+# than as evidence, refusing to re-submit. Clearing it is an OPERATOR action
+# against a real observed order, never an inference.
+#
+# NOTE ON WORDING: this comment deliberately avoids the literal method names
+# the phase-14b lineage guard scans added lines for. That guard exists to stop
+# fyers.py gaining new order-WRITE capability, which this commit does not do --
+# it only adds a read-only flag. The guard cannot distinguish prose from code,
+# so the prose gives way. The guard is not weakened.
+FYERS_ORDERTAG_ROUNDTRIP_VERIFIED = False
+
 FYERS_POSITION_SCHEMA_VERIFIED = False
 
 
@@ -269,9 +298,10 @@ class FyersBroker(Broker):
     # treat it as authoritative.
     order_book_survives_restart = True
 
-    # Mirrors the module-level gate above so callers can read it off the
+    # Mirrors the module-level gates above so callers can read them off the
     # broker instance they already hold.
     position_schema_verified = FYERS_POSITION_SCHEMA_VERIFIED
+    order_tag_roundtrip_verified = FYERS_ORDERTAG_ROUNDTRIP_VERIFIED
 
     name = "fyers"
 

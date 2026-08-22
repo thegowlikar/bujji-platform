@@ -68,7 +68,18 @@ class _Req:
 
 
 class _Broker:
-    """place_order always fails. get_order behaves as configured."""
+    """place_order always fails. get_order behaves as configured.
+
+    Declares `order_tag_roundtrip_verified = True` EXPLICITLY, because that is
+    what makes an "absent" answer count as evidence. A broker that cannot
+    recognise its own client_order_id -- FyersBroker, whose orderTag echo is
+    unverified -- returns "not found" for an order that may well be live, and
+    the engine now refuses to re-place on that. Stating the capability here
+    keeps these tests about the retry logic rather than about the gate, which
+    has its own class below.
+    """
+
+    order_tag_roundtrip_verified = True
 
     def __init__(self, lookup):
         self.places = 0
@@ -151,3 +162,68 @@ class TestTheSentinelIsNotAccidental:
         assert result.message == LOOKUP_FAILED, (
             "the re-place guard keys on this exact message; a silent rename "
             "would restore the duplicate-order path")
+
+
+class TestAnUnverifiableAbsentAnswerIsNotEvidence:
+    """FyersBroker.get_order() finds an order by scanning today's book for
+    `orderTag == client_order_id`. Whether FYERS echoes that tag back is
+    UNVERIFIED -- place_order's own comment says it "cannot confirm without
+    placing a real order".
+
+    If it does not echo, EVERY lookup returns "not found", which is
+    indistinguishable from an order that never reached the exchange.
+    Re-placing on that is a duplicate-order path wearing a confirmation's
+    clothes.
+    """
+
+    class _UnverifiableBroker(_Broker):
+        order_tag_roundtrip_verified = False
+
+    def test_an_absent_answer_from_an_unverifiable_broker_does_not_re_place(self):
+        def _answers_absent(cid):
+            return OrderResult(cid, OrderStatus.UNKNOWN, message="not found")
+
+        broker = self._UnverifiableBroker(_answers_absent)
+        with pytest.raises(ExecutionError) as exc:
+            asyncio.run(_engine(broker)._place_idempotent(_Req()))
+        assert broker.places == 1, (
+            f"placed {broker.places} times against a broker whose 'not found' "
+            f"cannot be trusted")
+        assert "UNVERIFIED" in str(exc.value)
+        assert "Reconcile against broker truth" in str(exc.value)
+
+    def test_the_default_is_closed_for_a_broker_that_declares_nothing(self):
+        """An unknown broker's absent-answer is not trustworthy. Failing
+        closed costs a manual reconciliation; failing open costs a duplicate
+        live order."""
+        class _Silent:
+            def __init__(self):
+                self.places = 0
+
+            async def place_order(self, request):
+                self.places += 1
+                raise ConnectionError("broker unreachable")
+
+            async def get_order(self, cid):
+                return OrderResult(cid, OrderStatus.UNKNOWN, message="not found")
+
+        broker = _Silent()
+        assert not hasattr(broker, "order_tag_roundtrip_verified")
+        with pytest.raises(ExecutionError):
+            asyncio.run(_engine(broker)._place_idempotent(_Req()))
+        assert broker.places == 1
+
+    def test_the_real_fyers_broker_declares_it_unverified(self):
+        from bujji.broker.fyers import (
+            FYERS_ORDERTAG_ROUNDTRIP_VERIFIED, FyersBroker,
+        )
+
+        assert FYERS_ORDERTAG_ROUNDTRIP_VERIFIED is False
+        assert FyersBroker.order_tag_roundtrip_verified is False
+
+    def test_the_paper_broker_declares_it_verified(self):
+        """PaperBroker keys its own order book on the id it was given, in this
+        process, so a lookup by that id is exact."""
+        from bujji.broker.paper import PaperBroker
+
+        assert PaperBroker.order_tag_roundtrip_verified is True
