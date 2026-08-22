@@ -265,6 +265,30 @@ class FyersTickFeed:
             socket_to_close = self._socket
             self._socket = None
         if socket_to_close is not None:
+            # CLEAR THE RECONNECT INTENT DIRECTLY, BEFORE ASKING NICELY.
+            #
+            # From the installed SDK source, `close_connection()` is:
+            #
+            #     if self.__ws_object:
+            #         self.restart_flag = False
+            #         ...
+            #
+            # and its reconnect path sets `self.__ws_object = None` BEFORE
+            # calling `connect()` again. So a stop landing while the SDK is
+            # inside its reconnect back-off skips the ENTIRE body -- including
+            # `restart_flag = False` -- and the reconnect loop keeps running
+            # against a feed the caller explicitly stopped. That is what left
+            # the 2026-08-21 session printing "Attempting reconnect" after it
+            # had logged SHUTDOWN.
+            #
+            # Setting the flags first makes the stop independent of which
+            # internal state the SDK happens to be in.
+            for attribute, value in (("restart_flag", False),
+                                     ("max_reconnect_attempts", 0)):
+                try:
+                    setattr(socket_to_close, attribute, value)
+                except Exception:  # noqa: BLE001 -- SDK internals, best effort
+                    pass
             try:
                 socket_to_close.close_connection()
             except Exception:  # noqa: BLE001 - best-effort on shutdown.
@@ -357,6 +381,35 @@ class FyersTickFeed:
         # only after the handle is fully populated -- see _ConnectionHandle's
         # own docstring for why that ordering is what makes population-
         # before-use guaranteed rather than merely likely.
+        # THE SDK'S THREAD MUST NOT BE ABLE TO OUTLIVE THE SESSION.
+        #
+        # Read from the installed fyers_apiv3 source, not assumed:
+        #
+        #     self.ws_thread = Thread(target=ws.run_forever)
+        #     self.ws_thread.daemon = self.background_flag     # default False
+        #
+        # `background_flag` defaults to False, so the SDK EXPLICITLY marks its
+        # websocket thread non-daemon -- overriding the daemon status it would
+        # otherwise inherit from the daemon thread we start `connect()` on.
+        # A non-daemon thread running `run_forever` blocks interpreter exit
+        # indefinitely.
+        #
+        # Observed live on 2026-08-21: the session logged SHUTDOWN at 15:33:45,
+        # logged "Tick feed stopped", and the process then sat alive printing
+        # "Attempting reconnect 1 of 5..." until systemd killed it at 15:54:56
+        # -- twenty-one minutes after it believed it had finished.
+        #
+        # Set BEFORE `connect()` runs, because the flag is read at thread
+        # construction inside it; an already-started thread cannot be
+        # re-daemonised. Best-effort: a future SDK that drops the attribute
+        # must not break the feed.
+        try:
+            socket.background_flag = True
+        except Exception:  # noqa: BLE001 -- SDK internals are not our contract
+            self._log.warning(
+                "could not mark the FYERS websocket thread as a daemon; a "
+                "session that finishes may not be able to exit.")
+
         handle.socket = socket
         self._current_handle = handle
         self._socket = socket

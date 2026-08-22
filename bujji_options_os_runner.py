@@ -3386,8 +3386,15 @@ class OptionsOSRunner:
             if now_t >= end_t:
                 self._logger.info("Reached monitor_until=%s -- ending monitoring loop.", end_time_s)
                 break
-            if interval_s > 0:
-                _time.sleep(interval_s)
+            if interval_s > 0 and sleep_unless_terminated(interval_s):
+                # Observed WITHIN the sleep, not one cadence later. Falling out
+                # here reaches _eod_close(), which flattens against broker
+                # truth; being SIGKILLed here would not.
+                self._logger.critical(
+                    "ORDERLY STOP requested during the %ds management interval -- "
+                    "ending position management now; EOD closure will flatten "
+                    "against broker truth.", interval_s)
+                break
         else:
             self._logger.warning(
                 "POSITION_MANAGEMENT hit max_cycles=%d before monitor_until=%s -- "
@@ -3813,6 +3820,47 @@ _TERMINATION_REQUESTED = _threading.Event()
 
 def termination_requested() -> bool:
     return _TERMINATION_REQUESTED.is_set()
+
+
+def sleep_unless_terminated(seconds: float, *, slice_seconds: float = 1.0,
+                            sleep_fn=None) -> bool:
+    """Sleep for `seconds`, but wake immediately on an orderly-stop request.
+
+    Returns True if a stop was requested (the caller should break), False if
+    the full interval elapsed quietly.
+
+    WHY THIS EXISTS. The position-management loop ended with a bare
+    `time.sleep(interval_s)`, where `interval_s` is 60s for a naked position
+    and 300s for a defined-risk one. The loop checks `termination_requested()`
+    at the TOP, so a SIGTERM arriving one second into a 300-second sleep was
+    not observed for another 299 seconds.
+
+    The unit sets `TimeoutStopSec=60` and `KillSignal=SIGTERM`. systemd
+    therefore escalates to SIGKILL at 60 seconds -- which cannot be caught, so
+    `finally` never runs, no EOD closure happens, and an open position is
+    abandoned. The orderly-stop path that
+    `install_termination_handlers` exists to provide was unreachable inside
+    the window systemd allows, for the entire duration of every management
+    sleep, which is where the loop spends essentially all of its time.
+
+    Slicing at one second bounds the observation delay to ~1s regardless of
+    the configured cadence, and costs one Event check per second.
+
+    `_TERMINATION_REQUESTED` is a `threading.Event`, so `wait(timeout)` blocks
+    on the event itself rather than polling -- but the slice loop is kept
+    explicit and injectable so the behaviour is testable without real time.
+    """
+    import time as _t
+
+    naps = sleep_fn or _t.sleep
+    remaining = float(seconds)
+    while remaining > 0:
+        if termination_requested():
+            return True
+        nap = slice_seconds if remaining > slice_seconds else remaining
+        naps(nap)
+        remaining -= nap
+    return termination_requested()
 
 
 def install_termination_handlers(logger=None) -> None:
