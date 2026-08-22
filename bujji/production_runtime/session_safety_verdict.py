@@ -74,6 +74,14 @@ _BLINDNESS_REFUSALS = {
         "the contracts the strategy would have chosen from had no fresh ticks",
     "POSITION_RECONCILIATION":
         "the broker's account could not be read before entry",
+    # NOTE what is deliberately ABSENT here: STRATEGY_ALREADY_DEPLOYED_TODAY.
+    # That refusal is reached with full sight -- the journal was read, and it
+    # said the day's one strategy was already deployed by an earlier process.
+    # A disciplined decline is not blindness and must not exit non-zero, or
+    # every restart-after-a-completed-trade would page the operator.
+    "PRIOR_FILLS_UNREADABLE":
+        "the position group journal could not be read, so whether this "
+        "account already traded today was never established",
     "DATA_QUALITY_NOT_ASSESSED":
         "a market snapshot should have been graded and was not",
     "STALE_MARKET_DATA":

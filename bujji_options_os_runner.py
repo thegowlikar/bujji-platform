@@ -518,6 +518,10 @@ class OptionsOSRunner:
         # Populated during STARTUP.
         self._broker = None
         self._journal = None
+        # Position groups a PRIOR process filled today. Snapshotted at
+        # startup before any mint; see where it is assigned.
+        self._prior_fills_today = []
+        self._prior_fills_unreadable = False
         self._root = None
         self._trading_brain_runtime = None
         self._registry = None
@@ -779,12 +783,40 @@ class OptionsOSRunner:
             self._journal, str(journal_path), self._broker, _asyncio_rec.run,
             self._logger, self._clock)
         self._governor_result_summary["startup_order_recovery"] = recovery
+
         if recovery["unresolved_after"]:
             raise ConfigurationError(
                 "STARTUP RECOVERY could not resolve order state for group(s) "
                 f"{recovery['unresolved_after']} -- refusing to trade on top of "
                 "unknown in-flight orders. Inspect the position group journal and "
                 "the broker order book, then resolve or operator-correct them.")
+
+        # THE DAY'S ONE STRATEGY, ACROSS A RESTART.
+        #
+        # AFTER the unresolved-order refusal above, deliberately: if this
+        # session is going to refuse outright over in-flight orders, there is
+        # nothing to ask about prior fills.
+        #
+        # Read ONCE, here, before this session can mint anything. A live query
+        # later would match this session's OWN fills and refuse its legitimate
+        # retries. This is a snapshot of what a PRIOR process did.
+        #
+        # Reconciliation already covers the still-open case (empty registry ->
+        # BROKER_ONLY -> CRITICAL -> blocks). This covers the one it cannot:
+        # the position was entered AND exited before the crash, so the account
+        # is genuinely flat and the broker cannot tell "never traded today"
+        # from "traded and closed today". See prior_fills.py for the rest.
+        from bujji.production_runtime.prior_fills import prior_fills_snapshot
+
+        self._prior_fills_today, self._prior_fills_unreadable = prior_fills_snapshot(
+            self._journal, self._as_of_date, self._logger)
+        self._governor_result_summary["prior_fills_today"] = list(self._prior_fills_today)
+        if self._prior_fills_today:
+            self._logger.critical(
+                "STARTUP -- this account already filled position group(s) %s on %s. "
+                "This process is a RESTART after the day's strategy was already "
+                "deployed. Entry will be refused; management and closure continue.",
+                self._prior_fills_today, self._as_of_date)
 
         capital_snapshot_provider = _make_capital_snapshot_provider(
             capital_cfg, self._clock)
@@ -2600,6 +2632,36 @@ class OptionsOSRunner:
                 "ENTRY REFUSED -- position reconciliation %s. %s",
                 getattr(last, "verdict", "UNKNOWN"), getattr(last, "detail", ""))
             self._block_entry("POSITION_RECONCILIATION")
+            return False
+
+        # ONE STRATEGY PER DAY, ENFORCED ACROSS A RESTART.
+        #
+        # Deliberately AFTER reconciliation, which is a safety control that
+        # must run and record position truth whatever this gate decides, and
+        # BEFORE everything else, because if the day is already spent no
+        # later gate's answer can matter.
+        #
+        # This blocks entry; it does not end the session. The process still
+        # manages and closes whatever it holds, and still produces its
+        # report -- the same shape the deprecated bot's DONE_FOR_DAY had.
+        prior_fills = getattr(self, "_prior_fills_today", None)
+        if prior_fills:
+            self._logger.critical(
+                "ENTRY REFUSED -- position group(s) %s already filled on %s. The "
+                "day's one strategy was deployed by an earlier process; the "
+                "in-memory tracker that normally refuses this did not survive "
+                "the restart, and a flat account is not evidence that nothing "
+                "was traded.", prior_fills, self._as_of_date)
+            # TWO DIFFERENT REFUSALS, and the difference is the exit code.
+            # "The day's strategy was already deployed" is a DISCIPLINED
+            # outcome reached with full sight -- it exits 0, exactly as "no
+            # strategy fit today" does. "I could not read the journal" is a
+            # failure to establish something, and a session that could not
+            # look must not present as one that looked and declined.
+            self._block_entry(
+                "PRIOR_FILLS_UNREADABLE"
+                if getattr(self, "_prior_fills_unreadable", False)
+                else "STRATEGY_ALREADY_DEPLOYED_TODAY")
             return False
 
         verdict = getattr(self, "_data_quality", None)
