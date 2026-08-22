@@ -61,6 +61,13 @@ def _bare_runner():
     r = mod.OptionsOSRunner.__new__(mod.OptionsOSRunner)
     r._logger = logging.getLogger("test-recovery")
     r._governor_result_summary = {}
+    # Universe coverage is a precondition of the same gate; these tests
+    # exercise the POSITION-TRUTH clause, so it is declared out of scope
+    # explicitly rather than the gate being weakened.
+    r._universe = None
+    r._universe_requested = ()
+    r._universe_error = "NOT_APPLICABLE: stub -- universe not under test"
+    r._tick_feed = None
     r._last_reconciliation = None
     r._reconciliation_blocks_entry = True
     r._data_quality = None
@@ -106,6 +113,10 @@ class TestTheDefaultIsBlocked:
         r = mod.OptionsOSRunner.__new__(mod.OptionsOSRunner)
         r._logger = logging.getLogger("test-recovery-missing")
         r._governor_result_summary = {}
+        r._universe = None
+        r._universe_requested = ()
+        r._universe_error = "NOT_APPLICABLE: stub -- universe not under test"
+        r._tick_feed = None
         r._last_reconciliation = object()          # truth already established
         r._data_quality = None
         r._intelligence_origin = None

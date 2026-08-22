@@ -561,6 +561,10 @@ class OptionsOSRunner:
         # back to entry prices and says so -- see _current_leg_prices().
         self._price_provider = None
         self._tick_feed = None  # set only by tick_source.type=websocket
+        # UNIVERSE-FIRST SUBSCRIPTION (see _ensure_universe_subscribed).
+        self._universe = None
+        self._universe_requested = ()
+        self._universe_error = None
         self._priced_from_ticks_cycles = 0
         self._blind_cycles = 0
 
@@ -2022,6 +2026,134 @@ class OptionsOSRunner:
         # homes and let them drift.
         self._attempt_entry(trend_regime, volatility_regime)
 
+    def _ensure_universe_subscribed(self) -> None:
+        """Build the session universe ONCE and subscribe to all of it.
+
+        THE ORDER THIS FIXES. Subscription used to be a CONSEQUENCE of
+        trading: `WebsocketTickProvider.get_prices()` subscribes
+        `list(contracts_by_symbol)`, and that dict is populated only after the
+        entry orders fill. So the session could select strikes, size them and
+        place them without a single live price having arrived for anything --
+        and a dead feed was first noticed as a BLIND CYCLE warning logged
+        AFTER a naked short strangle was already open.
+
+        The universe comes from `capture_universe.build_capture_universe`,
+        which is the single authority: it selects REAL rows from the exchange
+        symbol master rather than formatting symbol strings, bands in index
+        POINTS rather than a strike count (the real master steps by 50 near
+        expiry and 1500 for LEAPS, so "20 strikes each side" means different
+        widths on different expiries), and resolves expiry ROLES instead of
+        taking `expiryData[0]` on faith.
+
+        Never raises: a universe that cannot be built leaves `_universe` None,
+        which the coverage gate reads as UNKNOWN and refuses to enter on.
+        """
+        if self._universe is not None or self._universe_error is not None:
+            return
+        if self._tick_feed is None:
+            # No live feed configured at all (replay / paper_synthetic). This
+            # is a deliberately offline source, not a silent feed, so the
+            # coverage gate does not apply -- recorded rather than implied.
+            self._universe_error = "NOT_APPLICABLE: no websocket tick feed configured"
+            return
+
+        spot = getattr(self, "_last_spot", None)
+        if not spot:
+            self._universe_error = "NO_SPOT: universe cannot be centred without a spot"
+            return
+
+        try:
+            import datetime as _dt
+            from pathlib import Path as _Path
+
+            from bujji.broker.instrument_master import InstrumentMaster
+            from bujji.capture_universe.builder import build_capture_universe
+
+            master = InstrumentMaster(REPO_ROOT / "data" / "instrument_master", self._logger)
+            # `_rows_for` is the accessor the existing caller uses
+            # (scripts/build_capture_universe.py:58). Kept identical rather
+            # than adding a public alias in this commit.
+            rows = master._rows_for(self._session_cfg.get("underlying", "NIFTY"))
+            universe = build_capture_universe(
+                rows, float(spot), _dt.date.fromisoformat(self._as_of_date))
+        except Exception as exc:  # noqa: BLE001 -- an unbuilt universe blocks entry, never ends the session
+            self._universe_error = f"BUILD_FAILED: {type(exc).__name__}: {exc}"
+            self._logger.critical(
+                "UNIVERSE -- could not be constructed (%s). No entry can be "
+                "permitted: coverage of an unknown universe cannot be proven.",
+                self._universe_error)
+            return
+
+        self._universe = universe
+        symbols = list(universe.symbols)
+        try:
+            self._tick_feed.subscribe(symbols)
+            self._universe_requested = tuple(symbols)
+        except Exception as exc:  # noqa: BLE001
+            self._universe_error = f"SUBSCRIBE_FAILED: {type(exc).__name__}: {exc}"
+            self._logger.critical(
+                "UNIVERSE -- subscribe failed for %d symbols (%s). Entry blocked.",
+                len(symbols), self._universe_error)
+            return
+
+        self._governor_result_summary["universe"] = {
+            "symbols": len(symbols),
+            "atm_strike": getattr(universe, "atm_strike", None),
+            "spot": getattr(universe, "spot", None),
+            "roles_resolved": list(getattr(universe, "roles_resolved", ()) or ()),
+            "expiries_available": getattr(universe, "expiries_available", None),
+            "expiries_excluded": getattr(universe, "expiries_excluded", None),
+        }
+        self._logger.info(
+            "UNIVERSE -- %d symbols subscribed BEFORE entry (ATM %s, roles %s).",
+            len(symbols), getattr(universe, "atm_strike", None),
+            ",".join(getattr(universe, "roles_resolved", ()) or ()))
+
+    def _universe_coverage_permits_entry(self) -> bool:
+        """SUBSCRIBED IS NOT COVERED. Only a tick proves the pipe carries data.
+
+        A request that was sent, accepted and then delivered nothing looks
+        exactly like a symbol that is not trading. Both are silence, and
+        silence is UNKNOWN -- never coverage.
+        """
+        from bujji.production_runtime.universe_coverage import evaluate_coverage
+
+        if self._universe_error is not None:
+            if self._universe_error.startswith("NOT_APPLICABLE"):
+                self._governor_result_summary["universe_coverage"] = {
+                    "state": "NOT_APPLICABLE", "detail": self._universe_error}
+                return True
+            self._governor_result_summary["universe_coverage"] = {
+                "state": "UNKNOWN", "detail": self._universe_error}
+            self._governor_result_summary["entry_blocked_by"] = "UNIVERSE_COVERAGE"
+            self._logger.critical("ENTRY BLOCKED -- universe unusable: %s",
+                                  self._universe_error)
+            return False
+
+        intended = list(getattr(self._universe, "symbols", ()) or ())
+        max_age = float(
+            (self._config.get("providers", {}).get("tick_source", {}) or {})
+            .get("max_tick_age_seconds", 90.0))
+        ages = {}
+        for symbol in intended:
+            try:
+                ages[symbol] = self._tick_feed.tick_age_seconds(symbol)
+            except Exception:  # noqa: BLE001 -- unreadable is silent, never fresh
+                ages[symbol] = None
+
+        verdict = evaluate_coverage(intended, self._universe_requested, ages, max_age)
+        self._governor_result_summary["universe_coverage"] = verdict.as_dict()
+        if verdict.permits_entry:
+            self._logger.info("UNIVERSE COVERAGE -- %s: %d/%d symbols fresh.",
+                              verdict.state, verdict.fresh, verdict.intended)
+            return True
+
+        self._governor_result_summary["entry_blocked_by"] = "UNIVERSE_COVERAGE"
+        self._logger.critical(
+            "ENTRY BLOCKED -- universe coverage %s (%d/%d fresh): %s",
+            verdict.state, verdict.fresh, verdict.intended, " | ".join(verdict.reasons))
+        return False
+
     def _data_quality_permits_entry(self) -> bool:
         """Fail closed WHERE THE GATE APPLIES, and say so plainly where it
         does not.
@@ -2043,6 +2175,15 @@ class OptionsOSRunner:
         passing silently: a session trading without a data-quality boundary
         is a fact an operator must be able to read afterwards.
         """
+        # UNIVERSE FIRST. Subscribe to the whole configured universe and prove
+        # it is actually ticking BEFORE anything selects a strike. Placed at
+        # the top of the choke point BOTH entry modes share, ahead of position
+        # truth and data quality, because a universe that is not covered makes
+        # every later judgement rest on prices that never arrived.
+        self._ensure_universe_subscribed()
+        if not self._universe_coverage_permits_entry():
+            return False
+
         # ESTABLISH POSITION TRUTH BEFORE THE FIRST ENTRY, ON DEMAND.
         #
         # `_continuous_session` reconciles at the top of every cycle;
