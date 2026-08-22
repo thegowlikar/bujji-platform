@@ -2248,6 +2248,28 @@ class OptionsOSRunner:
             len(symbols), getattr(universe, "atm_strike", None),
             ",".join(getattr(universe, "roles_resolved", ()) or ()))
 
+    def _block_entry(self, reason: str) -> None:
+        """Record an entry refusal so the SESSION VERDICT can see it.
+
+        `entry_blocked_by` was written at six sites and read at NONE.
+        `session_safety_verdict` -- the only consumer of this summary, and the
+        thing that sets the process exit code -- read
+        `position_truth_established` and never this. So a session could be
+        turned away from every entry it attempted, exit 0, and leave systemd
+        green and the operator's phone silent. That is the 2026-08-21 shape.
+
+        BOTH FORMS ARE KEPT. `entry_blocked_by` is LAST-WRITE-WINS across up
+        to 96 decision cycles, which on its own cannot answer "did this
+        session ever refuse for a reason that means it was blind?" -- a defect
+        at cycle 5 followed by a different refusal at cycle 90 leaves only the
+        later one showing. `entry_blocked_reasons` accumulates, and that is
+        what the verdict grades.
+        """
+        self._governor_result_summary["entry_blocked_by"] = reason
+        recorded = self._governor_result_summary.setdefault("entry_blocked_reasons", [])
+        if reason not in recorded:
+            recorded.append(reason)
+
     def _max_tick_age(self) -> float:
         return float(
             (self._config.get("providers", {}).get("tick_source", {}) or {})
@@ -2344,7 +2366,7 @@ class OptionsOSRunner:
         band = selection_band(chain, self._as_of_date)
         self._governor_result_summary["selection_band"] = band.as_dict()
         if not band.usable:
-            self._governor_result_summary["entry_blocked_by"] = "SELECTION_BAND"
+            self._block_entry("SELECTION_BAND")
             self._logger.critical(
                 "ENTRY BLOCKED -- the eligible selection band could not be "
                 "determined (%s): %s", band.state, band.detail)
@@ -2373,7 +2395,7 @@ class OptionsOSRunner:
                 "missing_sample": unsubscribed[:10],
                 "band": len(required),
             }
-            self._governor_result_summary["entry_blocked_by"] = "BAND_NOT_SUBSCRIBED"
+            self._block_entry("BAND_NOT_SUBSCRIBED")
             self._logger.critical(
                 "ENTRY BLOCKED -- %d of %d contracts in the eligible selection band "
                 "were never subscribed (e.g. %s). The capture universe does not "
@@ -2395,7 +2417,7 @@ class OptionsOSRunner:
                 verdict.state, verdict.intended, band.expiry, self._max_tick_age())
             return True
 
-        self._governor_result_summary["entry_blocked_by"] = "BAND_COVERAGE"
+        self._block_entry("BAND_COVERAGE")
         self._logger.critical(
             "ENTRY BLOCKED -- band coverage %s (%d/%d fresh at expiry %s): %s",
             verdict.state, verdict.fresh, verdict.intended, band.expiry,
@@ -2459,7 +2481,7 @@ class OptionsOSRunner:
             self._logger.warning(
                 "ENTRY REFUSED -- position reconciliation %s. %s",
                 getattr(last, "verdict", "UNKNOWN"), getattr(last, "detail", ""))
-            self._governor_result_summary["entry_blocked_by"] = "POSITION_RECONCILIATION"
+            self._block_entry("POSITION_RECONCILIATION")
             return False
 
         verdict = getattr(self, "_data_quality", None)
@@ -2479,14 +2501,13 @@ class OptionsOSRunner:
                 "(origin=%s) but no data-quality verdict exists for this cycle. A "
                 "gate that permits when it has not assessed is not a gate.",
                 self._intelligence_origin)
-            self._governor_result_summary["entry_blocked_by"] = "DATA_QUALITY_NOT_ASSESSED"
+            self._block_entry("DATA_QUALITY_NOT_ASSESSED")
             return False
         if not verdict.may_trade:
             self._logger.warning(
                 "ENTRY REFUSED -- data quality %s. reasons=%s missing=%s",
                 verdict.quality, list(verdict.reasons), list(verdict.missing_fields))
-            self._governor_result_summary["entry_blocked_by"] = (
-                f"DATA_QUALITY_{verdict.quality}")
+            self._block_entry(f"DATA_QUALITY_{verdict.quality}")
             self._governor_result_summary["data_quality_reasons"] = list(verdict.reasons)
             return False
         return True
@@ -2628,8 +2649,13 @@ class OptionsOSRunner:
                 "(%s). Constructing an order from a stale book would pick strikes "
                 "against a spot the market has already left.", exc)
             self._governor_result_summary["entry_allowed"] = False
+            # A SECOND write-only key, singular, used only here -- so this
+            # refusal was invisible even to a reader that knew about
+            # `entry_blocked_by`. The detail is kept; the classification is
+            # now recorded where the verdict looks.
             self._governor_result_summary["entry_blocked_reason"] = (
                 f"STALE_MARKET_DATA: {exc}")
+            self._block_entry("STALE_MARKET_DATA")
             return False
 
         if chain_age is not None:

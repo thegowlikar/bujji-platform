@@ -207,6 +207,21 @@ class TestTheRunnerActuallyRefuses:
         def _record_universe_coverage(self):
             return True
 
+        def _block_entry(self, reason):
+            """Mirrors the real recorder, including the ACCUMULATED key.
+
+            A stub that wrote only `entry_blocked_by` would let these tests
+            pass while the session verdict -- which grades
+            `entry_blocked_reasons`, because the singular key is
+            last-write-wins across up to 96 cycles -- saw nothing. The gate
+            would be tested and the alarm still silent.
+            """
+            self._governor_result_summary["entry_blocked_by"] = reason
+            recorded = self._governor_result_summary.setdefault(
+                "entry_blocked_reasons", [])
+            if reason not in recorded:
+                recorded.append(reason)
+
         def _reconcile_broker_positions(self, stage_label):  # pragma: no cover
             raise AssertionError(
                 "reconciliation should not be re-run: this stub already has "
