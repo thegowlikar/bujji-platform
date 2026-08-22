@@ -45,6 +45,59 @@ _POSITION_KEYS = ("canonical_position_id",)
 _PROVES_FLAT = "FLAT"
 
 
+# A REFUSAL TO TRADE IS NOT A FAULT. THESE REFUSALS ARE.
+#
+# Most of Bujji's no-trade days are the system working. The stability gate
+# declines the large majority of cycles by design -- the production config
+# says so in its own words: "NO_TRADE remains the EXPECTED majority verdict --
+# that is the gate reading the market honestly, not a defect" -- and "no
+# strategy for this regime" returns without recording any reason at all.
+# Those paths write NOTHING, so they cannot reach this rule, and an operator
+# is never woken for a quiet market.
+#
+# What DOES reach it is a session that got as far as the entry choke point and
+# was turned away because it could not SEE: a dead feed, an unreadable
+# account, a universe that cannot cover the band, a book too old to price.
+#
+# THIS WIDENS THIS MODULE'S QUESTION, deliberately, from "did this session
+# prove the book is closed?" to "is this session's silence trustworthy?" The
+# justification is the same one already accepted for
+# `position_truth_established` below: a session that opened nothing because it
+# was blind has not thereby proven anything. Its silence is not evidence.
+_BLINDNESS_REFUSALS = {
+    "SELECTION_BAND":
+        "the eligible selection band could not be determined from the chain",
+    "BAND_NOT_SUBSCRIBED":
+        "contracts the strategy could have chosen were never subscribed -- a "
+        "configuration mismatch that cannot be satisfied at runtime",
+    "BAND_COVERAGE":
+        "the contracts the strategy would have chosen from had no fresh ticks",
+    "POSITION_RECONCILIATION":
+        "the broker's account could not be read before entry",
+    "DATA_QUALITY_NOT_ASSESSED":
+        "a market snapshot should have been graded and was not",
+    "STALE_MARKET_DATA":
+        "the option chain was too old to construct an order from",
+}
+
+# `DATA_QUALITY_<quality>` is composed at runtime from the verdict's own
+# label, so the exact strings cannot be enumerated here. Graded-and-refused
+# is a data-path failure whatever the label says.
+_BLINDNESS_PREFIXES = ("DATA_QUALITY_",)
+
+
+def _blindness_detail(reason: str):
+    """The operator-facing explanation for a refusal, or None if this refusal
+    is not evidence of blindness."""
+    if reason in _BLINDNESS_REFUSALS:
+        return _BLINDNESS_REFUSALS[reason]
+    for prefix in _BLINDNESS_PREFIXES:
+        if reason.startswith(prefix):
+            return (f"the market-data quality gate graded the snapshot and refused "
+                    f"({reason})")
+    return None
+
+
 @dataclass(frozen=True)
 class SessionSafetyVerdict:
     """`safe=False` must become a non-zero process exit, never a warning."""
@@ -105,6 +158,20 @@ def evaluate_session_safety(summary: Dict[str, Any]) -> SessionSafetyVerdict:
             "position truth could not be established -- an entry was considered "
             "while the broker's account could not be read, so exposure this "
             "process is not managing may exist")
+
+    # A SESSION THAT NEVER SAW THE MARKET DID NOT DECLINE TO TRADE -- IT
+    # COULD NOT. Accumulated across every cycle, because `entry_blocked_by`
+    # alone is last-write-wins and a blind cycle 5 is invisible behind a
+    # different refusal at cycle 90.
+    recorded = summary.get("entry_blocked_reasons")
+    if isinstance(recorded, (list, tuple)):
+        for reason in recorded:
+            detail = _blindness_detail(str(reason))
+            if detail:
+                truth_reasons.append(
+                    f"entry was refused ({reason}): {detail} -- this session was "
+                    f"blind, and a blind session's silence is not evidence that "
+                    f"nothing needed doing")
 
     had_position = _position_existed(summary)
     if not had_position:

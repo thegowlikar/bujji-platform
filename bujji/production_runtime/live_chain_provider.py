@@ -85,7 +85,7 @@ class LiveChainProvider(MarketDataProvider):
 
     def __init__(self, broker, underlying: str = "NIFTY", strike_count: int = 20,
                  logger=None, refresh_after_seconds: float | None = None,
-                 max_age_seconds: float | None = None, clock=None) -> None:
+                 max_age_seconds: float | None = None, clock=None, expiry_resolver=None) -> None:
         self._broker = broker
         self._underlying = underlying
         self._strike_count = strike_count
@@ -114,6 +114,9 @@ class LiveChainProvider(MarketDataProvider):
         import logging as _logging
 
         self._logger = logger or _logging.getLogger("bujji.live_chain_provider")
+        # symbol -> ISO expiry, from the instrument master. None means the
+        # caller wired no authority and the uniform stamp is all we have.
+        self._expiry_resolver = expiry_resolver
         self._chain: Optional[Sequence] = None
         self._spot: Optional[float] = None
 
@@ -234,12 +237,24 @@ class LiveChainProvider(MarketDataProvider):
         data = raw.get("data") or {}
         rows = data.get("optionsChain") or []
 
-        # The chain returned for an unspecified timestamp is the NEAREST
-        # expiry, which is `expiryData[0]`. Reading it from the payload
-        # rather than parsing the option symbol avoids depending on
-        # FYERS's symbol-encoding scheme.
+        # THE EXPIRY IS NOT READ OFF POSITION 0 ANY MORE.
+        #
+        # This took `expiryData[0]` and stamped it on EVERY row, on the stated
+        # grounds that "the chain returned for an unspecified timestamp is the
+        # NEAREST expiry". Two assumptions were hiding in that one subscript:
+        # that FYERS returns `expiryData` sorted, and that the rows below
+        # actually belong to whichever entry happens to sit first. Neither is
+        # verified anywhere, and the operator's brief forbids `expiryData[0]`
+        # on the trading path for exactly this reason. If it is ever wrong,
+        # every row in the book is mislabelled at once and `select_expiry`
+        # then "chooses" an expiry whose contracts are somebody else's.
+        #
+        # The nearest expiry is now COMPUTED from all of them rather than
+        # taken by position, so the sortedness assumption is gone.
         expiry_entries = data.get("expiryData") or []
-        expiry = _to_iso_expiry(expiry_entries[0].get("date")) if expiry_entries else None
+        parsed = [iso for iso in (_to_iso_expiry((e or {}).get("date"))
+                                  for e in expiry_entries) if iso]
+        expiry = min(parsed) if parsed else None
 
         spot = None
         for row in rows:
@@ -249,6 +264,7 @@ class LiveChainProvider(MarketDataProvider):
 
         chain = []
         dropped_no_symbol = []
+        dropped_unknown_symbol = []
         for row in rows:
             option_type = row.get("option_type")
             strike = row.get("strike_price")
@@ -276,10 +292,25 @@ class LiveChainProvider(MarketDataProvider):
                 # quietly shorter.
                 dropped_no_symbol.append(f"{option_type}{int(strike)}")
                 continue
+            # PER-ROW EXPIRY FROM THE AUTHORITATIVE SOURCE, when one is
+            # available. `expiry` above is still one value stamped on every
+            # row; the instrument master knows each real contract's real
+            # expiry, so where a resolver is wired the row's own answer wins
+            # and the uniform stamp is only a fallback. A symbol the master
+            # does not list is DROPPED AND COUNTED rather than stamped with a
+            # borrowed expiry -- the same rule this builder already applies to
+            # a row with no symbol at all.
+            row_expiry = expiry
+            if self._expiry_resolver is not None:
+                resolved = self._expiry_resolver(row_symbol)
+                if resolved is None:
+                    dropped_unknown_symbol.append(row_symbol)
+                    continue
+                row_expiry = resolved
             chain.append(build_option_observation(
                 underlying=self._underlying,
                 instrument_symbol=row_symbol,
-                strike=float(strike), expiry=expiry or as_of_date, option_type=option_type,
+                strike=float(strike), expiry=row_expiry or as_of_date, option_type=option_type,
                 exchange="NSE", segment="FO", timestamp=as_of_date, resolution="SNAPSHOT",
                 # A live quote carries a traded price, not OHLC bars.
                 open_=None, high=None, low=None, close=close, settlement=None,

@@ -92,6 +92,14 @@ class ConfigurationError(Exception):
     patched with a guessed value."""
 
 
+# The NIFTY option strike grid, in index points. Passed EXPLICITLY to
+# `build_capture_universe` rather than relying on its default, and asserted
+# equal to that default by test_chain_band_is_contained_by_construction -- so
+# the tier arithmetic here and the universe the builder actually constructs
+# can never disagree silently about how wide a strike is.
+_UNIVERSE_GRID_STEP = 50
+
+
 class RunnerStage:
     STARTUP = "STARTUP"
     PRE_MARKET_CHECK = "PRE_MARKET_CHECK"
@@ -561,6 +569,10 @@ class OptionsOSRunner:
         # back to entry prices and says so -- see _current_leg_prices().
         self._price_provider = None
         self._tick_feed = None  # set only by tick_source.type=websocket
+        # UNIVERSE-FIRST SUBSCRIPTION (see _ensure_universe_subscribed).
+        self._universe = None
+        self._universe_requested = ()
+        self._universe_error = None
         self._priced_from_ticks_cycles = 0
         self._blind_cycles = 0
 
@@ -944,6 +956,9 @@ class OptionsOSRunner:
                 # is rejected there rather than silently accepted.
                 refresh_after_seconds=market_data_cfg.get("chain_refresh_after_seconds"),
                 max_age_seconds=market_data_cfg.get("chain_max_age_seconds"),
+                # WIRED, not merely available. Without this the resolver would
+                # be one more thing this codebase built and never called.
+                expiry_resolver=self._master_expiry_resolver(),
             )
         else:
             bhavcopy_path = market_data_cfg.get("bhavcopy_path")
@@ -1917,6 +1932,27 @@ class OptionsOSRunner:
             if self._attempt_entry(trend_regime, volatility_regime):
                 entered = True
                 break
+            # A REGISTERED ORPHAN IS A LIVE POSITION AND MUST NOT WAIT FOR
+            # THIS LOOP TO END.
+            #
+            # `_orphan_position_live` was written in three places and read in
+            # NONE -- its own comment says it is "what tells [continuous mode]
+            # a live position exists regardless", and nothing consulted it.
+            # This is the reader.
+            #
+            # It matters because this loop breaks at observe_until (15:30),
+            # not at entry_cutoff: past the cutoff it `continue`s, observing
+            # all day. So an orphan at 09:35 left naked legs sitting while the
+            # loop ran on, and `_position_management()` -- which follows the
+            # loop -- would then start at 15:30 with monitor_until already
+            # past (15:15) and mandatory_exit_time (15:15) already missed. It
+            # runs one pass before its own deadline check ends it.
+            if self._orphan_position_live:
+                self._logger.critical(
+                    "ORPHANED LEGS ARE LIVE -- leaving the entry loop at cycle %d so "
+                    "position management starts NOW rather than at observe_until.",
+                    cycles)
+                break
 
         # An ORPHANED partial entry is a live position even though
         # _attempt_entry returned False. Without this it was never managed at
@@ -2022,6 +2058,372 @@ class OptionsOSRunner:
         # homes and let them drift.
         self._attempt_entry(trend_regime, volatility_regime)
 
+    def _leg_tick_age(self, symbol):
+        """One symbol's newest-tick age in seconds, or None for never/unreadable.
+
+        THE STAGE-2 GATE'S FRESHNESS INPUT, injected rather than plumbed. The
+        trading-brain composition root deliberately holds no feed -- it owns
+        the PaperBroker, the journal and the clock -- so `process_entry_cycle`
+        cannot read tick ages itself. Passing this callable keeps the feed
+        dependency where it already lives (this runner) and leaves the gate's
+        policy pure.
+
+        None is not zero. An unreadable age is silence, and silence is never
+        treated as freshness.
+        """
+        if self._tick_feed is None:
+            return None
+        try:
+            return self._tick_feed.tick_age_seconds(symbol)
+        except Exception:  # noqa: BLE001 -- unreadable is silent, never fresh
+            return None
+
+    def _master_expiry_resolver(self):
+        """symbol -> ISO expiry, from the FYERS instrument master.
+
+        WHY THE MASTER AND NOT THE PAYLOAD. The chain response carries ONE
+        `expiryData` list and no per-row expiry, so `_build` had to stamp a
+        single value on every row. The master knows each real contract's real
+        expiry, which makes the stamp a verified per-row fact instead of an
+        inference from a subscript.
+
+        LAZY, so constructing the provider does not pay a 14 MB CSV read, and
+        so a session that never fetches a chain never loads it at all.
+
+        FAILS CLOSED, DELIBERATELY. If the master cannot be read, every symbol
+        resolves to None, every row is dropped, and `_fetch` refuses with
+        "produced zero usable rows" rather than trading on unverified expiries.
+        That is consistent with the rest of the runner: the master is already a
+        hard startup requirement -- lot size refuses to be guessed from YAML
+        (2026-07-19 audit) -- so its absence here is an anomaly, not a mode.
+        """
+        state = {"rows": None, "failed": False}
+
+        def resolve(symbol):
+            if state["rows"] is None and not state["failed"]:
+                try:
+                    from bujji.broker.instrument_master import InstrumentMaster
+
+                    master = InstrumentMaster(
+                        REPO_ROOT / "data" / "instrument_master", self._logger)
+                    underlying = self._session_cfg.get("underlying", "NIFTY")
+                    state["rows"] = {
+                        row.symbol: row.expiry_date.isoformat()
+                        for row in master._rows_for(underlying)
+                    }
+                    self._logger.info(
+                        "CHAIN EXPIRY -- %d %s contracts loaded from the instrument "
+                        "master; each chain row's expiry is resolved against it "
+                        "rather than stamped from expiryData.",
+                        len(state["rows"]), underlying)
+                except Exception as exc:  # noqa: BLE001 -- see docstring
+                    state["failed"] = True
+                    self._logger.critical(
+                        "CHAIN EXPIRY -- the instrument master could not be read "
+                        "(%s: %s). Every chain row will be dropped and the session "
+                        "will refuse rather than trade on unverified expiries.",
+                        type(exc).__name__, exc)
+            if state["failed"] or not state["rows"]:
+                return None
+            return state["rows"].get(symbol)
+
+        return resolve
+
+    def _ensure_universe_subscribed(self) -> None:
+        """Build the session universe ONCE and subscribe to all of it.
+
+        THE ORDER THIS FIXES. Subscription used to be a CONSEQUENCE of
+        trading: `WebsocketTickProvider.get_prices()` subscribes
+        `list(contracts_by_symbol)`, and that dict is populated only after the
+        entry orders fill. So the session could select strikes, size them and
+        place them without a single live price having arrived for anything --
+        and a dead feed was first noticed as a BLIND CYCLE warning logged
+        AFTER a naked short strangle was already open.
+
+        The universe comes from `capture_universe.build_capture_universe`,
+        which is the single authority: it selects REAL rows from the exchange
+        symbol master rather than formatting symbol strings, bands in index
+        POINTS rather than a strike count (the real master steps by 50 near
+        expiry and 1500 for LEAPS, so "20 strikes each side" means different
+        widths on different expiries), and resolves expiry ROLES instead of
+        taking `expiryData[0]` on faith.
+
+        Never raises: a universe that cannot be built leaves `_universe` None,
+        which the coverage gate reads as UNKNOWN and refuses to enter on.
+        """
+        if self._universe is not None or self._universe_error is not None:
+            return
+        if self._tick_feed is None:
+            # No live feed configured at all (replay / paper_synthetic). This
+            # is a deliberately offline source, not a silent feed, so the
+            # coverage gate does not apply -- recorded rather than implied.
+            self._universe_error = "NOT_APPLICABLE: no websocket tick feed configured"
+            return
+
+        spot = getattr(self, "_last_spot", None)
+        if not spot:
+            self._universe_error = "NO_SPOT: universe cannot be centred without a spot"
+            return
+
+        try:
+            import datetime as _dt
+            from pathlib import Path as _Path
+
+            from bujji.broker.instrument_master import InstrumentMaster
+            from bujji.capture_universe.builder import (
+                DEFAULT_TIERS, ROLE_FRONT, ROLE_SECOND, build_capture_universe,
+            )
+
+            master = InstrumentMaster(REPO_ROOT / "data" / "instrument_master", self._logger)
+            # `_rows_for` is the accessor the existing caller uses
+            # (scripts/build_capture_universe.py:58). Kept identical rather
+            # than adding a public alias in this commit.
+            rows = master._rows_for(self._session_cfg.get("underlying", "NIFTY"))
+
+            # CONTAINMENT BY CONSTRUCTION, not by coincidence.
+            #
+            # The eligible selection band is bounded by the chain FETCH
+            # (`providers.market_data.strike_count`), while the subscription is
+            # bounded by this tier table. They are configured independently, so
+            # today's fit -- band +/-1000 inside a +/-1500 front tier -- is an
+            # accident of two numbers, not a guarantee. Raising strike_count
+            # alone would silently push band contracts outside the universe and
+            # the band gate would refuse the session every day with
+            # BAND_NOT_SUBSCRIBED.
+            #
+            # Deriving the floor from the same knob removes the coincidence.
+            #
+            # FRONT AND SECOND ONLY. `select_expiry` picks the nearest expiry
+            # with DTE >= 1, which is FRONT, or SECOND on expiry day when FRONT
+            # is the 0-DTE contract. MONTHLY can never be that expiry -- it
+            # deliberately reaches FORWARD past any weekly already taken -- so
+            # widening it would subscribe symbols no selection can ever range
+            # over. Today the floor is 1000 and neither tier moves.
+            strike_count = int(
+                (self._config.get("providers", {}).get("market_data", {}) or {})
+                .get("strike_count", 20))
+            band_points = strike_count * _UNIVERSE_GRID_STEP
+            tiers = dict(DEFAULT_TIERS)
+            for role in (ROLE_FRONT, ROLE_SECOND):
+                if tiers.get(role, 0) < band_points:
+                    self._logger.warning(
+                        "UNIVERSE -- widening the %s tier from %d to %d index points so "
+                        "it covers the %d-strike chain the selector will range over.",
+                        role, tiers.get(role, 0), band_points, strike_count)
+                    tiers[role] = band_points
+
+            universe = build_capture_universe(
+                rows, float(spot), _dt.date.fromisoformat(self._as_of_date),
+                tiers=tiers, step=_UNIVERSE_GRID_STEP)
+        except Exception as exc:  # noqa: BLE001 -- an unbuilt universe blocks entry, never ends the session
+            self._universe_error = f"BUILD_FAILED: {type(exc).__name__}: {exc}"
+            self._logger.critical(
+                "UNIVERSE -- could not be constructed (%s). No entry can be "
+                "permitted: coverage of an unknown universe cannot be proven.",
+                self._universe_error)
+            return
+
+        self._universe = universe
+        symbols = list(universe.symbols)
+        try:
+            self._tick_feed.subscribe(symbols)
+            self._universe_requested = tuple(symbols)
+        except Exception as exc:  # noqa: BLE001
+            self._universe_error = f"SUBSCRIBE_FAILED: {type(exc).__name__}: {exc}"
+            self._logger.critical(
+                "UNIVERSE -- subscribe failed for %d symbols (%s). Entry blocked.",
+                len(symbols), self._universe_error)
+            return
+
+        self._governor_result_summary["universe"] = {
+            "symbols": len(symbols),
+            "atm_strike": getattr(universe, "atm_strike", None),
+            "spot": getattr(universe, "spot", None),
+            "roles_resolved": list(getattr(universe, "roles_resolved", ()) or ()),
+            "expiries_available": getattr(universe, "expiries_available", None),
+            "expiries_excluded": getattr(universe, "expiries_excluded", None),
+        }
+        self._logger.info(
+            "UNIVERSE -- %d symbols subscribed BEFORE entry (ATM %s, roles %s).",
+            len(symbols), getattr(universe, "atm_strike", None),
+            ",".join(getattr(universe, "roles_resolved", ()) or ()))
+
+    def _block_entry(self, reason: str) -> None:
+        """Record an entry refusal so the SESSION VERDICT can see it.
+
+        `entry_blocked_by` was written at six sites and read at NONE.
+        `session_safety_verdict` -- the only consumer of this summary, and the
+        thing that sets the process exit code -- read
+        `position_truth_established` and never this. So a session could be
+        turned away from every entry it attempted, exit 0, and leave systemd
+        green and the operator's phone silent. That is the 2026-08-21 shape.
+
+        BOTH FORMS ARE KEPT. `entry_blocked_by` is LAST-WRITE-WINS across up
+        to 96 decision cycles, which on its own cannot answer "did this
+        session ever refuse for a reason that means it was blind?" -- a defect
+        at cycle 5 followed by a different refusal at cycle 90 leaves only the
+        later one showing. `entry_blocked_reasons` accumulates, and that is
+        what the verdict grades.
+        """
+        self._governor_result_summary["entry_blocked_by"] = reason
+        recorded = self._governor_result_summary.setdefault("entry_blocked_reasons", [])
+        if reason not in recorded:
+            recorded.append(reason)
+
+    def _max_tick_age(self) -> float:
+        return float(
+            (self._config.get("providers", {}).get("tick_source", {}) or {})
+            .get("max_tick_age_seconds", 90.0))
+
+    def _tick_ages_for(self, symbols) -> Dict[str, Optional[float]]:
+        """symbol -> seconds since its newest tick. Unreadable is None, never 0."""
+        ages: Dict[str, Optional[float]] = {}
+        for symbol in symbols:
+            try:
+                ages[symbol] = self._tick_feed.tick_age_seconds(symbol)
+            except Exception:  # noqa: BLE001 -- unreadable is silent, never fresh
+                ages[symbol] = None
+        return ages
+
+    def _record_universe_coverage(self) -> None:
+        """Grade the WIDE capture universe, and never block on it.
+
+        THIS USED TO BLOCK, AND THAT WAS THE RULE INVERTED (operator decision
+        2026-08-22). It required a fresh tick from every one of ~242 symbols
+        before any entry. The tiers are drawn on OPEN INTEREST and are
+        deliberately wider than trading alone justifies --
+        `capture_universe.builder`'s own measurement records six of eighteen
+        expiries trading zero contracts all day -- so one legitimately quiet
+        far strike refused the whole session. A naturally inactive contract is
+        silence, and silence out there proves nothing about the feed.
+
+        The operator's rule: capture wide, require narrow. The wide universe
+        is still evaluated and still WRITTEN, because "which symbols went
+        quiet today" is exactly the evidence the tick journal and the Gate 1
+        measurement need. It simply is not a veto. What vetoes is
+        `_band_coverage_permits_entry`, scoped to the contracts the decision
+        actually rests on.
+        """
+        from bujji.production_runtime.universe_coverage import evaluate_coverage
+
+        if self._universe_error is not None:
+            state = ("NOT_APPLICABLE" if self._universe_error.startswith("NOT_APPLICABLE")
+                     else "UNKNOWN")
+            self._governor_result_summary["universe_coverage"] = {
+                "state": state, "blocking": False, "detail": self._universe_error}
+            return
+
+        intended = list(getattr(self._universe, "symbols", ()) or ())
+        verdict = evaluate_coverage(intended, self._universe_requested,
+                                    self._tick_ages_for(intended), self._max_tick_age())
+        payload = verdict.as_dict()
+        # RECORDED, NOT ENFORCED -- and the artifact says so in its own words,
+        # so a later reader cannot mistake a wide-universe verdict for a veto.
+        payload["blocking"] = False
+        self._governor_result_summary["universe_coverage"] = payload
+        self._logger.info(
+            "UNIVERSE COVERAGE (recorded, not blocking) -- %s: %d/%d fresh, "
+            "%d silent, %d stale.",
+            verdict.state, verdict.fresh, verdict.intended,
+            len(verdict.silent), len(verdict.stale))
+
+    def _band_coverage_permits_entry(self, chain) -> bool:
+        """THE BLOCKING SCOPE: every contract the selector may choose from.
+
+        The operator's rule, verbatim: "Before Bujji selects a strike, it must
+        have fresh market data for the underlying, VIX where relevant, and
+        every contract in the configured eligible selection band -- not merely
+        a pair it has not selected yet."
+
+        NOT MERELY THE LEGS. `_build_strike_evidence` ranks the whole band and
+        `_candidates_for_type` picks from it, so a stale price on a contract
+        that is NOT chosen still corrupts the choice: it changes which strike
+        looked closest to the target delta. Checking only the chosen legs would
+        validate the answer while leaving the question corrupt.
+
+        VIX IS NOT REQUIRED TODAY, and that is a measured claim rather than an
+        omission. `bujji_options_os_runner.py` never reads VIX; the production
+        regime path constructs `vix=VixSnapshot(value=None)` and lists "vix" in
+        its own `_ABSENT` tuple (bujji/regime_stability/warmup.py). Nothing in
+        selection, sizing or risk consumes it, so by the operator's own
+        relaxation it cannot block a decision that never relied on it.
+        `test_vix_is_still_not_an_entry_input` fails the day that stops being
+        true, which is what keeps this an assertion instead of an assumption.
+        """
+        from bujji.capture_universe.builder import KIND_SPOT
+        from bujji.production_runtime.selection_band import selection_band
+        from bujji.production_runtime.universe_coverage import evaluate_coverage
+
+        # NO FEED IS NOT A SILENT FEED. Replay and store sources have no
+        # websocket by design; there is no per-symbol evidence to demand.
+        # Mirrors the universe gate rather than implying the question away.
+        if self._universe_error is not None and \
+                self._universe_error.startswith("NOT_APPLICABLE"):
+            self._governor_result_summary["band_coverage"] = {
+                "state": "NOT_APPLICABLE", "detail": self._universe_error}
+            return True
+
+        band = selection_band(chain, self._as_of_date)
+        self._governor_result_summary["selection_band"] = band.as_dict()
+        if not band.usable:
+            self._block_entry("SELECTION_BAND")
+            self._logger.critical(
+                "ENTRY BLOCKED -- the eligible selection band could not be "
+                "determined (%s): %s", band.state, band.detail)
+            return False
+
+        # THE UNDERLYING IS PART OF THE DECISION, not context around it: every
+        # delta in `_build_strike_evidence` is computed against spot, so a
+        # stale spot mis-ranks the entire band at once.
+        required = list(band.symbols)
+        for inst in (getattr(self._universe, "instruments", ()) or ()):
+            if getattr(inst, "kind", None) == KIND_SPOT and inst.symbol not in required:
+                required.append(inst.symbol)
+
+        # CONTAINMENT IS CHECKED, NOT ASSUMED. The band comes from the chain
+        # FYERS returns; the subscription comes from the instrument master.
+        # The two agree today (verified byte-identical across every live
+        # expiry), but they are independently configured -- `strike_count`
+        # widens the band, the tier table widens the universe -- so a band
+        # symbol that was never subscribed is a CONFIGURATION defect, and it
+        # would otherwise surface as a permanent, unexplained refusal.
+        unsubscribed = [s for s in required if s not in set(self._universe_requested)]
+        if unsubscribed:
+            self._governor_result_summary["band_coverage"] = {
+                "state": "BAND_NOT_SUBSCRIBED",
+                "missing_count": len(unsubscribed),
+                "missing_sample": unsubscribed[:10],
+                "band": len(required),
+            }
+            self._block_entry("BAND_NOT_SUBSCRIBED")
+            self._logger.critical(
+                "ENTRY BLOCKED -- %d of %d contracts in the eligible selection band "
+                "were never subscribed (e.g. %s). The capture universe does not "
+                "cover the band the selector ranges over; this gate cannot be "
+                "satisfied until that is reconciled.",
+                len(unsubscribed), len(required), ", ".join(unsubscribed[:5]))
+            return False
+
+        verdict = evaluate_coverage(required, self._universe_requested,
+                                    self._tick_ages_for(required), self._max_tick_age())
+        payload = verdict.as_dict()
+        payload["blocking"] = True
+        payload["expiry"] = band.expiry
+        self._governor_result_summary["band_coverage"] = payload
+        if verdict.permits_entry:
+            self._logger.info(
+                "BAND COVERAGE -- %s: all %d eligible contracts at expiry %s are "
+                "fresh within %.0fs.",
+                verdict.state, verdict.intended, band.expiry, self._max_tick_age())
+            return True
+
+        self._block_entry("BAND_COVERAGE")
+        self._logger.critical(
+            "ENTRY BLOCKED -- band coverage %s (%d/%d fresh at expiry %s): %s",
+            verdict.state, verdict.fresh, verdict.intended, band.expiry,
+            " | ".join(verdict.reasons))
+        return False
+
     def _data_quality_permits_entry(self) -> bool:
         """Fail closed WHERE THE GATE APPLIES, and say so plainly where it
         does not.
@@ -2043,6 +2445,14 @@ class OptionsOSRunner:
         passing silently: a session trading without a data-quality boundary
         is a fact an operator must be able to read afterwards.
         """
+        # UNIVERSE FIRST. Subscribe to the whole configured universe and prove
+        # it is actually ticking BEFORE anything selects a strike. Placed at
+        # the top of the choke point BOTH entry modes share, ahead of position
+        # truth and data quality, because a universe that is not covered makes
+        # every later judgement rest on prices that never arrived.
+        self._ensure_universe_subscribed()
+        self._record_universe_coverage()
+
         # ESTABLISH POSITION TRUTH BEFORE THE FIRST ENTRY, ON DEMAND.
         #
         # `_continuous_session` reconciles at the top of every cycle;
@@ -2071,7 +2481,7 @@ class OptionsOSRunner:
             self._logger.warning(
                 "ENTRY REFUSED -- position reconciliation %s. %s",
                 getattr(last, "verdict", "UNKNOWN"), getattr(last, "detail", ""))
-            self._governor_result_summary["entry_blocked_by"] = "POSITION_RECONCILIATION"
+            self._block_entry("POSITION_RECONCILIATION")
             return False
 
         verdict = getattr(self, "_data_quality", None)
@@ -2091,14 +2501,13 @@ class OptionsOSRunner:
                 "(origin=%s) but no data-quality verdict exists for this cycle. A "
                 "gate that permits when it has not assessed is not a gate.",
                 self._intelligence_origin)
-            self._governor_result_summary["entry_blocked_by"] = "DATA_QUALITY_NOT_ASSESSED"
+            self._block_entry("DATA_QUALITY_NOT_ASSESSED")
             return False
         if not verdict.may_trade:
             self._logger.warning(
                 "ENTRY REFUSED -- data quality %s. reasons=%s missing=%s",
                 verdict.quality, list(verdict.reasons), list(verdict.missing_fields))
-            self._governor_result_summary["entry_blocked_by"] = (
-                f"DATA_QUALITY_{verdict.quality}")
+            self._block_entry(f"DATA_QUALITY_{verdict.quality}")
             self._governor_result_summary["data_quality_reasons"] = list(verdict.reasons)
             return False
         return True
@@ -2240,14 +2649,32 @@ class OptionsOSRunner:
                 "(%s). Constructing an order from a stale book would pick strikes "
                 "against a spot the market has already left.", exc)
             self._governor_result_summary["entry_allowed"] = False
+            # A SECOND write-only key, singular, used only here -- so this
+            # refusal was invisible even to a reader that knew about
+            # `entry_blocked_by`. The detail is kept; the classification is
+            # now recorded where the verdict looks.
             self._governor_result_summary["entry_blocked_reason"] = (
                 f"STALE_MARKET_DATA: {exc}")
+            self._block_entry("STALE_MARKET_DATA")
             return False
 
         if chain_age is not None:
             self._governor_result_summary["chain_age_seconds_at_entry"] = round(chain_age, 1)
             self._logger.info("ENTRY -- option chain is %.0fs old at strike selection.",
                               chain_age)
+
+        # STAGE 1, AND IT HAS TO BE HERE. The band is derived from THIS chain
+        # -- the one `construct_trade` is about to range over -- so the gate
+        # cannot check a different set than the selector uses. That is only
+        # possible after the snapshot, which is why this is not up with the
+        # other data-quality checks.
+        #
+        # CHAIN AGE IS NOT PER-CONTRACT FRESHNESS. The age above is the age of
+        # the FETCH. A contract that has not traded in an hour returns an
+        # hour-old price inside a book fetched five seconds ago, and the bulk
+        # age cannot tell the two apart. Only per-symbol tick evidence can.
+        if not self._band_coverage_permits_entry(chain):
+            return False
 
         # PART 2 (shadow): record what the parity-based IV derivation WOULD
         # have chosen, beside what the canonical engine actually chooses.
@@ -2284,6 +2711,12 @@ class OptionsOSRunner:
             contracts_by_client_order_id={}, sides_by_client_order_id={},
             reference_prices_by_client_order_id={}, risk_by_position_group_id={},
             direction=session_cfg.get("direction"), expected_move_pct=session_cfg.get("expected_move_pct"),
+            # STAGE 2. `None` when there is no websocket at all (replay,
+            # store), which the gate records as NOT_APPLICABLE rather than
+            # reading every leg as silent. Wired here because a gate nothing
+            # calls is the defect class this campaign exists to remove.
+            tick_age_fn=(self._leg_tick_age if self._tick_feed is not None else None),
+            max_tick_age_seconds=self._max_tick_age(),
         )
         self._governor_result_summary["entry_allowed"] = entry_decision.allowed
         self._governor_result_summary["entry_filled"] = cycle_result.filled if cycle_result else False
@@ -2376,6 +2809,27 @@ class OptionsOSRunner:
 
         return True
 
+    def _mark_orphan_deployed(self) -> None:
+        """Move the session to POSITION_ACTIVE because orphaned legs may be live.
+
+        Kept separate from the `_orphan_position_live = True` assignments so
+        those stay literally where they are: two regression tests match on
+        that exact source text, and a refactor that moved them would break
+        the pins without changing behaviour.
+
+        NEVER RAISES. `_register_orphaned_legs` documents that it never
+        raises -- failing to register must not also lose the CRITICAL log
+        that names the orphans -- and this must not weaken that. An illegal
+        transition is reported and swallowed.
+        """
+        try:
+            self._governor.mark_position_deployed("orphaned_legs_registered")
+        except Exception as exc:  # noqa: BLE001 -- see docstring
+            self._logger.critical(
+                "ORPHAN STATE TRANSITION FAILED (%s: %s) -- the session may still "
+                "permit a SECOND entry on top of live orphaned legs. Inspect the "
+                "broker book NOW.", type(exc).__name__, exc)
+
     def _register_orphaned_legs(self, cycle_result, reason: str,
                                 label: str = "PARTIAL_ORPHANED") -> None:
         """Register legs that may be live positions, so management owns them.
@@ -2467,6 +2921,7 @@ class OptionsOSRunner:
             # returns True, and an orphan returns False. This flag is what
             # tells it a live position exists regardless.
             self._orphan_position_live = True
+            self._mark_orphan_deployed()
             self._entry_prices = entry_prices
             self._contracts_by_symbol = contracts
             self._logger.critical(
@@ -2487,6 +2942,7 @@ class OptionsOSRunner:
             # difference between a contained problem and an invisible one if
             # it does.
             self._orphan_position_live = True
+            self._mark_orphan_deployed()
             self._governor_result_summary["orphan_registration_failed"] = {
                 "reason": reason, "label": label,
                 "error": f"{type(exc).__name__}: {exc}",
@@ -3414,9 +3870,57 @@ class OptionsOSRunner:
                 break
             self._run_one_management_pass(f"POSITION_MANAGEMENT[{cycles + 1}]")
             cycles += 1
-            if not self._entry_prices:
-                self._logger.info("Position closed during management -- ending monitoring loop.")
-                break
+            # STAGE 3 TERMINATION: THE BROKER PROVES FLAT, OR MONITORING RUNS ON.
+            #
+            # The operator's rule (2026-08-22): once a position exists, its
+            # legs and hedges "remain mandatory until the broker proves the
+            # account is flat."
+            #
+            # This read `if not self._entry_prices` -- LOCAL state, and the
+            # weakest possible kind. `_entry_prices` is assigned at three
+            # sites and cleared at NONE, so after the first fill the branch
+            # was unreachable and its log line ("Position closed during
+            # management") could never be printed truthfully. Monitoring did
+            # continue to monitor_until, but by accident rather than by rule:
+            # the moment anything cleared that dict, the loop would have
+            # stopped watching a position on local belief alone.
+            #
+            # `_broker_reports_flat` is three-valued and already refuses to
+            # turn "I could not ask" into "there is nothing there". It had
+            # exactly ONE caller, on the emergency-close path. This is the
+            # second, and it is the one that governs the ordinary day.
+            #
+            # THE GUARD IS A PRECONDITION, AND IT SHORT-CIRCUITS THE READ.
+            # A first version broke on `flat is True` alone and the regression
+            # suite caught it: on a NO-TRADE day the broker is flat from the
+            # first pass, so monitoring stopped at cycle one -- defeating the
+            # reason this loop was made unconditional on 2026-08-21, that "the
+            # case reconciliation exists for is 'Bujji believes it holds
+            # nothing while the broker holds something'". A broker flat at
+            # 09:20 says nothing about a position appearing at 11:00.
+            #
+            # `_entry_prices` is sound HERE precisely because it is never
+            # cleared: it can only ever say "something was opened", never
+            # "nothing is open", so it cannot end monitoring on its own. That
+            # was the defect in the condition it replaces; here it only gates,
+            # and broker truth decides. Gating the READ as well keeps a
+            # no-trade day from making one broker call per cycle whose answer
+            # could never end the loop -- `_reconcile_broker_positions` at the
+            # top of each pass already carries the read such a day needs.
+            if self._entry_prices:
+                flat, flat_detail = self._broker_reports_flat()
+                if flat is True:
+                    self._logger.info(
+                        "POSITION_MANAGEMENT -- a position was opened and the broker "
+                        "now proves the account is flat (%s); ending monitoring.",
+                        flat_detail)
+                    break
+                if flat is None:
+                    # UNKNOWN IS NOT FLAT. Monitoring continues, loudly: a
+                    # position we cannot see is the case this loop exists for.
+                    self._logger.warning(
+                        "POSITION_MANAGEMENT -- could not establish flatness (%s). "
+                        "Monitoring CONTINUES: UNKNOWN is not flat.", flat_detail)
             now_t = self._clock().time()
             if now_t >= end_t:
                 self._logger.info("Reached monitor_until=%s -- ending monitoring loop.", end_time_s)

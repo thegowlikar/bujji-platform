@@ -64,8 +64,34 @@ def resolve_chain_contracts(
     lo, hi = spot - config.strike_range, spot + config.strike_range
     contracts: List[OptionContract] = []
     for _, strike, opt_type, symbol, lot_size in same_expiry:
-        if strike % config.strike_step != 0:
-            continue
+        # THE INSTRUMENT MASTER *IS* THE GRID.
+        #
+        # This used to read `if strike % config.strike_step != 0: continue`,
+        # with strike_step defaulting to 100. NIFTY's real grid step is 50, so
+        # the filter silently discarded every odd-50 strike. Measured against
+        # the live master on the nearest expiry: 160 strikes within the
+        # configured +/-2000 band, 80 kept, 80 DROPPED -- exactly half the
+        # chain, invisibly.
+        #
+        # It fed the intelligence/regime path, so the IV surface, the OI walls
+        # and every positioning read were computed from a chain with every
+        # other strike missing. Nothing reported it, because a filter that
+        # silently skips rows looks identical to a chain that is simply
+        # smaller.
+        #
+        # The rows here come from the exchange's own symbol master (see this
+        # module's docstring: "resolved OFFLINE from the cached instrument
+        # master CSV"). A strike present in the master for this expiry is, by
+        # construction, a real tradable contract on the real grid. Testing it
+        # against an ASSUMED step can only ever discard reality -- it cannot
+        # add safety, because a contract that does not exist was never in the
+        # list to begin with.
+        #
+        # `strike_step` is deliberately NOT removed from OptionChainConfig:
+        # market_state_builder/recovery.py:66 rebuilds persisted snapshots with
+        # `OptionChainConfig(**c["config"])`, so the field must keep
+        # deserialising. It is now used only to SIZE the best-effort OI request
+        # below, and even there the observed grid takes precedence.
         if strike < lo or strike > hi:
             continue
         contracts.append(
@@ -80,6 +106,25 @@ def resolve_chain_contracts(
     return expiry_date, contracts
 
 
+def _observed_strike_step(contracts, fallback: int) -> int:
+    """The real grid step, measured from the contracts the master gave us.
+
+    The smallest positive gap between distinct adjacent strikes. NIFTY returns
+    50, BANKNIFTY 100, and a future underlying returns whatever it actually
+    uses -- none of which this module has to know in advance.
+
+    Falls back to the configured step only when fewer than two distinct
+    strikes exist, where no gap can be measured. Never returns 0.
+    """
+    strikes = sorted({float(c.strike) for c in contracts})
+    if len(strikes) < 2:
+        return max(1, int(fallback))
+    gaps = [b - a for a, b in zip(strikes, strikes[1:]) if b > a]
+    if not gaps:
+        return max(1, int(fallback))
+    return max(1, int(round(min(gaps))))
+
+
 async def build_option_chain_snapshot(
     broker, underlying: str, spot: float, config: OptionChainConfig, cache_file: str = DEFAULT_CACHE_FILE,
 ) -> Optional[OptionChainSnapshot]:
@@ -89,7 +134,14 @@ async def build_option_chain_snapshot(
 
     oi_by_strike: Dict[float, Tuple[float, float]] = {}
     try:
-        strike_count = max(1, config.strike_range // config.strike_step)
+        # Derived from the strikes actually resolved, falling back to the
+        # configured step only when the grid cannot be observed (a single
+        # strike). With the old hardcoded 100 against NIFTY's real 50-point
+        # grid this asked for 2000/100 = 20 strikes each side -- +/-1000, not
+        # the +/-2000 the caller configured -- so OI was simply absent for the
+        # outer half of the band the legs were built from.
+        step = _observed_strike_step(contracts, fallback=config.strike_step)
+        strike_count = max(1, int(round(config.strike_range / step)))
         chain = await broker.get_option_chain(underlying, spot, strike_count=strike_count)
         if chain:
             for strike, ce_oi, pe_oi in chain:

@@ -180,16 +180,47 @@ class TestTheRunnerActuallyRefuses:
             self._data_quality = verdict
             self._intelligence_origin = origin
             self._governor_result_summary = {}
-            # POSITION TRUTH IS NOW A PRECONDITION OF THE SAME GATE.
+            # TWO PRECONDITIONS NOW SIT AHEAD OF THE DATA-QUALITY CLAUSE in
+            # `_data_quality_permits_entry`, and this stub declares both out of
+            # scope EXPLICITLY rather than either gate being loosened for it:
             #
-            # `_data_quality_permits_entry` establishes broker position truth
-            # on demand before grading data quality: an entry taken while the
-            # account cannot be read is unsafe regardless of how good the
-            # market data is. These tests are about the DATA-QUALITY verdict,
-            # so the stub models truth as already established and unblocked --
-            # stating the precondition rather than removing it.
+            #   universe coverage -- the whole configured universe must be
+            #     subscribed AND ticking before a strike is selected; a book
+            #     that never ticked makes every later judgement rest on prices
+            #     that never arrived.
+            #   position truth -- an entry taken while the broker account
+            #     cannot be read is unsafe however good the market data is.
+            #
+            # These tests exercise the DATA-QUALITY verdict only.
+            self._universe = None
+            self._universe_requested = ()
+            self._universe_error = "NOT_APPLICABLE: stub -- universe not under test"
+            self._tick_feed = None
             self._last_reconciliation = object()
             self._reconciliation_blocks_entry = False
+
+        # Borrowed off the real class, so the stub must answer the calls that
+        # gate makes.
+        def _ensure_universe_subscribed(self):
+            return None
+
+        def _record_universe_coverage(self):
+            return True
+
+        def _block_entry(self, reason):
+            """Mirrors the real recorder, including the ACCUMULATED key.
+
+            A stub that wrote only `entry_blocked_by` would let these tests
+            pass while the session verdict -- which grades
+            `entry_blocked_reasons`, because the singular key is
+            last-write-wins across up to 96 cycles -- saw nothing. The gate
+            would be tested and the alarm still silent.
+            """
+            self._governor_result_summary["entry_blocked_by"] = reason
+            recorded = self._governor_result_summary.setdefault(
+                "entry_blocked_reasons", [])
+            if reason not in recorded:
+                recorded.append(reason)
 
         def _reconcile_broker_positions(self, stage_label):  # pragma: no cover
             raise AssertionError(

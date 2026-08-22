@@ -89,6 +89,7 @@ STAGE_STRATEGY_PROPOSED = "STRATEGY_PROPOSED"
 STAGE_STRATEGY_REJECTED = "STRATEGY_REJECTED"
 STAGE_CONTEXT_UNAVAILABLE = "CONTEXT_UNAVAILABLE"
 STAGE_RISK_DECISION = "RISK_DECISION"
+STAGE_LEG_READINESS = "LEG_READINESS"
 STAGE_GATE_B_MARGIN_VETO = "GATE_B_MARGIN_VETO"
 STAGE_GATE_B_MARGIN_APPROVED = "GATE_B_MARGIN_APPROVED"
 STAGE_ORDER_SUBMITTED = "ORDER_SUBMITTED"
@@ -218,6 +219,8 @@ class TradingBrainRuntime:
         direction: Optional[str] = None,
         expected_move_pct: Optional[float] = None,
         calibration_sample_id: Optional[str] = None,
+        tick_age_fn: Optional[Any] = None,
+        max_tick_age_seconds: float = 90.0,
     ) -> TradingBrainCycleResult:
         """Market Tick -> Strategy Engine -> E.1/E.2/E.3 -> D.1-D.6 ->
         D.4 -> PaperBroker, exactly once each, in this order. See
@@ -428,6 +431,99 @@ class TradingBrainRuntime:
                 approved_quantity=0, filled=False,
                 blocking_reason=governor_result.blocking_stage or "ZERO_APPROVED_QUANTITY",
             )
+
+        # == STAGE 2: THE EXACT LEGS AND HEDGES, INDEPENDENTLY ==============
+        #
+        # The operator's rule (2026-08-22): "After it selects a proposed trade
+        # but before it submits an order, the exact legs and hedges must
+        # independently pass freshness and field-completeness checks."
+        #
+        # INDEPENDENTLY means a second evaluation, not a reuse of the band
+        # verdict the runner took before selection. Between that verdict and
+        # this line the chain was ranged over, the margin was quoted, capital
+        # was assessed and the risk pipeline ran. A price that was fresh when
+        # the strike was chosen can be stale by the time the order leaves.
+        #
+        # HERE, and not one line later: `_build_order_requests` is documented
+        # as "the ONLY place a production OrderRequest is built", so this is
+        # the last moment at which refusing costs nothing. Refusing after it
+        # would mean refusing an order that already exists.
+        #
+        # NO FEED IS NOT A SILENT FEED. `tick_age_fn` is None for replay and
+        # store sources, which have no websocket by design; the gate records
+        # NOT_APPLICABLE rather than reading every leg as silent. Production
+        # always supplies it, and a test asserts the runner does.
+        if tick_age_fn is None:
+            root.event_bus.publish_nowait(Event(
+                type=EventType.DECISION_MADE,
+                payload={"stage": STAGE_LEG_READINESS, "assessment_id": proposal.assessment_id,
+                         "state": "NOT_APPLICABLE",
+                         "detail": "no tick source; per-leg freshness does not apply"},
+                timestamp=root.clock(),
+            ))
+        else:
+            from bujji.msi_trade_construction.engine import _premium_for
+            from bujji.production_runtime.leg_readiness import (
+                LegQuote, evaluate_leg_readiness,
+            )
+
+            class _LegRef:
+                __slots__ = ("symbol", "role")
+
+                def __init__(self, symbol, role):
+                    self.symbol, self.role = symbol, role
+
+            refs = []
+            for leg in proposal.legs:
+                try:
+                    resolved = symbol_index.resolve_leg(leg)
+                except OptionSymbolUnresolvable:
+                    # Graded as UNRESOLVED rather than raised. _build_order_requests
+                    # deliberately lets this propagate, but that is one line further
+                    # on; here the whole structure is being judged and a caller
+                    # deserves every failing leg, not the first one.
+                    resolved = None
+                refs.append(_LegRef(resolved, getattr(leg, "role", "")))
+
+            # The book comes from the SAME chain object the strikes were
+            # selected from, so the gate cannot grade a different snapshot
+            # than the one that produced the proposal.
+            quotes = {}
+            for row in (chain or ()):
+                symbol = getattr(row, "instrument_symbol", None)
+                if not symbol:
+                    continue
+                premium, _basis = _premium_for(row)
+                quotes[symbol] = LegQuote(premium=premium,
+                                          bid=getattr(row, "bid", None),
+                                          ask=getattr(row, "ask", None))
+
+            ages = {}
+            for ref in refs:
+                if not ref.symbol:
+                    continue
+                try:
+                    ages[ref.symbol] = tick_age_fn(ref.symbol)
+                except Exception:  # noqa: BLE001 -- unreadable is silent, never fresh
+                    ages[ref.symbol] = None
+
+            readiness = evaluate_leg_readiness(
+                refs, tick_ages=ages, quotes=quotes,
+                max_age_seconds=max_tick_age_seconds)
+            root.event_bus.publish_nowait(Event(
+                type=EventType.DECISION_MADE,
+                payload={"stage": STAGE_LEG_READINESS, "assessment_id": proposal.assessment_id,
+                         **readiness.as_dict()},
+                timestamp=root.clock(),
+            ))
+            if not readiness.permits_entry:
+                return TradingBrainCycleResult(
+                    proposal=proposal, governor_result=governor_result,
+                    context_unavailable=None, order_results=(),
+                    approved_quantity=0, filled=False,
+                    blocking_reason=f"LEG_NOT_READY:{readiness.state}:"
+                                    f"{'; '.join(readiness.reasons)}",
+                )
 
         # -- Execution Layer bridge (owns CoreOptionContract/CoreOrderRequest) --
         # Same index Gate B just margined against -- see _build_order_requests.

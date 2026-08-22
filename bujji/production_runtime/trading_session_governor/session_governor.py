@@ -107,6 +107,64 @@ class TradingSessionGovernor:
             "trend_regime": result.trend_regime, "volatility_regime": result.volatility_regime,
             "selected_strategy": result.selected_strategy, "reasoning": result.reasoning, "confidence": result.confidence,
         })
+        # ALREADY LOCKED IS THE RETRY CASE, NOT AN ERROR.
+        #
+        # `entry_control`'s own module docstring states the contract this
+        # method was breaking: "STRATEGY_ALREADY_DEPLOYED, not 'strategy is
+        # locked,' is the condition that blocks a second entry; being locked
+        # is a PRECONDITION of the single allowed entry, not a reason to block
+        # it." `can_enter_trade` implements exactly that -- it returns ALLOWED
+        # for STRATEGY_LOCKED + is_locked, which is only ever reached on a
+        # RE-attempt. That branch could never run, because this method called
+        # `lock()` again first and `lock()` raises.
+        #
+        # WHAT IT COST. A continuous session re-attempts entry every 300s for
+        # up to 96 cycles (config: session.continuous). Any entry that locked
+        # and then failed downstream -- margin veto, liquidity rejection at
+        # MIN_OPEN_INTEREST, an unfilled order, a contained partial -- leaves
+        # the lock set and the state at STRATEGY_LOCKED. The next stable cycle
+        # therefore raised StrategyAlreadyLockedError out of an unguarded call
+        # at bujji_options_os_runner.py:2340 and killed the session. When the
+        # failure was a PARTIAL ORPHAN, that killed a session holding live
+        # naked legs -- the 2026-08-21 shape reached by a second route.
+        #
+        # `StrategyLock.lock()` is UNCHANGED and still raises: the structural
+        # one-strategy-per-day guarantee, and the test that pins it
+        # (test_strategy_lock_second_lock_raises), are untouched. The second
+        # CALL was the defect, never the guard.
+        if self._strategy_lock.is_locked():
+            locked = self._strategy_lock.decision
+            if (result.selected_strategy is not None
+                    and result.selected_strategy != locked.selected_strategy):
+                # ONE STRATEGY PER DAY IS UNCHANGED. `attempt_entry` overwrites
+                # strategy_family from the lock and always has, so the locked
+                # family is what gets placed either way. This records that the
+                # regime has since moved -- evidence the operator needs, which
+                # the crash previously destroyed. Whether a diverged regime
+                # should also REFUSE the retry is a trading decision and is
+                # NOT made here.
+                self._publish("STRATEGY_SELECTION_DIVERGED", {
+                    "locked_strategy": locked.selected_strategy,
+                    "locked_at": locked.timestamp.isoformat(),
+                    "would_now_select": result.selected_strategy,
+                    "trend_regime": result.trend_regime,
+                    "volatility_regime": result.volatility_regime,
+                })
+            # THE LOCKED DECISION IS RETURNED, NEVER THE FRESH ONE. The caller
+            # writes `selection.selected_strategy` into the session summary;
+            # reporting a family the session is not locked to would make the
+            # artifact disagree with what `attempt_entry` actually places.
+            return StrategySelectionResult(
+                selected_strategy=locked.selected_strategy,
+                trend_regime=locked.trend_regime,
+                volatility_regime=locked.volatility_regime,
+                reasoning=(f"session already locked to {locked.selected_strategy} at "
+                           f"{locked.timestamp.isoformat()}; this cycle re-attempts "
+                           f"entry with the locked strategy"),
+                confidence=locked.confidence,
+                evaluated_at=self._clock(),
+            )
+
         if result.selected_strategy is not None:
             decision = StrategyDecision(
                 session_id=self._session_id, timestamp=self._clock(), trend_regime=result.trend_regime,
@@ -116,6 +174,30 @@ class TradingSessionGovernor:
             self._strategy_lock.lock(decision)
             self._state_tracker.transition(TradingSessionState.STRATEGY_LOCKED, reason=f"locked:{result.selected_strategy}")
         return result
+
+    def mark_position_deployed(self, reason: str) -> None:
+        """Declare a live position this governor did not open via `attempt_entry`.
+
+        The only caller is the runner's ORPHAN registration: legs that
+        filled while the entry as a whole did not, or legs whose broker
+        truth came back UNKNOWN. Both mean a position may exist.
+
+        WHY THIS EXISTS. `attempt_entry` transitions to POSITION_ACTIVE only
+        `if cycle_result.filled`, so an orphan left the session in
+        STRATEGY_LOCKED -- the one state `can_enter_trade` returns ALLOWED
+        for. Nothing blocked a SECOND entry stacked on top of live orphaned
+        legs; that was masked only by the StrategyAlreadyLockedError crash
+        this commit removes. Moving the state to POSITION_ACTIVE blocks it
+        through the documented mechanism (STRATEGY_ALREADY_DEPLOYED) rather
+        than a new one.
+
+        FAIL CLOSED ON UNKNOWN. A BROKER_TRUTH_UNKNOWN leg may not exist at
+        all, and this still refuses further entry for the session. That
+        asymmetry is deliberate and matches `_register_orphaned_legs`' own:
+        declining one entry costs a missed trade, while stacking a second
+        position on a live naked leg is unbounded.
+        """
+        self._state_tracker.transition(TradingSessionState.POSITION_ACTIVE, reason=reason)
 
     def attempt_entry(self, **entry_kwargs) -> Tuple[Optional[TradingBrainCycleResult], EntryControlDecision]:
         """Component 4. `strategy_family` in entry_kwargs, if any, is
