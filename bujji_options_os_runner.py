@@ -2058,6 +2058,26 @@ class OptionsOSRunner:
         # homes and let them drift.
         self._attempt_entry(trend_regime, volatility_regime)
 
+    def _leg_tick_age(self, symbol):
+        """One symbol's newest-tick age in seconds, or None for never/unreadable.
+
+        THE STAGE-2 GATE'S FRESHNESS INPUT, injected rather than plumbed. The
+        trading-brain composition root deliberately holds no feed -- it owns
+        the PaperBroker, the journal and the clock -- so `process_entry_cycle`
+        cannot read tick ages itself. Passing this callable keeps the feed
+        dependency where it already lives (this runner) and leaves the gate's
+        policy pure.
+
+        None is not zero. An unreadable age is silence, and silence is never
+        treated as freshness.
+        """
+        if self._tick_feed is None:
+            return None
+        try:
+            return self._tick_feed.tick_age_seconds(symbol)
+        except Exception:  # noqa: BLE001 -- unreadable is silent, never fresh
+            return None
+
     def _master_expiry_resolver(self):
         """symbol -> ISO expiry, from the FYERS instrument master.
 
@@ -2665,6 +2685,12 @@ class OptionsOSRunner:
             contracts_by_client_order_id={}, sides_by_client_order_id={},
             reference_prices_by_client_order_id={}, risk_by_position_group_id={},
             direction=session_cfg.get("direction"), expected_move_pct=session_cfg.get("expected_move_pct"),
+            # STAGE 2. `None` when there is no websocket at all (replay,
+            # store), which the gate records as NOT_APPLICABLE rather than
+            # reading every leg as silent. Wired here because a gate nothing
+            # calls is the defect class this campaign exists to remove.
+            tick_age_fn=(self._leg_tick_age if self._tick_feed is not None else None),
+            max_tick_age_seconds=self._max_tick_age(),
         )
         self._governor_result_summary["entry_allowed"] = entry_decision.allowed
         self._governor_result_summary["entry_filled"] = cycle_result.filled if cycle_result else False
