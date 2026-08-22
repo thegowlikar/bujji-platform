@@ -3501,6 +3501,41 @@ class OptionsOSRunner:
 
         from bujji.production_runtime.eod_closure import run_eod_closure
 
+        # THE SESSION MUST KNOW WHEN ITS OWN MARKET CLOSES.
+        #
+        # This runner's entire schedule is configured times -- entry_cutoff
+        # 14:30, mandatory_exit 15:15, observe_until 15:30 -- and it referenced
+        # the real exchange close NOWHERE. `bujji.market_calendar` has
+        # separated CASH_MARKET_CLOSE (15:30) from FO_MARKET_CLOSE (15:40)
+        # since the NSE circular of 2026-05-30, and Bujji trades F&O.
+        #
+        # The 15:30 observation end is a deliberate ten-minute buffer, not a
+        # close, and that is right. What was missing is the consequence of
+        # crossing 15:40: after it, submitting an exit is not "an attempt that
+        # failed", it is an attempt that CANNOT succeed. A position still open
+        # at 15:41 is an OVERNIGHT position with gap risk until the next
+        # session, and that is a categorically different fact from one still
+        # open at 15:31 with nine minutes left to flatten in.
+        #
+        # This does not change what the closure machine does -- it records
+        # which of those two situations the operator is actually in.
+        from bujji.market_calendar import FO_MARKET_CLOSE
+
+        now_t = self._clock().time()
+        past_fo_close = now_t >= FO_MARKET_CLOSE
+        self._governor_result_summary["eod_started_after_fo_close"] = past_fo_close
+        if past_fo_close:
+            self._logger.critical(
+                "EOD CLOSURE STARTING AT %s, AFTER THE F&O CLOSE (%s). Any exit "
+                "submitted now cannot fill. If a position is open it is an "
+                "OVERNIGHT position carrying gap risk, not a pending flatten.",
+                now_t.strftime("%H:%M:%S"), FO_MARKET_CLOSE.strftime("%H:%M:%S"))
+        else:
+            self._logger.info(
+                "EOD CLOSURE -- %s remaining before the F&O close (%s).",
+                _fo_close_margin(now_t, FO_MARKET_CLOSE),
+                FO_MARKET_CLOSE.strftime("%H:%M:%S"))
+
         try:
             result = run_eod_closure(
                 broker=self._broker, place_fn=self._exit_place_fn, run_async=_asyncio.run,
@@ -3851,6 +3886,15 @@ class OptionsOSRunner:
 
 
 _TERMINATION_REQUESTED = _threading.Event()
+
+
+def _fo_close_margin(now_time, fo_close) -> str:
+    """Human-readable time left before the F&O close, for the EOD log line."""
+    minutes = ((fo_close.hour * 60 + fo_close.minute)
+               - (now_time.hour * 60 + now_time.minute))
+    if minutes <= 0:
+        return "0m"
+    return f"{minutes}m"
 
 
 def termination_requested() -> bool:
