@@ -79,6 +79,10 @@ _BLINDNESS_REFUSALS = {
     # said the day's one strategy was already deployed by an earlier process.
     # A disciplined decline is not blindness and must not exit non-zero, or
     # every restart-after-a-completed-trade would page the operator.
+    "HISTORICAL_UNRESOLVED_EXPOSURE":
+        "the journal records open exposure from an earlier trading day that "
+        "nothing has reconciled -- either it was closed and never recorded, or "
+        "it is still live, and both need an operator",
     "PRIOR_FILLS_UNREADABLE":
         "the position group journal could not be read, so whether this "
         "account already traded today was never established",
@@ -104,6 +108,31 @@ def _blindness_detail(reason: str):
             return (f"the market-data quality gate graded the snapshot and refused "
                     f"({reason})")
     return None
+
+
+# REFUSALS THAT ARE DELIBERATELY NOT BLINDNESS.
+#
+# `_blindness_detail` returning None used to mean two different things: "this
+# refusal is a disciplined decline made with full sight" and "nobody has
+# classified this reason yet". Those are opposites, and only one of them is
+# safe. A reason nobody classified reaches no operator at all.
+#
+# Membership here is the explicit statement that a refusal was considered and
+# judged not to be evidence of blindness. `is_classified` requires every
+# refusal to be in ONE of the two sets, so a new one cannot slip through by
+# being absent from both.
+_DELIBERATELY_NOT_BLINDNESS = {
+    "STRATEGY_ALREADY_DEPLOYED_TODAY":
+        "the day's one strategy was already deployed -- reached with full "
+        "sight, exactly as 'no strategy fit today' is, so escalating it would "
+        "page the operator after every restart of a completed trading day",
+}
+
+
+def is_classified(reason: str) -> bool:
+    """True when a refusal reason has been deliberately classified, either as
+    blindness or explicitly as not blindness."""
+    return _blindness_detail(reason) is not None or reason in _DELIBERATELY_NOT_BLINDNESS
 
 
 @dataclass(frozen=True)
@@ -284,6 +313,24 @@ def evaluate_session_safety(summary: Dict[str, Any]) -> SessionSafetyVerdict:
     # depends on today having taken risk.
     evidence_reasons, pending = _tick_evidence_findings(summary)
     truth_reasons.extend(evidence_reasons)
+
+    # HISTORICAL UNRESOLVED EXPOSURE is UNSAFE, not merely pending. The
+    # journal records exposure from an earlier day that nothing has reconciled
+    # -- either it was closed and never recorded, or it is still live. Both
+    # are conditions an operator must resolve, and neither may exit 0.
+    historical = summary.get("historical_exposure")
+    if isinstance(historical, dict):
+        for group in historical.get("stale") or ():
+            truth_reasons.append(
+                f"historical unresolved exposure in {group.get('position_group_id')} "
+                f"[{group.get('lifecycle_state')}, last event "
+                f"{group.get('last_event_date')}] -- the account cannot be "
+                f"reconciled against its own record until an operator resolves it")
+        if not historical.get("inspected"):
+            truth_reasons.append(
+                f"historical exposure was never inspected "
+                f"({historical.get('error') or 'the check did not run'}) -- "
+                f"whether an earlier day left open exposure was not established")
 
     had_position = _position_existed(summary)
     if not had_position:

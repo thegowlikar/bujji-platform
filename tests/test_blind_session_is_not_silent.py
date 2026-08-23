@@ -111,15 +111,41 @@ def test_blindness_is_checked_even_when_a_position_was_opened_and_closed_cleanly
 
 # ------------------------------------------------------------- the wiring
 def _block_entry_literals():
-    """Every literal reason the runner passes to `_block_entry`."""
+    """Every literal reason the runner passes to `_block_entry`.
+
+    WALKS INTO THE ARGUMENT, rather than only matching a bare Constant.
+    A negative control caught this: STRATEGY_ALREADY_DEPLOYED_TODAY is passed
+    as a conditional expression --
+
+        self._block_entry("PRIOR_FILLS_UNREADABLE"
+                          if self._prior_fills_unreadable
+                          else "STRATEGY_ALREADY_DEPLOYED_TODAY")
+
+    -- so the extractor saw an IfExp, matched nothing, and the classification
+    guard never asked about EITHER reason. A refusal escaped the guard by
+    syntax alone, which is the quietest way for one to escape.
+    """
+    def _reasons(node):
+        """The literals that can actually BE the reason.
+
+        Follows the branches of a conditional expression, and nothing else.
+        Walking the whole subtree instead collects strings from nested calls --
+        `getattr(self, "_prior_fills_unreadable", False)` contributed an
+        attribute name, which is not a refusal reason and cannot be classified
+        as one.
+        """
+        if isinstance(node, ast.Constant) and isinstance(node.value, str):
+            return {node.value}
+        if isinstance(node, ast.IfExp):
+            return _reasons(node.body) | _reasons(node.orelse)
+        return set()
+
     out = set()
     for node in ast.walk(RUNNER_AST):
         if (isinstance(node, ast.Call)
                 and getattr(node.func, "attr", None) == "_block_entry"
                 and node.args):
-            arg = node.args[0]
-            if isinstance(arg, ast.Constant) and isinstance(arg.value, str):
-                out.add(arg.value)
+            out |= _reasons(node.args[0])
     return out
 
 
@@ -144,9 +170,21 @@ def test_every_literal_refusal_reason_is_classified():
     does NOT escalate -- firing on something nobody classified is how an alarm
     becomes noise -- so a new refusal added without a matching entry here would
     silently never reach the operator. This fails instead."""
+    from bujji.production_runtime.session_safety_verdict import is_classified
+
     literals = _block_entry_literals()
     assert literals, "no literal reasons found -- the detector is broken"
-    unclassified = sorted(r for r in literals if _blindness_detail(r) is None)
+
+    # CLASSIFIED means deliberately placed in ONE of two sets: blindness
+    # (escalates) or explicitly not-blindness (a disciplined decline).
+    #
+    # This used to test `_blindness_detail(r) is None`, which conflated "judged
+    # not to be blindness" with "nobody has classified this yet". Those are
+    # opposites and only one is safe. It also let a reason escape entirely by
+    # syntax: STRATEGY_ALREADY_DEPLOYED_TODAY is written as a conditional
+    # expression, so the literal extractor never saw it and the guard never
+    # asked about it.
+    unclassified = sorted(r for r in literals if not is_classified(r))
     assert not unclassified, (
         f"these refusal reasons reach no classification and would therefore "
         f"never reach the operator: {unclassified}")

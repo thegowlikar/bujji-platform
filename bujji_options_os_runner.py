@@ -825,6 +825,29 @@ class OptionsOSRunner:
         self._governor_result_summary["prior_tick_journals"] = (
             self._prior_tick_evidence.to_dict())
 
+        # HISTORICAL UNRESOLVED EXPOSURE, AS A RECOVERY STATE.
+        #
+        # The journal can still record open exposure from an earlier trading
+        # day -- an exit that was never journaled leaves its group OPEN
+        # forever. Until now that surfaced as a margin-subsystem crash:
+        # `read_all_group_ids` has no date scope, the runner passes empty
+        # contract maps, `project_whole_book_to_margin_legs` raises on legs it
+        # cannot map, and the session reported "margin_snapshot unavailable".
+        #
+        # The refusal was right; the shape was wrong. It named nothing an
+        # operator could act on and it happened by accident. This makes it
+        # explicit, names the groups and legs, and carries the reconciliation
+        # a person has to perform -- and it runs HERE, at startup, so entry is
+        # refused before the margin path is ever reached.
+        from bujji.production_runtime.historical_exposure import (
+            inspect as _inspect_historical_exposure)
+
+        self._historical_exposure = _inspect_historical_exposure(
+            self._journal, self._as_of_date,
+            _position_truth_for(self).read(), self._logger)
+        self._governor_result_summary["historical_exposure"] = (
+            self._historical_exposure.to_dict())
+
         # THE DAY'S ONE STRATEGY, ACROSS A RESTART.
         #
         # AFTER the unresolved-order refusal above, deliberately: if this
@@ -2709,6 +2732,18 @@ class OptionsOSRunner:
         # This blocks entry; it does not end the session. The process still
         # manages and closes whatever it holds, and still produces its
         # report -- the same shape the deprecated bot's DONE_FOR_DAY had.
+        # HISTORICAL EXPOSURE FIRST. An account that cannot be reconciled
+        # against its own record may not take new risk, whatever every later
+        # gate would say.
+        historical = getattr(self, "_historical_exposure", None)
+        if historical is not None and historical.blocks_entry:
+            self._logger.critical(
+                "ENTRY REFUSED -- historical unresolved exposure. %s",
+                historical.operator_instructions()
+                or f"inspection did not run ({historical.error})")
+            self._block_entry("HISTORICAL_UNRESOLVED_EXPOSURE")
+            return False
+
         prior_fills = getattr(self, "_prior_fills_today", None)
         if prior_fills:
             self._logger.critical(
