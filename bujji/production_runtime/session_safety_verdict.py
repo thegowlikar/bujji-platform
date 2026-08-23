@@ -392,6 +392,39 @@ def evaluate_session_safety(summary: Dict[str, Any]) -> SessionSafetyVerdict:
             f"closure truths disagree ({len(divergences)}): "
             f"{'; '.join(str(d) for d in divergences) or 'unspecified'}")
 
+    # BLIND OPEN RISK IS UNSAFE, WHETHER OR NOT ANYTHING BROKE AFTERWARDS.
+    #
+    # A session that held an open position while its price path was invalid
+    # was, for those cycles, carrying risk it could not see: no valuation, no
+    # stop, no target, no adjustment. That is true regardless of whether the
+    # blindness lasted long enough to arm the EMERGENCY_BLIND brake, and it
+    # remains true if a later closure succeeded perfectly.
+    #
+    # WHY IT IS NOT MERELY "PENDING". Pending means the session could not
+    # prove what it saw. This is stronger: the session positively recorded
+    # that it could NOT see, while short. Grading that as a clean exit 0
+    # would tell the operator a blind session and a sighted one are the same
+    # outcome -- which is the reporting failure that let six blind hours on
+    # 2026-08-21 look like an ordinary day.
+    #
+    # The distinction the runtime draws is preserved here rather than
+    # flattened: transient invalidity suspends management and is recorded;
+    # repeated invalidity arms the brake; EITHER, with a position open, means
+    # this session is not certified.
+    blind_cycles = summary.get("price_path_invalid") or ()
+    if blind_cycles:
+        reasons_seen = []
+        for entry in blind_cycles:
+            r = entry.get("reason") if isinstance(entry, dict) else str(entry)
+            if r and r not in reasons_seen:
+                reasons_seen.append(r)
+        reasons.append(
+            f"a position was open while the price path was INVALID for "
+            f"{len(blind_cycles)} cycle(s) ({', '.join(reasons_seen) or 'unspecified'}) "
+            f"-- risk was held without price visibility, so no stop, target or "
+            f"adjustment could be evaluated for those cycles. This is not "
+            f"certified regardless of how the session ended.")
+
     if summary.get("emergency_close_execution_error"):
         reasons.append(
             f"the emergency brake fired and FAILED to execute "
