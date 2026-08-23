@@ -133,8 +133,8 @@ are deliberately absent from the table above.
 starts, which modules production can reach. Current measurement:
 
 ```
-python files            1862
-  test modules           573
+python files            1863
+  test modules           574
   production modules    1289
 
 REACHABLE                487   (37.8% of production)
@@ -375,6 +375,119 @@ A milestone is complete when its acceptance test passes and failed before.
 
 ---
 
+## 5a. The enabled-runtime lifecycle, end to end
+
+One path, named at every hop. Everything here is reached from
+`bujji_options_os_runner`, which is what systemd starts. Anything not on this
+path is not the running system, whatever its docstring says.
+
+```
+FYERS SDK callback
+  -> FyersTickFeed.on_message                    bujji.broker.fyers_ws
+       -> TickJournal.offer()                    verbatim, FIRST, before any field is read
+       -> quote.project()                        typed Quote; the ONE SDK field map
+  -> feed._quotes / feed._ltp                    both written under one lock, same callback
+  -> WebsocketTickProvider.get_quotes()          monotonic freshness, per-symbol REST fallback
+  -> OptionsOSRunner._current_leg_quotes()       gate: assess_quote_fields(["ltp"])
+       -> LegPriceView                           prices EMPTY unless valid
+  -> _run_one_management_pass()                  revalue only when valid
+       -> revalue_all() -> revalue()             current_price from gate-passed quotes
+       -> _emergency_brake()                     reached on BOTH the valid and blind paths
+       -> session_governor.evaluate_and_enforce_exit()
+            -> exit_lifecycle.plan()             exit intent journaled BEFORE placement
+            -> TradeLifecycleExecutor._execute_reduce()
+            -> settle()                          EXITED only on broker-proven flat
+  -> run_eod_closure()                           EOD + abort, same exit lifecycle
+  -> session_safety_verdict.evaluate_session_safety()
+  -> process exit code                           0 / 3 UNSAFE / 4 PENDING_EVIDENCE
+```
+
+Selection runs on a second, REST-fed path that has not been migrated:
+
+```
+MarketDataAdapter.build_snapshot()   REST; no quote_source is passed today
+  -> MarketSnapshot                  health_status, missing_fields
+  -> market_data_gate.assess_market_data()
+  -> _data_quality_permits_entry()
+```
+
+That both paths exist is a known one-authority gap, recorded in section 7.
+
+---
+
+## 5b. Authority per domain
+
+The single question this table answers is "if two parts of Bujji disagree
+about X, who is right?".
+
+| Domain | Authority | Enabled caller |
+| --- | --- | --- |
+| Exchange contracts | `bujji.broker.instrument_master` | composition root, universe builders |
+| Capture universe | `bujji.capture_universe.builder` | Gate 1 builder, runtime |
+| Raw tick evidence | `bujji.tick_journal.journal` | `FyersTickFeed`, via the runner |
+| Tick replay / integrity | `bujji.tick_journal.replay` + `manifest` | `production_runtime.tick_evidence` |
+| Typed quote | `bujji.market_perception.quote` | `FyersTickFeed`, `intraday_price_provider` |
+| Analytical snapshot | `bujji.market_perception.models` | `MarketDataAdapter` |
+| Market-data quality | `production_runtime.market_data_gate` | runner `_assess_data_quality`, `_current_leg_quotes` |
+| Price for a decision | `IntradayPriceProvider.get_quotes` | `_current_leg_quotes` |
+| Order lifecycle | `bujji.journal.position_group_journal` | execution bridge, exit lifecycle |
+| Broker position truth | `bujji.broker_truth` | position registry, EOD closure |
+| Session lifecycle | `production_runtime.session_lifecycle` | runner `_startup`, governor `_transition` |
+| Exit lifecycle | `production_runtime.exit_lifecycle` | EOD closure, lifecycle executor |
+| Orphan exposure | `production_runtime.orphan_exposure` | runner startup gate |
+| Session verdict | `production_runtime.session_safety_verdict` | `run()` exit code |
+
+---
+
+## 5c. Deployment model
+
+Three environments, and the separation is the point. Nothing promotes itself.
+
+| | Path | Runs | May trade |
+| --- | --- | --- | --- |
+| **Branch** | `/opt/bujji/work-m4` | tests only | never |
+| **Live checkout** | `/opt/bujji/app` | the enabled systemd units | paper only |
+| **Measurement** | `/opt/bujji/gate1-run` | one-shot Gate 1 unit | never; structurally incapable |
+
+Rules that hold today:
+
+- The branch is never executed by systemd. Promotion to the live checkout is a
+  deliberate, separate act that this repository does not perform.
+- The measurement harness imports the application read-only and is asserted
+  incapable of starting an order-capable session
+  (`gate1-run/prove_no_trading.py`, positive-controlled).
+- Entry-capable units are disabled AND condition-gated; the gate is an unmet
+  `ConditionPathExists`, so a manual start does not execute either.
+- `FYERS_POSITION_SCHEMA_VERIFIED` is `False` and no claim may assume otherwise.
+
+Real-money activation is not a mode that exists. It would require a separate,
+explicitly authorised configuration, and nothing in this repository creates one.
+
+---
+
+## 5d. Evidence gates
+
+A gate is a place the system refuses rather than guesses. Each names what it
+refuses on, and every one fails closed.
+
+| Gate | Refuses when | Consequence |
+| --- | --- | --- |
+| Token pre-flight | token cannot cover the session | units do not start |
+| Historical exposure | a prior day's group is unreconciled | entry blocked |
+| Orphan exposure | broker holds what no group claims | entry blocked, unsafe |
+| Prior fills | the day's strategy already deployed | entry blocked |
+| Market-data quality | snapshot health / provenance unknown | entry refused |
+| Quote field gate | required field missing, stale, or wrong provenance | price-dependent action refused |
+| Strategy lock | one strategy per day, across restarts | second entry refused |
+| Position schema | schema unverified | no real-capital claim |
+| Emergency brake | loss limit, or sustained blindness with a position | forced closure |
+| Closure settle | broker not CONFIRMED_FLAT | not EXITED |
+| Session verdict | open risk unproven flat, blind open risk, evidence gaps | exit 3 UNSAFE |
+
+An UNKNOWN answer is never converted to a safe one at any gate.
+
+---
+
 ## 6. Deprecations
 
 | Document | Status | Reason |
@@ -392,12 +505,32 @@ Recorded here so no reader has to infer it from silence.
   is journaled verbatim before any field is read, with a manifest and
   deterministic replay. Still unproven against a live feed: no tick has ever
   arrived in this configuration, so the journal has recorded nothing real.
+- ~~The runtime keeps only `symbol` + latest LTP.~~ **Resolved on the branch.**
+  A typed `Quote` carries every field the projection models, with per-field
+  provenance and monotonic freshness. The float store is retained until its
+  readers migrate; both are written from one callback under one lock.
+- ~~A blind cycle revalues against entry prices.~~ **Resolved.** An entry price
+  is execution evidence and can no longer become a market price. A blind cycle
+  produces no prices, suspends price-dependent management, records a typed
+  reason, and escalates through the existing emergency closure path.
 - **The broker boundary is not a boundary.** `self._broker` is hardcoded to
   `PaperBroker`; every `FyersBroker` is execution-neutered. The three-valued
-  UNKNOWN machinery is correct and untestable, because the read it guards
-  cannot fail. (M3)
-- **`FYERS_POSITION_SCHEMA_VERIFIED = False`** and remains false. No claim in
-  this repository may assume the FYERS position schema is verified.
+  UNKNOWN machinery is correct and largely untestable, because the read it
+  guards cannot fail.
+- **`FYERS_POSITION_SCHEMA_VERIFIED = False`** and remains false.
+- **Two market-data paths still exist.** Position pricing runs on the tick
+  path; strategy selection runs on a REST-fed `MarketDataAdapter` that is not
+  given a `quote_source`. One authority is not yet achieved for market data.
+- **Strategy selection is conditionals, not a registry.** The enabled selector
+  returns a family name, records only the accepted candidate, and does not
+  emit a typed trade plan with eligibility, hedges, sizing and invalidation.
 - **Risk state is ephemeral.** Recomputed per cycle, never journaled; a restart
-  loses every risk decision and its inputs. (M4)
-- **No gate in this document has met a live feed.** All are structurally tested.
+  loses every risk decision and its inputs.
+- **No FYERS payload field is verified.** `PROVISIONAL_SDK_FIELD_MAP` is
+  unmeasured. A wrong key yields UNAVAILABLE, never a wrong number -- but no
+  bid/ask/OI/volume/depth logic may be written until Gate 1 measures the shape.
+- **No subscription-capacity figure is established.** Zero-gap coverage needs
+  ~1,465 concurrent subscriptions; whether the venue serves that is unknown.
+- **No gate in this document has met a live feed.** All are structurally
+  tested. Green tests are not runtime proof, and this file makes no claim that
+  they are.

@@ -458,6 +458,19 @@ def evaluate_session_safety(summary: Dict[str, Any]) -> SessionSafetyVerdict:
         reasons.append(
             "a position was opened and no tick journal was recorded at all -- "
             "the session cannot account for the market it acted on")
+    elif journal.get("expected") is False:
+        # SAY THE TRUE THING. A session with no tick feed configured writes
+        # `expected: False`, and nothing was interrupted -- there was simply
+        # never a feed. Reporting it as "interrupted before sealing" sends an
+        # operator looking for a crash that did not happen.
+        #
+        # It is still a refusal, and a serious one: a position was opened and
+        # this session holds NO market evidence for it. Only the reason
+        # changes, never the verdict.
+        reasons.append(
+            "a position was opened and NO tick feed was configured for this "
+            "session, so no market evidence exists for the risk it held -- "
+            "nothing was interrupted; there was never anything to seal")
     elif not journal.get("sealed"):
         reasons.append(
             f"a position was opened and the tick journal was never sealed "

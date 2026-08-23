@@ -133,11 +133,54 @@ def record_transition(journal, session_id: str, prior: Any, target: Any,
     """
     prior_v = getattr(prior, "value", str(prior))
     target_v = getattr(target, "value", str(target))
+    key = f"{session_id}:{SESSION_EVENT_TYPE}:{prior_v}->{target_v}:{cause}"
+
+    # THE SAME TRANSITION, RECORDED TWICE, IS ONE TRANSITION.
+    #
+    # Two writers reach this function for the session's first move. The runner
+    # journals INITIALIZING->ANALYSING_MARKET during `_startup()`, before a
+    # governor exists; the governor's `_transition()` -- documented as THE
+    # single transition path -- then makes the same move, because its
+    # in-memory tracker starts at INITIALIZING and knows nothing of what
+    # startup already wrote.
+    #
+    # The two disagree only on `evidence_ref` ("startup:<date>" versus the
+    # cause echoed back). The idempotency key does not include evidence_ref,
+    # so the journal saw one key with two payloads and refused -- correctly.
+    # But the runner wraps its call in try/except and the governor does NOT,
+    # so the refusal surfaced as an exception on the governor's transition
+    # path: a durable-record disagreement turning into a crash on the one
+    # path that must always be able to move the state machine.
+    #
+    # IDENTITY IS (session, prior, target, cause). If that tuple is already
+    # recorded, this is a re-record of one fact, and the FIRST evidence
+    # reference stands -- it was written by whoever actually observed the
+    # transition first. A DIFFERENT cause yields a different key and is still
+    # recorded separately, and a genuinely conflicting payload under a key
+    # this function did not write is still refused by the journal. The
+    # collision guard is not weakened; it is no longer triggered by one fact
+    # being reported twice.
+    try:
+        for existing in recorded_transitions(journal, session_id):
+            if (existing.get("prior_state") == prior_v
+                    and existing.get("next_state") == target_v
+                    and existing.get("cause") == cause):
+                if logger is not None and existing.get("evidence_ref") != evidence_ref:
+                    logger.info(
+                        "LIFECYCLE -- %s->%s (%s) already journaled with "
+                        "evidence_ref=%r; keeping the first record and "
+                        "ignoring the duplicate (%r).",
+                        prior_v, target_v, cause,
+                        existing.get("evidence_ref"), evidence_ref)
+                return None
+    except Exception:  # noqa: BLE001 -- an unreadable journal must not block a write
+        pass
+
     return append_scoped_event(
         journal,
         session_scope_id(session_id),
         SESSION_EVENT_TYPE,
-        f"{session_id}:{SESSION_EVENT_TYPE}:{prior_v}->{target_v}:{cause}",
+        key,
         {"session_id": session_id, "prior_state": prior_v,
          "next_state": target_v, "cause": cause, "evidence_ref": evidence_ref},
         clock=clock, logger=logger)
