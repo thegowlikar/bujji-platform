@@ -627,9 +627,36 @@ Recorded here so no reader has to infer it from silence.
 - **Two market-data paths still exist.** Position pricing runs on the tick
   path; strategy selection runs on a REST-fed `MarketDataAdapter` that is not
   given a `quote_source`. One authority is not yet achieved for market data.
-- **Strategy selection is conditionals, not a registry.** The enabled selector
-  returns a family name, records only the accepted candidate, and does not
-  emit a typed trade plan with eligibility, hedges, sizing and invalidation.
+- ~~Strategy selection is conditionals, not a registry.~~ **Partly resolved,
+  and the original framing was wrong.** Selection was never scattered: it is
+  one pure function of two inputs. What it lacked was declaration and a record
+  of what it declined. `STRATEGY_RULES` now declares per shape its eligible
+  regimes, vetoes, risk structure, required generic capabilities and the named
+  owner of each downstream obligation, and every evaluation records a verdict
+  for every declared shape. **Still true:** the branch bodies, not the rules,
+  produce the outcome -- an equivalence test holds them together, but the
+  refactor to make the table authoritative has not been done.
+- **There is no typed trade plan binding selection to construction.**
+  `TradeConstructionAssessment` is already a full typed plan (legs, expiry
+  decision, risk profile, margin, explanation, provenance), so the gap is a
+  binding rather than a model: nothing joins the selection evidence to the
+  construction assessment that resulted from it. Adding a second plan type
+  carrying legs would be a duplicate, not a fix.
+- **Two strategy registries exist and neither decides anything.**
+  `trading_brain/strategy_selector/registry.py` (11 declarations) is absent
+  from the 487-module import closure entirely; `msi_strategy_selector` is
+  reached only by observation paths that record what a selector *would* say.
+  Both are live-looking code that no trade passes through.
+- **65 of 72 journals are orphaned.** Only `journal.position_group_journal`,
+  the three `tick_journal` modules and `execution_journal_bridge` are
+  reachable from the trading entrypoint. Decision evidence reaches disk by a
+  different route -- the event bus into `ShadowObservatoryRecorder` -- and the
+  22 purpose-built journals under `bujji/journal/` are almost entirely unused
+  by the runtime.
+- **`_current_leg_prices` is a dead second price accessor.** Zero production
+  callers; retained "so an unmigrated caller keeps compiling" when none
+  exists. It is safe (it returns an empty mapping, never entry prices, and a
+  P0 test locks that), but it is a second way to ask for prices.
 - **Risk state is ephemeral.** Recomputed per cycle, never journaled; a restart
   loses every risk decision and its inputs.
 - **No FYERS payload field is verified.** `PROVISIONAL_SDK_FIELD_MAP` is
@@ -637,6 +664,16 @@ Recorded here so no reader has to infer it from silence.
   bid/ask/OI/volume/depth logic may be written until Gate 1 measures the shape.
 - **No subscription-capacity figure is established.** Zero-gap coverage needs
   ~1,465 concurrent subscriptions; whether the venue serves that is unknown.
+- **Decision replay is level 1, measured.** `tools/decision_replay_verifier.py`
+  run against the three real sealed packages: every eligibility check passes
+  (recorded regimes re-derive recorded selections exactly), and the awarded
+  level is still `INPUT_INTEGRITY`, because those packages carry no link from
+  a selection to the assessment it acted on. Sessions from `43fa860` carry
+  that link; no session has yet been run that does.
+- **Level 4 replay is structurally unreachable.** The option chain that
+  strikes were selected from is not part of the evidence package, so strikes
+  cannot be re-derived. Whether a per-entry chain snapshot is worth its size
+  is an operator decision, not a defect to patch quietly.
 - **No gate in this document has met a live feed.** All are structurally
   tested. Green tests are not runtime proof, and this file makes no claim that
   they are.
