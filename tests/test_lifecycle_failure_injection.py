@@ -95,9 +95,19 @@ def test_crash_during_entry_with_the_broker_holding_it(tmp_path):
     assert not got.permits_entry
 
 
-def test_crash_during_entry_with_the_broker_flat(tmp_path):
-    """The same crash, but the order never reached the venue. The session is
-    still STRATEGY_LOCKED and a retry is legitimate."""
+def test_crash_after_submit_intent_is_UNKNOWN_even_when_the_broker_is_flat(tmp_path):
+    """CORRECTED 2026-08-23. This test previously asserted STRATEGY_LOCKED and
+    permitted a retry, on the reasoning that "nothing filled, so the day is
+    not spent". That was wrong, and it was the most dangerous kind of wrong:
+    it permitted a SECOND order while a first one of unknown fate may still
+    have been live.
+
+    POSITION TRUTH IS NOT ORDER TRUTH. A flat position book says what the
+    account holds at the instant it was read. It says nothing about an order
+    working at the exchange, one whose acknowledgement was never seen, or one
+    that fills a second later. A SUBMIT_INTENT with no terminal outcome is
+    exactly that order.
+    """
     j = _j(tmp_path, "c2.db")
     _t(j, (TSS.INITIALIZING, TSS.ANALYSING_MARKET, "s"),
        (TSS.ANALYSING_MARKET, TSS.STRATEGY_LOCKED, "l"))
@@ -105,8 +115,102 @@ def test_crash_during_entry_with_the_broker_flat(tmp_path):
     _submit(j, "PG-1", coids[CE])
 
     got = reconstruct(j, SESSION, _FLAT)
+    assert got.is_unknown, "a submitted order of unknown fate must block"
+    assert not got.permits_entry
+    assert "no terminal fate" in got.reason
+    assert got.evidence["unresolved_orders"][0]["submit_status"] == "SUBMIT_PENDING_UNKNOWN"
+
+
+# -- THE TWO CASES THAT MAY RETURN TO STRATEGY_LOCKED -----------------------
+#
+# Broker-flat permits a retry ONLY when the event history proves no submit
+# intent occurred, or order truth proves every submitted order reached a
+# terminal absent / cancelled / rejected state.
+
+def test_no_submit_intent_ever_occurred_permits_a_retry(tmp_path):
+    """Case 1: the group was minted and constructed, and nothing was ever
+    sent. There is no order to be uncertain about."""
+    j = _j(tmp_path, "c3.db")
+    _t(j, (TSS.INITIALIZING, TSS.ANALYSING_MARKET, "s"),
+       (TSS.ANALYSING_MARKET, TSS.STRATEGY_LOCKED, "l"))
+    _mint(j, "PG-1", [CE])                       # constructed, never submitted
+
+    got = reconstruct(j, SESSION, _FLAT)
     assert got.state is TSS.STRATEGY_LOCKED
-    assert got.permits_entry, "nothing filled, so the day is not spent"
+    assert got.permits_entry
+    assert got.evidence["unresolved_orders"] == []
+
+
+def test_a_rejected_order_is_terminal_and_permits_a_retry(tmp_path):
+    """Case 2a: the venue rejected it. Its fate is settled."""
+    j = _j(tmp_path, "c4.db")
+    _t(j, (TSS.INITIALIZING, TSS.ANALYSING_MARKET, "s"),
+       (TSS.ANALYSING_MARKET, TSS.STRATEGY_LOCKED, "l"))
+    coids = _mint(j, "PG-1", [CE])
+    _submit(j, "PG-1", coids[CE])
+    j.append_event("PG-1", "SUBMIT_FAILURE", "PG-1:SF", {
+        "client_order_id": coids[CE], "failure_reason": "REJECTED_BY_VENUE",
+        "resolution_basis": "CONFIRMED_REJECTION"}, clock=CLOCK)
+
+    got = reconstruct(j, SESSION, _FLAT)
+    assert got.state is TSS.STRATEGY_LOCKED
+    assert got.permits_entry, "a rejected order left no exposure and no doubt"
+
+
+def test_a_cancelled_order_is_terminal_and_permits_a_retry(tmp_path):
+    """Case 2b: cancelled, confirmed."""
+    j = _j(tmp_path, "c5.db")
+    _t(j, (TSS.INITIALIZING, TSS.ANALYSING_MARKET, "s"),
+       (TSS.ANALYSING_MARKET, TSS.STRATEGY_LOCKED, "l"))
+    coids = _mint(j, "PG-1", [CE])
+    _submit(j, "PG-1", coids[CE])
+    j.append_event("PG-1", "SUBMIT_ACK", "PG-1:SA", {
+        "client_order_id": coids[CE], "broker_order_id": "B",
+        "broker_reported_status": "PENDING"}, clock=CLOCK)
+    j.append_event("PG-1", "CANCEL_INTENT", "PG-1:CI",
+                   {"client_order_id": coids[CE]}, clock=CLOCK)
+    j.append_event("PG-1", "CANCEL_ACK", "PG-1:CA",
+                   {"client_order_id": coids[CE]}, clock=CLOCK)
+
+    got = reconstruct(j, SESSION, _FLAT)
+    assert got.state is TSS.STRATEGY_LOCKED
+    assert got.permits_entry
+
+
+def test_an_ACKED_order_with_no_fill_is_still_working_and_blocks(tmp_path):
+    """The subtle one. The venue acknowledged the order -- so it is LIVE, not
+    absent -- and it simply has not filled yet. A flat book read an instant
+    ago does not settle that."""
+    j = _j(tmp_path, "c6.db")
+    _t(j, (TSS.INITIALIZING, TSS.ANALYSING_MARKET, "s"),
+       (TSS.ANALYSING_MARKET, TSS.STRATEGY_LOCKED, "l"))
+    coids = _mint(j, "PG-1", [CE])
+    _submit(j, "PG-1", coids[CE])
+    j.append_event("PG-1", "SUBMIT_ACK", "PG-1:SA", {
+        "client_order_id": coids[CE], "broker_order_id": "B",
+        "broker_reported_status": "PENDING"}, clock=CLOCK)
+
+    got = reconstruct(j, SESSION, _FLAT)
+    assert got.is_unknown, "an acknowledged, unfilled order is a working order"
+    assert not got.permits_entry
+    assert "ACKED" in got.reason
+
+
+def test_one_unresolved_leg_blocks_even_when_the_others_are_terminal(tmp_path):
+    """Partial resolution is not resolution."""
+    j = _j(tmp_path, "c7.db")
+    _t(j, (TSS.INITIALIZING, TSS.ANALYSING_MARKET, "s"),
+       (TSS.ANALYSING_MARKET, TSS.STRATEGY_LOCKED, "l"))
+    coids = _mint(j, "PG-1", [CE, PE])
+    _submit(j, "PG-1", coids[CE])
+    j.append_event("PG-1", "SUBMIT_FAILURE", "PG-1:SF", {
+        "client_order_id": coids[CE], "failure_reason": "REJECTED",
+        "resolution_basis": "CONFIRMED_REJECTION"}, clock=CLOCK)
+    _submit(j, "PG-1", coids[PE])                # this one's fate is open
+
+    got = reconstruct(j, SESSION, _FLAT)
+    assert got.is_unknown
+    assert len(got.evidence["unresolved_orders"]) == 1
 
 
 # ==========================================================================
@@ -318,3 +422,35 @@ def test_an_empty_journal_is_unknown_not_a_fresh_session(tmp_path):
     yet' -- that is how a restarted process re-enters."""
     got = reconstruct(_j(tmp_path, "t2.db"), SESSION, _FLAT)
     assert got.is_unknown and not got.permits_entry
+
+
+def test_an_unreadable_order_history_is_reported_not_swallowed():
+    """DIRECT, because it is otherwise unreachable through the journal:
+    `_position_evidence` reads the same groups and catches the failure first,
+    so a negative control on the order-fate error path came back silent.
+
+    The path exists because the two reads could diverge -- a scoped view, a
+    different journal object, a partial failure -- and an order history that
+    cannot be read must never present as "no unresolved orders".
+    """
+    from bujji.production_runtime.session_lifecycle import unresolved_order_fates
+
+    class _Unreadable:
+        def read_all_group_ids(self):
+            return ["PG-1"]
+
+        def read_events(self, gid):
+            raise OSError("database disk image is malformed")
+
+    unresolved, error = unresolved_order_fates(_Unreadable())
+    assert error, "an unreadable order history must report an error"
+    assert unresolved == [], "and must not claim it found nothing"
+
+
+def test_a_readable_history_with_no_orders_reports_no_error(tmp_path):
+    """The positive control: 'no unresolved orders' and 'could not look' must
+    be distinguishable."""
+    from bujji.production_runtime.session_lifecycle import unresolved_order_fates
+
+    unresolved, error = unresolved_order_fates(_j(tmp_path, "ok.db"))
+    assert unresolved == [] and error is None

@@ -49,7 +49,8 @@ from bujji.production_runtime.position_group_scope import (
     session_events, session_scope_id)
 from bujji.production_runtime.trading_session_governor.session_trading_state import (
     TradingSessionState)
-from bujji.trading_brain.risk_governor.position_group_fold import fold, net_quantity
+from bujji.trading_brain.risk_governor.position_group_fold import (
+    LEG_CANCELLED, LEG_NOT_SUBMITTED, LEG_SUBMIT_FAILED, fold, net_quantity)
 
 # Not a TradingSessionState member: it is the ABSENCE of an establishable one.
 # Deliberately outside the enum so no transition table can accept it as a
@@ -208,6 +209,59 @@ def _position_evidence(journal) -> Tuple[bool, Tuple[str, ...], Optional[str]]:
         return False, (), f"{type(exc).__name__}: {exc}"
 
 
+# A leg whose ORDER FATE is settled. Anything else means an order may still be
+# live at the venue, whatever the position book says right now.
+#
+#   NOT_SUBMITTED   no intent was ever recorded -- nothing was sent
+#   SUBMIT_FAILED   the venue rejected it; terminal
+#   CANCELLED       terminal
+#
+# ACKED is deliberately NOT here. An acknowledged order with no fill is a
+# WORKING order: it can fill a second after the position book was read.
+# SUBMIT_PENDING_UNKNOWN and CANCEL_PENDING_UNKNOWN are the explicit
+# "we do not know" states and are obviously not terminal.
+_RESOLVED_ORDER_FATES = (LEG_NOT_SUBMITTED, LEG_SUBMIT_FAILED, LEG_CANCELLED)
+
+
+def unresolved_order_fates(journal) -> Tuple[List[Dict[str, Any]], Optional[str]]:
+    """(unresolved, error). Legs whose order fate is not settled.
+
+    POSITION TRUTH IS NOT ORDER TRUTH, and conflating them is the defect this
+    exists to prevent. A flat position book says what the account holds at the
+    instant it was read. It says nothing about an order that is working at the
+    exchange, or one whose acknowledgement was never seen, or one that filled
+    between the read and now.
+
+    So a session may only return to a state that permits entry when the event
+    history proves either that no submit intent ever occurred, or that every
+    submitted order reached a terminal absent / cancelled / rejected state.
+    Anything else is UNKNOWN, and UNKNOWN reconciles order truth before any
+    retry -- which is exactly what `recover_unresolved_at_startup` already
+    does at startup, and what this refuses to short-circuit.
+    """
+    unresolved: List[Dict[str, Any]] = []
+    try:
+        for group_id in position_group_ids(journal):
+            events = journal.read_events(group_id)
+            if not events:
+                continue
+            state = fold(events)
+            for coid, leg in state.legs.items():
+                if leg.submit_status in _RESOLVED_ORDER_FATES:
+                    continue
+                # A leg that demonstrably filled has a known fate: it filled.
+                if leg.fill.cumulative_filled_quantity > 0:
+                    continue
+                unresolved.append({
+                    "position_group_id": group_id,
+                    "client_order_id": coid,
+                    "submit_status": leg.submit_status,
+                })
+    except Exception as exc:  # noqa: BLE001
+        return [], f"{type(exc).__name__}: {exc}"
+    return unresolved, None
+
+
 def reconstruct(journal, session_id: str, broker_truth) -> SessionLifecycleState:
     """Rebuild session state from the journal, then reconcile it with the broker.
 
@@ -238,6 +292,34 @@ def reconstruct(journal, session_id: str, broker_truth) -> SessionLifecycleState
             f"the position event history could not be read ({journal_error}) -- "
             f"a session cannot be certified against evidence it cannot open",
             session_id=session_id, journal_state=journal_state,
+            transitions=tuple(transitions), evidence=evidence)
+
+    # ORDER TRUTH, BEFORE POSITION TRUTH.
+    #
+    # An order whose fate is unresolved is possibly a live position, and a flat
+    # position book does not settle it. Checked before the broker comparison
+    # below, because a session with an in-flight order of unknown outcome
+    # cannot be described by ANY state -- not even by agreement between the
+    # journal and a position read taken at one instant.
+    unresolved_orders, order_error = unresolved_order_fates(journal)
+    evidence["unresolved_orders"] = unresolved_orders
+    if order_error:
+        evidence["order_error"] = order_error
+        return _unknown(
+            f"order fate could not be established ({order_error}) -- position "
+            f"truth alone cannot settle whether an order is still live",
+            session_id=session_id, journal_state=journal_state,
+            transitions=tuple(transitions), evidence=evidence)
+    if unresolved_orders:
+        detail = ", ".join(
+            f"{u['client_order_id']}({u['submit_status']})" for u in unresolved_orders)
+        return _unknown(
+            f"{len(unresolved_orders)} order(s) have no terminal fate [{detail}] -- "
+            f"a submitted order that was not proven absent, cancelled or rejected "
+            f"may still be live at the venue, and a flat position book does not "
+            f"prove otherwise. Order truth must be reconciled before any retry.",
+            session_id=session_id, journal_state=journal_state,
+            broker_state=getattr(broker_truth, "state", None),
             transitions=tuple(transitions), evidence=evidence)
 
     if broker_truth is None or getattr(broker_truth, "is_unknown", True):

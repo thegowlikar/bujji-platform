@@ -79,6 +79,34 @@ CONTROLS = [
      '        return UNKNOWN, f"journal records an unrecognised state {raw!r}"',
      '        return TradingSessionState.ANALYSING_MARKET, "coerced"',
      ["test_an_unrecognised_recorded_state_is_unknown"]),
+    ("NC13 order fate stops blocking -- position truth alone decides", LC,
+     "    if unresolved_orders:",
+     "    if False:",
+     ["test_crash_after_submit_intent_is_UNKNOWN_even_when_the_broker_is_flat",
+      "test_an_ACKED_order_with_no_fill_is_still_working_and_blocks",
+      "test_one_unresolved_leg_blocks_even_when_the_others_are_terminal"]),
+
+    ("NC14 an ACKED working order is treated as terminal", LC,
+     "_RESOLVED_ORDER_FATES = (LEG_NOT_SUBMITTED, LEG_SUBMIT_FAILED, LEG_CANCELLED)",
+     "_RESOLVED_ORDER_FATES = (LEG_NOT_SUBMITTED, LEG_SUBMIT_FAILED, LEG_CANCELLED, 'ACKED')",
+     ["test_an_ACKED_order_with_no_fill_is_still_working_and_blocks"]),
+
+    ("NC15 a SUBMIT_INTENT of unknown fate is treated as terminal", LC,
+     "                if leg.submit_status in _RESOLVED_ORDER_FATES:",
+     "                if True:",
+     ["test_crash_after_submit_intent_is_UNKNOWN_even_when_the_broker_is_flat",
+      "test_an_ACKED_order_with_no_fill_is_still_working_and_blocks"]),
+
+    ("NC16 an unreadable order history is swallowed", LC,
+     "        return [], f\"{type(exc).__name__}: {exc}\"",
+     "        return [], None",
+     ["test_an_unreadable_order_history_is_reported_not_swallowed"]),
+
+    ("NC17 the order-fate gate refuses even resolved fates", LC,
+     "                if leg.fill.cumulative_filled_quantity > 0:",
+     "                if False:",
+     ["test_restart_rebuilds_state_when_journal_and_broker_agree",
+      "test_partial_entry_agrees_when_the_broker_holds_the_filled_leg"]),
 ]
 
 
