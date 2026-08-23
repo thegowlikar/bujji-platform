@@ -133,14 +133,14 @@ are deliberately absent from the table above.
 starts, which modules production can reach. Current measurement:
 
 ```
-python files            1866
-  test modules           576
-  production modules    1290
+python files            1868
+  test modules           577
+  production modules    1291
 
-REACHABLE                487   (37.8% of production)
-orphaned                 803
+REACHABLE                487   (37.7% of production)
+orphaned                 804
   test-only              603
-  unreferenced           200
+  unreferenced           201
 ```
 
 **`test-only` is a classification, not a verdict.** It means exactly one thing:
@@ -558,6 +558,41 @@ What is genuinely missing is not a type but a **binding**: nothing today joins
 the selection evidence (regime inputs, candidates, universe version,
 analytical snapshot references) to the construction assessment that resulted
 from it. That binding is the decision-evidence work, not a new model — see §7.
+
+## 5f. Paper-session acceptance, and the two gates around it
+
+A paper session is bracketed by two read-only tools. Neither can deploy,
+enable, start, place or modify anything; each prints a verdict an operator
+then acts on.
+
+**Before — `tools/paper_session_readiness.py`.** Refuses unless IDENTITY (the
+code that would run is the code that was verified), INHIBITION (nothing can
+start an order-capable session on its own), CONFIGURATION (`shadow_mode` is
+literally `true`) and EVIDENCE (the last package replays) all pass. Every
+check is PASS, FAIL or UNKNOWN, and **UNKNOWN is never PASS** — an assessment
+that ran no checks at all reports PENDING_EVIDENCE rather than READY, because
+a fail-open default in a readiness gate turns an unexamined system into an
+endorsed one.
+
+**After — `tools/decision_replay_verifier.py`.** Reports the strongest replay
+level the evidence *demonstrates*, by recomputation. Levels are strictly
+ordered, so proving eligibility replay while the analytical binding is absent
+earns level 1, not 3.
+
+Full criteria and the operator procedure: [docs/PAPER_SESSION_RUNBOOK.md](docs/PAPER_SESSION_RUNBOOK.md).
+
+**Acceptance is not profit.** A session is judged on whether it behaved
+correctly and can explain itself. A profitable session that cannot replay has
+failed; a zero-trade session that records why it declined every shape has
+passed. For a premium seller, zero trades is the common outcome.
+
+### The level-4 ceiling is structural
+
+Level 4 is unreachable today, and not because of a missing feature: the option
+chain that strikes were selected from is not part of the evidence package.
+Strikes cannot be re-derived from a book nobody wrote down. Whether a
+per-entry chain snapshot is worth its size is an operator decision about
+evidence volume, recorded here rather than patched quietly.
 
 ## 6. Deprecations
 
