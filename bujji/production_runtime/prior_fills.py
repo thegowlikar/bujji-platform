@@ -54,7 +54,13 @@ def group_ids_filled_on(journal, trading_date: str) -> List[str]:
     different things for different rows. 20:00 UTC is 01:30 IST the next day.
     """
     found = []
-    for group_id in journal.read_all_group_ids():
+    from bujji.production_runtime.position_group_scope import position_group_ids
+
+    # POSITION groups only, by explicit contract. A session-scoped row carries
+    # no fill and would contribute nothing today -- but "contributes nothing
+    # because of how a fold happens to work" is not a reason, and this decides
+    # whether a restarted process may trade.
+    for group_id in position_group_ids(journal):
         for event in journal.read_events(group_id):
             if event.event_type != FILL_EVENT:
                 continue

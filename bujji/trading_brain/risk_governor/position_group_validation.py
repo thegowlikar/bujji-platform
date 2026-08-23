@@ -33,6 +33,29 @@ KNOWN_EVENT_TYPES = frozenset({
     "RECONCILIATION_ATTEMPTED",
     "FINAL_RECONCILIATION_CONFIRMED",
     "OPERATOR_CORRECTION_RECORDED",
+    # SESSION_TRANSITION -- M4, authorised 2026-08-23. A NARROW, scoped
+    # extension of this frozen vocabulary; see the block below and
+    # tests/test_frozen_vocabulary_extension.py, which authorises THIS change
+    # specifically rather than unfreezing the file.
+    #
+    # WHY IT BELONGS HERE AND NOT IN A SECOND STORE. Session lifecycle and
+    # position lifecycle are the same question asked at two scopes, and the
+    # whole architecture effort is about removing second authorities over one
+    # fact. A separate session store would be exactly that.
+    #
+    # WHY IT NEEDS NO POSITION GROUP. A no-trade day mints no group at all, so
+    # a session-scoped event cannot require one -- and refusal, startup and
+    # completion sessions must have durable history too. Session events use a
+    # `SESSION:<session_id>` identity in the position_group_id column, which
+    # is a distinct namespace, never an exposure group.
+    #
+    # WHY IT CANNOT POLLUTE MARGIN OR RECONCILIATION. `apply_event_to_state`
+    # does not recognise this type, so a session-scoped identity folds with
+    # constructed=False -> LIFECYCLE_MINTED, and MINTED is not in
+    # whole_book_margin_provider._ACTIVE_LIFECYCLE_STATES. Every group/margin
+    # query therefore skips it BY CONSTRUCTION, with no frozen consumer
+    # changed and no synthetic exposure group created.
+    "SESSION_TRANSITION",
 })
 
 # CLOSED and ABORTED are NOT in this vocabulary -- both are purely derived
@@ -49,6 +72,12 @@ _REQUIRED_FIELDS = {
         "client_order_id", "cumulative_filled_quantity_after",
         "delta_quantity", "delta_cost_basis_status",
     ),
+    # SESSION_TRANSITION (M4): who, from what, to what, why, and on what
+    # evidence. `evidence_ref` is the reference to whatever established the
+    # transition -- a reconciliation verdict, a fill's event id, a broker-truth
+    # result -- so a reader can follow any state back to what caused it.
+    "SESSION_TRANSITION": ("session_id", "prior_state", "next_state", "cause",
+                           "evidence_ref"),
     "CANCEL_INTENT": ("client_order_id",),
     "CANCEL_ACK": ("client_order_id",),
     "TARGET_GROUP_REDUCTION_APPLIED": (
@@ -96,6 +125,19 @@ def validate_event(
             f"SUBMIT_FAILURE.resolution_basis must be one of {_VALID_RESOLUTION_BASES}, "
             f"got {payload['resolution_basis']!r}"
         )
+
+    if event_type == "SESSION_TRANSITION":
+        # SESSION-SCOPED, so the position-group preconditions below do not
+        # apply: there may be no group at all (a no-trade day), and a session
+        # continues past any single group's terminality. It mutates no leg and
+        # no lifecycle_state -- `apply_event_to_state` does not recognise it --
+        # so it cannot alter what any group/margin/reconciliation query sees.
+        if payload["prior_state"] == payload["next_state"]:
+            raise IllegalEventError(
+                f"SESSION_TRANSITION from {payload['prior_state']!r} to itself "
+                f"carries no information; a state that did not change is not a "
+                f"transition")
+        return
 
     if event_type == "MINTED":
         if current_state is not None:

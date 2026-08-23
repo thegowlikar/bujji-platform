@@ -35,6 +35,7 @@ from bujji.trading_brain.risk_governor.adaptive_risk_memory import AdaptiveRiskM
 from bujji.trading_brain.risk_governor.margin_calibration_runner import MarginCalibrationStore
 from bujji.trading_brain.risk_governor.live_risk_context_provider import LiveRiskContextProvider
 
+from .position_group_scope import PositionGroupScopedJournal
 from .runtime_state_machine import RuntimeStateMachine
 from .shadow_trade_timeline import ShadowTradeTimeline
 
@@ -126,14 +127,29 @@ def build_trading_brain_composition_root(
     runtime_state_machine = RuntimeStateMachine(
         event_bus, clock, initial=initial_state if initial_state is not None else RuntimeState.INITIALIZING,
     )
+    # SCOPE THE JOURNAL BEFORE IT CROSSES INTO THE FROZEN PACKAGE.
+    #
+    # `LiveRiskContextProvider` and `governor_context_builder` call
+    # `read_all_group_ids()` themselves and fold every id they get. They are
+    # inside byte-frozen `bujji/trading_brain/` and cannot filter, so the
+    # filtering happens HERE, at the boundary, by handing them a
+    # position-scoped view instead of the raw journal.
+    #
+    # Without this, a session-scoped row would reach margin projection and be
+    # reconstructed as a position group. It would fold to MINTED and be
+    # skipped today -- but that is an accident of the fold's treatment of an
+    # unknown event type, not a stated rule, and margin is not a place to rely
+    # on an accident.
+    scoped_journal = PositionGroupScopedJournal(journal)
+
     live_risk_context_provider = LiveRiskContextProvider(
-        journal=journal, margin_provider=margin_provider, capital_snapshot_provider=capital_snapshot_provider,
+        journal=scoped_journal, margin_provider=margin_provider, capital_snapshot_provider=capital_snapshot_provider,
         memory=memory, market_regime_provider=market_regime_provider, calibration_store=calibration_store,
         cache_ttl_seconds=cache_ttl_seconds,
     )
     return TradingBrainCompositionRoot(
         broker=broker, event_bus=event_bus, timeline=timeline, runtime_state_machine=runtime_state_machine,
-        journal=journal, clock=clock, live_risk_context_provider=live_risk_context_provider,
+        journal=scoped_journal, clock=clock, live_risk_context_provider=live_risk_context_provider,
         margin_provider=margin_provider, capital_snapshot_provider=capital_snapshot_provider,
         capital_safety_thresholds=capital_safety_thresholds, portfolio_risk_thresholds=portfolio_risk_thresholds,
         risk_policy=risk_policy or RiskPolicy(), position_health_thresholds=position_health_thresholds,

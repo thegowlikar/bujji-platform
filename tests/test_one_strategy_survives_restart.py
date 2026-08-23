@@ -287,10 +287,20 @@ def test_the_frozen_journal_package_is_not_modified():
     import bujji.production_runtime.prior_fills as mod
 
     src = inspect.getsource(mod)
-    assert "read_all_group_ids" in src and "read_events" in src
+    # M4 (2026-08-23): this used to assert `read_all_group_ids` by name.
+    # `prior_fills` now enumerates through
+    # `position_group_scope.position_group_ids`, which filters session-scoped
+    # identities by explicit contract -- a strictly stronger boundary, and the
+    # ratchet in tests/test_session_scope_is_excluded.py refuses any runtime
+    # module that calls `read_all_group_ids` directly.
+    #
+    # The property this test protects is unchanged: prior_fills reads the
+    # journal through its public API and never touches the frozen package.
+    assert "position_group_ids" in src and "read_events" in src
     assert "position_group_events" not in src, (
         "this must not query the table directly -- that would be a second "
         "authority over the journal's own schema")
+    assert "sqlite" not in src.lower(), "no direct database access"
 
 
 # --------------------------------------------------------------------------

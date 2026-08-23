@@ -986,6 +986,37 @@ class OptionsOSRunner:
             defined_risk_only=defined_risk_only,
         )
 
+        # M4: BIND THE DURABLE LIFECYCLE AUTHORITY.
+        #
+        # The governor's in-memory tracker is now a cache. Every transition it
+        # makes is journaled FIRST, into the same position_group_events stream
+        # that carries position lifecycle, as a SESSION_TRANSITION under a
+        # SESSION: identity. Without this binding the governor still runs, but
+        # nothing is durable and the session cannot be reconstructed after a
+        # restart -- which `lifecycle_unjournaled_count()` reports and the
+        # safety verdict refuses to certify.
+        self._governor.bind_lifecycle_journal(
+            self._journal, self._session_id, self._clock, self._logger)
+
+        # The session's own first transition, journaled like every other.
+        from bujji.production_runtime.session_lifecycle import record_transition
+        from bujji.production_runtime.trading_session_governor.session_trading_state import (
+            TradingSessionState as _TSS)
+
+        try:
+            record_transition(
+                self._journal, self._session_id, _TSS.INITIALIZING,
+                _TSS.ANALYSING_MARKET, cause="session_start",
+                evidence_ref=f"startup:{self._as_of_date}",
+                clock=self._clock, logger=self._logger)
+        except Exception as exc:  # noqa: BLE001 -- recorded, never fatal to startup
+            self._logger.critical(
+                "LIFECYCLE -- could not journal the session's first transition "
+                "(%s: %s). This session cannot be reconstructed after a restart.",
+                type(exc).__name__, exc)
+            self._governor_result_summary["lifecycle_journal_error"] = (
+                f"{type(exc).__name__}: {exc}")
+
         shadow_sessions_root = REPO_ROOT / artifacts_cfg.get("shadow_sessions_root", "shadow_sessions")
         self._store = SessionStore(shadow_sessions_root, self._session_id)
         self._recorder = ShadowObservatoryRecorder(self._store)

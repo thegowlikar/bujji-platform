@@ -133,14 +133,14 @@ are deliberately absent from the table above.
 starts, which modules production can reach. Current measurement:
 
 ```
-python files            1838
-  test modules           559
-  production modules    1279
+python files            1847
+  test modules           563
+  production modules    1284
 
-REACHABLE                481   (37.6% of production)
-orphaned                 798
+REACHABLE                483   (37.6% of production)
+orphaned                 801
   test-only              603
-  unreferenced           195
+  unreferenced           198
 ```
 
 **`test-only` is a classification, not a verdict.** It means exactly one thing:
@@ -301,19 +301,47 @@ likely accidental edit.
 
 ## 4. Session state machine
 
-Bujji currently runs **two** session-scoped state machines, and this is a known
-defect rather than a design:
+**RESOLVED IN M4 (2026-08-23). `TradingSessionState` is the single owner of
+session and position lifecycle.**
 
-| Machine | Module | States |
-| --- | --- | --- |
-| `TradingSessionState` | `…trading_session_governor.session_trading_state` | `ANALYSING_MARKET → STRATEGY_LOCKED → POSITION_ACTIVE → MANAGING → EXITED → SESSION_COMPLETE` |
-| `RuntimeState` | `bujji.production_runtime.runtime_state_machine` | includes its own `POSITION_ACTIVE` |
+Bujji ran **two** session-scoped machines. Both transitioned to
+`POSITION_ACTIVE`, from different call sites, with no defined relationship, and
+both gated entry — `RuntimeState` through `_ENTRY_ACCEPTING_STATES`,
+`TradingSessionState` through `entry_control.can_enter_trade`. Neither was
+journaled, so neither survived a restart.
 
-Both transition to `POSITION_ACTIVE` for the same session, from different call
-sites, with no defined relationship. **M4 collapses them into one journaled
-machine.** Until then, `TradingSessionState` is the machine that gates entry
-(`entry_control.can_enter_trade` reads it) and is therefore the one to trust
-when they disagree.
+| Machine | Status after M4 |
+| --- | --- |
+| `TradingSessionState` (`…trading_session_governor.session_trading_state`) | **OWNER.** Transitions journaled; state derived from the journal reconciled against broker truth. |
+| `RuntimeState` (`bujji.production_runtime.runtime_state_machine`) | **RETIRED as lifecycle authority.** Keeps only connectivity and market phase. |
+
+**Why this owner.** Its states map onto facts the durable journal already
+holds — `MINTED`/`CONSTRUCTED` means a strategy was locked, `FILL_OBSERVED`
+means a position is active, net-zero means it exited. `RuntimeState` mixes
+connectivity (`CONNECTING`) and market phase (`PREMARKET`) with position
+lifecycle, and those are **process** facts that must not survive a restart:
+after a crash you genuinely are connecting again, and journaling that would
+mean reconstructing something that has to be re-derived fresh.
+
+**Transitions are journaled; state is derived.** Every transition is appended
+to the same `position_group_events` stream as position lifecycle, as a
+`SESSION_TRANSITION` carrying session identity, prior state, next state, cause,
+timestamp and an evidence reference — under a `SESSION:<id>` identity that
+`position_group_scope` excludes from every position-group boundary by explicit
+contract, enforced on both the read and the write side. The runner's in-memory
+tracker is a **cache**; it may not decide whether Bujji is flat, open, safe to
+enter, or finished.
+
+**Disagreement is `UNKNOWN`, and `UNKNOWN` blocks entry and makes the session
+unsafe.** The journal says what this process recorded; broker truth says what
+the account holds. When they disagree, neither is assumed correct. A missing
+history, a broken transition chain, an unreadable position history, and a
+broker `UNKNOWN` all reach the same place, for the same reason: a session that
+cannot establish what it is may not take new risk.
+
+`UNKNOWN` is deliberately **not** a member of the state enum, so no transition
+table can accept it as a target and no caller can transition into it by
+mistake.
 
 ### Entry gates, in the order they run
 
@@ -341,7 +369,7 @@ A milestone is complete when its acceptance test passes and failed before.
 | 1 | One instrument/universe model | The chain request's strike count and expiry are derived from the universe; band ⊆ universe holds for every expiry role, including on expiry day. |
 | 2 | Durable tick journal + replay | A recorded session replays to an identical decision sequence; a corrupted journal refuses rather than degrades. |
 | 3 | One broker-truth boundary | With the broker read forced to fail, no consumer concludes flat; the session refuses and says why. |
-| 4 | One journaled state machine | Killing the process mid-session and restarting reconstructs state from the journal. |
+| 4 | One journaled state machine | **MET.** Killing the process mid-session and restarting reconstructs state from the journal, reconciled against broker truth; disagreement, missing history or corruption is `UNKNOWN` and blocks entry. |
 | 5 | Event-driven protection | An adverse move between poll intervals triggers protection from the tick path; reconciliation runs with the management loop stopped. |
 | 6 | Session evidence package | Every terminal path produces a package; a session that cannot prove closure exits non-zero. |
 
