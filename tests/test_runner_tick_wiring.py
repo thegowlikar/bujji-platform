@@ -142,15 +142,6 @@ class TestBlindCyclesAreLoud:
         assert view.prices == {}, "entry prices reappeared as market prices"
         assert view.reason, "the refusal carries no typed reason"
 
-    def test_the_deprecated_adapter_never_returns_entry_prices(self, tmp_path):
-        """The compatibility shim must not reintroduce the substitution."""
-        r = _runner(tmp_path, "B-1b")
-        r._entry_prices = {"X": 100.0}
-        r._contracts_by_symbol = {}
-        prices, from_ticks = r._current_leg_prices("2026-05-25T10:00:00+05:30")
-        assert from_ticks is False
-        assert prices == {}, "the adapter still substitutes entry prices"
-
     def test_blind_cycles_do_not_bank_a_valuation(self, tmp_path):
         """THE critical property: a blind cycle's 0.0 unrealized P&L means
         'we never looked', not 'it never moved'. Banking it would produce

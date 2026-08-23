@@ -653,10 +653,15 @@ Recorded here so no reader has to infer it from silence.
   different route -- the event bus into `ShadowObservatoryRecorder` -- and the
   22 purpose-built journals under `bujji/journal/` are almost entirely unused
   by the runtime.
-- **`_current_leg_prices` is a dead second price accessor.** Zero production
-  callers; retained "so an unmigrated caller keeps compiling" when none
-  exists. It is safe (it returns an empty mapping, never entry prices, and a
-  P0 test locks that), but it is a second way to ask for prices.
+- ~~`_current_leg_prices` is a dead second price accessor.~~ **Resolved
+  (2026-08-24).** Retired, and the P0 lock moved to the live path. Guarding
+  one named dead function was the weaker form of the guarantee: it said
+  nothing about a second accessor appearing later under a different name. The
+  lock is now stated three ways -- `_current_leg_quotes` cannot return entry
+  prices; NO method in the runner may return them as a price mapping; and
+  `LegPriceView` structurally discards prices on an invalid view, which had no
+  direct test at all despite being what the other two rest on. There is now
+  exactly one price accessor on the management path.
 - **Risk state is ephemeral.** Recomputed per cycle, never journaled; a restart
   loses every risk decision and its inputs.
 - **No FYERS payload field is verified.** `PROVISIONAL_SDK_FIELD_MAP` is

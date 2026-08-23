@@ -649,8 +649,11 @@ class OptionsOSRunner:
         # Real per-cycle unrealized P&L for the open position, appended
         # once per management pass -- the raw material for MFE/MAE.
         self._valuation_history: list = []
-        # Optional intraday tick source. When absent the runner falls
-        # back to entry prices and says so -- see _current_leg_prices().
+        # Optional intraday tick source. When absent, `_current_leg_quotes`
+        # returns an INVALID view carrying no prices at all -- it does not
+        # fall back to entry prices, and there is no longer a second accessor
+        # that could. (This comment described the removed P0 as current
+        # behaviour until 2026-08-24.)
         self._price_provider = None
         self._tick_feed = None  # set only by tick_source.type=websocket
         # UNIVERSE-FIRST SUBSCRIPTION (see _ensure_universe_subscribed).
@@ -4086,18 +4089,6 @@ class OptionsOSRunner:
                                    f"{verdict.origin or 'live ticks'}",
                             quotes=dict(quotes), prices=prices,
                             priced_from_ticks=True, quality=verdict)
-
-    def _current_leg_prices(self, as_of: str):
-        """DEPRECATED one-way adapter. Derived from `_current_leg_quotes`.
-
-        Retained only so an unmigrated caller keeps compiling. It CANNOT
-        reintroduce the defect: when the view is invalid it returns an EMPTY
-        mapping, never the entry prices. A caller that treats empty as
-        "nothing to value" behaves correctly; one that treats it as a price
-        set gets nothing to price with.
-        """
-        view = self._current_leg_quotes(as_of)
-        return (dict(view.prices) if view.valid else {}), view.priced_from_ticks
 
     def _capture_exit_fills(self, exit_symbols, result) -> None:
         """Harvest REAL per-leg exit prices from an execution that
