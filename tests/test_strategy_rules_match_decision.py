@@ -304,3 +304,48 @@ class TestTheCandidateRecordActuallyReachesTheJournal:
         governor.select_and_lock_strategy(TREND_TRENDING_UP, VOL_LOW)
         payload = self._selection_event(published).payload
         json.dumps(payload["candidates"])
+
+
+class TestTheRunnerActuallyHandsOverTheEvidenceReference:
+    """The governor publishes whatever the runner gives it. If the runner
+    never passes the reference, every test above still passes and the
+    evidence chain is still broken -- so the call site itself is asserted.
+    """
+
+    @staticmethod
+    def _runner_source():
+        from pathlib import Path
+        root = Path(__file__).resolve().parent.parent
+        return (root / "bujji_options_os_runner.py").read_text()
+
+    def test_the_entry_path_passes_an_analytical_snapshot_ref(self):
+        import ast
+
+        tree = ast.parse(self._runner_source())
+        calls = [
+            n for n in ast.walk(tree)
+            if isinstance(n, ast.Call)
+            and isinstance(n.func, ast.Attribute)
+            and n.func.attr == "select_and_lock_strategy"
+        ]
+        assert calls, "the runner no longer calls select_and_lock_strategy at all"
+        for call in calls:
+            kwargs = {k.arg for k in call.keywords}
+            assert "analytical_snapshot_ref" in kwargs, (
+                "a select_and_lock_strategy call site passes no "
+                "analytical_snapshot_ref; that selection would be recorded with "
+                "no link back to the assessment it acted on")
+
+    def test_the_thesis_path_sets_the_reference_from_the_assessment_id(self):
+        """And that the value handed over is the thesis identity, not
+        something synthesized at the call site."""
+        src = self._runner_source()
+        assert '_analytical_snapshot_ref = getattr(thesis, "assessment_id", None)' in src, (
+            "the reference is no longer taken from the thesis assessment_id")
+
+    def test_the_reference_defaults_to_None_rather_than_being_absent(self):
+        """A provider that derives from no thesis -- a human override, a
+        replay -- must record None, so 'no analytical evidence' is stated
+        rather than looking like a field nobody wrote."""
+        src = self._runner_source()
+        assert "self._analytical_snapshot_ref = None" in src

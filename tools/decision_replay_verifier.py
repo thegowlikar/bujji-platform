@@ -188,32 +188,63 @@ def check_input_integrity(pkg: Path, report: Report) -> Optional[List[dict]]:
 # --------------------------------------------------------------------------
 # Level 2 -- analytical reproducibility
 # --------------------------------------------------------------------------
-def check_analytical_reproducibility(pkg: Path, records: List[dict], report: Report) -> None:
-    """Can the recorded market EVIDENCE re-derive the recorded market
-    ASSESSMENT? Today the packages record the assessment (the regime labels)
-    but not the observations the regime was computed from, so this cannot be
-    attempted -- which is a gap to report, never a level to assume."""
+def check_analytical_reproducibility(pkg, records, report):
+    """Does the recorded selection resolve to the market assessment it came
+    from, and do the two AGREE about the regime that was handed over?
+
+    This is a cross-file check, not a presence check. A reference that points
+    at nothing, or at a thesis that recorded a different regime than the
+    selection acted on, is worse than no reference: it looks like provenance
+    while contradicting the decision it claims to explain."""
     selections = [r for r in records if _explanation(r).get("stage") == SELECTION_STAGE]
     if not selections:
         report.block(2, f"no {SELECTION_STAGE} record exists in this package")
         return
 
-    exp = _explanation(selections[0])
-    has_regime = exp.get("trend_regime") is not None and exp.get("volatility_regime") is not None
-    snapshot_ref = exp.get("market_snapshot_ref") or exp.get("analytical_snapshot_ref")
-
-    if not has_regime:
-        report.block(2, "the recorded selection names no regime inputs at all")
+    theses, errors = _read_jsonl(pkg / "market_thesis.jsonl")
+    if errors and not theses:
+        report.block(2, f"the market assessment record is absent or unreadable "
+                        f"({'; '.join(errors[:2])})")
         return
-    if snapshot_ref is None:
+
+    by_id = {}
+    for t in theses:
+        aid = (t.get("thesis") or {}).get("assessment_id")
+        if aid:
+            by_id[aid] = t
+
+    unreferenced = [s for s in selections
+                    if not _explanation(s).get("analytical_snapshot_ref")]
+    if unreferenced:
         report.block(
             2,
-            "the package records the regime LABELS but no reference to the market "
-            "observations they were derived from, so the assessment cannot be "
-            "recomputed -- only taken on trust. This is the binding gap between "
-            "market evidence and decision evidence.")
+            f"{len(unreferenced)}/{len(selections)} selection record(s) name no "
+            f"analytical_snapshot_ref, so the regime labels they acted on cannot be "
+            f"traced to the assessment that produced them. The package records both "
+            f"halves and no link between them.")
         return
-    report.add(2, True, "analytical inputs are referenced", f"snapshot ref {snapshot_ref!r}")
+
+    for i, rec in enumerate(selections):
+        exp = _explanation(rec)
+        ref = exp.get("analytical_snapshot_ref")
+        thesis = by_id.get(ref)
+        if thesis is None:
+            report.add(2, False, f"selection #{i + 1} resolves its assessment",
+                       f"analytical_snapshot_ref {ref!r} matches no assessment_id in "
+                       f"market_thesis.jsonl ({len(by_id)} available)")
+            continue
+        handed = thesis.get("regime_handed_to_selector") or {}
+        if (handed.get("trend_regime") != exp.get("trend_regime")
+                or handed.get("volatility_regime") != exp.get("volatility_regime")):
+            report.add(2, False, f"selection #{i + 1} agrees with its assessment",
+                       f"the assessment handed over "
+                       f"({handed.get('trend_regime')}, {handed.get('volatility_regime')}) "
+                       f"but the selection acted on "
+                       f"({exp.get('trend_regime')}, {exp.get('volatility_regime')})")
+            continue
+        report.add(2, True, f"selection #{i + 1} resolves and agrees",
+                   f"{ref} handed ({handed.get('trend_regime')}, "
+                   f"{handed.get('volatility_regime')})")
 
 
 # --------------------------------------------------------------------------

@@ -29,9 +29,20 @@ sys.modules[_SPEC.name] = drv
 _SPEC.loader.exec_module(drv)
 
 
-def _package(tmp_path, decisions, *, session_id="S1", orders=None, metadata=True):
+def _thesis(assessment_id, trend, vol):
+    return {"record_type": "MARKET_THESIS_DERIVATION",
+            "regime_handed_to_selector": {"trend_regime": trend,
+                                          "volatility_regime": vol},
+            "thesis": {"assessment_id": assessment_id}}
+
+
+def _package(tmp_path, decisions, *, session_id="S1", orders=None, metadata=True,
+             theses=None):
     pkg = tmp_path / session_id
     pkg.mkdir()
+    if theses is not None:
+        (pkg / "market_thesis.jsonl").write_text(
+            "\n".join(json.dumps(t) for t in theses) + "\n")
     (pkg / "decisions.jsonl").write_text(
         "\n".join(json.dumps(d) for d in decisions) + ("\n" if decisions else ""))
     if metadata:
@@ -91,8 +102,8 @@ class TestItRefusesToAwardWhatItCannotShow:
         pkg = _package(tmp_path, [
             _selection("S1", "SIDEWAYS", "CONTRACTION", "NEUTRAL_PREMIUM_SELLING",
                        "2026-08-20T09:51:27+05:30",
-                       extra={"market_snapshot_ref": "snap-1"}),
-        ])
+                       extra={"analytical_snapshot_ref": "MTA-1"}),
+        ], theses=[_thesis("MTA-1", "SIDEWAYS", "CONTRACTION")])
         report = drv.verify(pkg)
         assert 4 in report.blocked_because
         assert report.achieved <= 3
@@ -104,8 +115,9 @@ class TestItRefusesToAwardWhatItCannotShow:
             tmp_path,
             [_selection("S1", "SIDEWAYS", "CONTRACTION", "NEUTRAL_PREMIUM_SELLING",
                         "2026-08-20T09:51:27+05:30",
-                        extra={"market_snapshot_ref": "snap-1"})],
-            orders=[{"stage": "ORDER_SUBMITTED", "symbol": "NIFTY-CE"}])
+                        extra={"analytical_snapshot_ref": "MTA-1"})],
+            orders=[{"stage": "ORDER_SUBMITTED", "symbol": "NIFTY-CE"}],
+            theses=[_thesis("MTA-1", "SIDEWAYS", "CONTRACTION")])
         report = drv.verify(pkg)
         assert report.achieved < 4
         assert "chain snapshot" in report.blocked_because[4]
@@ -117,8 +129,8 @@ class TestItDetectsRealDisagreement:
         pkg = _package(tmp_path, [
             _selection("S1", "SIDEWAYS", "CONTRACTION", "BEAR_CALL_SPREAD",
                        "2026-08-20T09:51:27+05:30",
-                       extra={"market_snapshot_ref": "snap-1"}),
-        ])
+                       extra={"analytical_snapshot_ref": "MTA-1"}),
+        ], theses=[_thesis("MTA-1", "SIDEWAYS", "CONTRACTION")])
         report = drv.verify(pkg)
         failures = [f for f in report.findings if f.level == 3 and not f.ok]
         assert failures, "a fabricated selection was accepted as reproducible"
@@ -134,8 +146,8 @@ class TestItDetectsRealDisagreement:
         pkg = _package(tmp_path, [
             _selection("S1", "SIDEWAYS", "CONTRACTION", "NEUTRAL_PREMIUM_SELLING",
                        "2026-08-20T09:51:27+05:30", candidates=tampered,
-                       extra={"market_snapshot_ref": "snap-1"}),
-        ])
+                       extra={"analytical_snapshot_ref": "MTA-1"}),
+        ], theses=[_thesis("MTA-1", "SIDEWAYS", "CONTRACTION")])
         report = drv.verify(pkg)
         assert any(f.level == 3 and not f.ok for f in report.findings)
 
@@ -147,8 +159,8 @@ class TestItDetectsRealDisagreement:
         pkg = _package(tmp_path, [
             _selection("S1", "SIDEWAYS", "CONTRACTION", "NEUTRAL_PREMIUM_SELLING",
                        "2026-08-20T09:51:27+05:30", candidates=real,
-                       extra={"market_snapshot_ref": "snap-1"}),
-        ])
+                       extra={"analytical_snapshot_ref": "MTA-1"}),
+        ], theses=[_thesis("MTA-1", "SIDEWAYS", "CONTRACTION")])
         report = drv.verify(pkg)
         assert all(f.ok for f in report.findings if f.level == 3)
         assert report.achieved == 3
@@ -211,3 +223,54 @@ class TestTheOperatorResult:
         assert "WHY NOT" in text, (
             "a report that names a level without naming the obstacle to the next one "
             "reads as a ceiling rather than a gap")
+
+
+class TestTheAnalyticalBindingIsCheckedNotAssumed:
+    """A reference that resolves to nothing, or to an assessment that
+    disagrees, is worse than no reference: it looks like provenance while
+    contradicting the decision it claims to explain."""
+
+    def test_an_unreferenced_selection_blocks_level_two(self, tmp_path):
+        pkg = _package(tmp_path, [
+            _selection("S1", "SIDEWAYS", "CONTRACTION", "NEUTRAL_PREMIUM_SELLING",
+                       "2026-08-20T09:51:27+05:30"),
+        ], theses=[_thesis("MTA-1", "SIDEWAYS", "CONTRACTION")])
+        report = drv.verify(pkg)
+        assert 2 in report.blocked_because
+        assert "no link between them" in report.blocked_because[2]
+        assert report.achieved == 1
+
+    def test_a_dangling_reference_fails_level_two(self, tmp_path):
+        pkg = _package(tmp_path, [
+            _selection("S1", "SIDEWAYS", "CONTRACTION", "NEUTRAL_PREMIUM_SELLING",
+                       "2026-08-20T09:51:27+05:30",
+                       extra={"analytical_snapshot_ref": "MTA-MISSING"}),
+        ], theses=[_thesis("MTA-1", "SIDEWAYS", "CONTRACTION")])
+        report = drv.verify(pkg)
+        assert any(f.level == 2 and not f.ok for f in report.findings)
+        assert report.achieved == 1
+
+    def test_an_assessment_that_disagrees_about_the_regime_fails_level_two(self, tmp_path):
+        """The case a presence check would wave through: the link resolves,
+        but the assessment handed over a different regime than the selection
+        acted on."""
+        pkg = _package(tmp_path, [
+            _selection("S1", "SIDEWAYS", "CONTRACTION", "NEUTRAL_PREMIUM_SELLING",
+                       "2026-08-20T09:51:27+05:30",
+                       extra={"analytical_snapshot_ref": "MTA-1"}),
+        ], theses=[_thesis("MTA-1", "TRENDING_UP", "HIGH_VOL")])
+        report = drv.verify(pkg)
+        failures = [f for f in report.findings if f.level == 2 and not f.ok]
+        assert failures, "a contradicting assessment was accepted as provenance"
+        assert "acted on" in failures[0].detail
+        assert report.achieved == 1
+
+    def test_a_resolving_agreeing_reference_earns_level_two(self, tmp_path):
+        pkg = _package(tmp_path, [
+            _selection("S1", "SIDEWAYS", "CONTRACTION", "NEUTRAL_PREMIUM_SELLING",
+                       "2026-08-20T09:51:27+05:30",
+                       extra={"analytical_snapshot_ref": "MTA-1"}),
+        ], theses=[_thesis("MTA-1", "SIDEWAYS", "CONTRACTION")])
+        report = drv.verify(pkg)
+        assert all(f.ok for f in report.findings if f.level == 2)
+        assert report.achieved == 3, "level 2 and 3 both hold; only orders are missing"

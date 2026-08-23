@@ -585,6 +585,7 @@ class OptionsOSRunner:
         self._recorder = None
         self._market_data_provider = None
         self._regime_provider = None
+        self._analytical_snapshot_ref = None
         self._intelligence_broker = None
         self._regime_as_of = None
         # No verdict until a cycle assesses one. The entry gate treats None
@@ -1631,6 +1632,16 @@ class OptionsOSRunner:
             evidence_integrity=evidence_integrity,
             data_quality=self._assess_data_quality(snapshot, evidence_integrity),
         )
+        # THE BACK-REFERENCE THAT MAKES REPLAY POSSIBLE. The thesis artifact
+        # already records `regime_handed_to_selector`, so thesis -> regime is
+        # linked. The reverse was not: a selection record named a regime and
+        # nothing else, and matching it back to the thesis meant guessing by
+        # regime VALUE -- ambiguous exactly when it matters, since a session
+        # routinely records several cycles carrying the identical regime (the
+        # real 2026-08-20 package has three UNKNOWN/EXPANSION selections).
+        # Carrying the assessment_id forward makes the link an identity rather
+        # than a coincidence. Nothing decides from it; it is evidence only.
+        self._analytical_snapshot_ref = getattr(thesis, "assessment_id", None)
         return MarketThesisRegimeProvider(thesis, volatility_regime)
 
     def _assess_data_quality(self, snapshot, evidence_integrity) -> Optional[Dict[str, Any]]:
@@ -2980,7 +2991,9 @@ class OptionsOSRunner:
         if not self._data_quality_permits_entry():
             return False
 
-        selection = self._governor.select_and_lock_strategy(trend_regime, volatility_regime)
+        selection = self._governor.select_and_lock_strategy(
+            trend_regime, volatility_regime,
+            analytical_snapshot_ref=getattr(self, "_analytical_snapshot_ref", None))
         self._governor_result_summary["strategy_selected"] = selection.selected_strategy
         if selection.selected_strategy is None:
             self._logger.info("No strategy for regime (trend=%s, vol=%s) -- no entry this cycle.",

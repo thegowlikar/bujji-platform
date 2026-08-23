@@ -152,13 +152,20 @@ class TradingSessionGovernor:
         Non-zero means this session cannot be reconstructed."""
         return getattr(self, "_unjournaled_transitions", 0)
 
-    def select_and_lock_strategy(self, trend_regime: Optional[str], volatility_regime: Optional[str]) -> StrategySelectionResult:
+    def select_and_lock_strategy(self, trend_regime: Optional[str], volatility_regime: Optional[str],
+                                 *, analytical_snapshot_ref: Optional[str] = None) -> StrategySelectionResult:
         """Component 2 + 3: select (deterministic lookup, existing
         regime vocabulary only) then lock (one-time, immutable)."""
         result = select_strategy(trend_regime, volatility_regime, self._clock,
                                  defined_risk_only=self._defined_risk_only)
         self._publish("STRATEGY_SELECTION_EVALUATED", {
             "trend_regime": result.trend_regime, "volatility_regime": result.volatility_regime,
+            # Identity of the market assessment these regime labels came from.
+            # None whenever the regime was supplied by a provider that derives
+            # from no thesis (a human override, a replay) -- recorded as None
+            # rather than omitted, so "no analytical evidence" is stated
+            # rather than looking like a field nobody wrote.
+            "analytical_snapshot_ref": analytical_snapshot_ref,
             "selected_strategy": result.selected_strategy, "reasoning": result.reasoning, "confidence": result.confidence,
             # EVERY shape considered, with the reason it was or was not
             # available -- not just the winner. Without this the journal can
