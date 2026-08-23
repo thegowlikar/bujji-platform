@@ -85,6 +85,13 @@ EXIT_RUNTIME_ERROR = 2
 # bujji-alert@ -> ALERTS.jsonl + the operator's phone.
 EXIT_UNSAFE_SESSION = 3
 
+# PENDING_EVIDENCE: nothing is known to be wrong, but the session could not
+# PROVE what it saw -- a verification that had to run did not reach a verdict.
+# A session that cannot produce its own evidence is not a successful session,
+# so it does not exit 0; a distinct code from UNSAFE so the operator reading
+# the alert does not have to guess which of the two they have.
+EXIT_PENDING_EVIDENCE = 4
+
 
 class ConfigurationError(Exception):
     """Raised for any missing/invalid input required BEFORE a session
@@ -790,6 +797,33 @@ class OptionsOSRunner:
                 f"{recovery['unresolved_after']} -- refusing to trade on top of "
                 "unknown in-flight orders. Inspect the position group journal and "
                 "the broker order book, then resolve or operator-correct them.")
+
+        # PRIOR TICK EVIDENCE, BEFORE ANY ENTRY.
+        #
+        # AFTER the unresolved-order refusal above: if this session is going to
+        # refuse outright over in-flight orders, there is nothing to inspect
+        # for. (It also keeps that raise adjacent to the recovery call it
+        # belongs to, which a windowed source assertion in
+        # tests/test_journaled_execution.py depends on -- the same 1200-char
+        # window this insertion pushed it out of once already.)
+        #
+        # A journal an earlier process left UNSEALED is that process's death
+        # certificate: `_shutdown()` runs from a `finally` and covers orderly
+        # termination only, so an unsealed file means SIGKILL, power loss or an
+        # OOM kill. `recover_unsealed` reports it INCOMPLETE by construction --
+        # what survived is real, but no inspection can establish it is all of
+        # it.
+        #
+        # Attached to the evidence chain before entry, so a session can never
+        # take new risk while silently carrying an unexplained prior death. A
+        # CORRUPT prior journal additionally makes THIS session unsafe: see
+        # session_safety_verdict.
+        from bujji.production_runtime.tick_evidence import inspect_prior_journals
+
+        self._prior_tick_evidence = inspect_prior_journals(
+            REPO_ROOT / "data" / "tick_journal", self._session_id, self._logger)
+        self._governor_result_summary["prior_tick_journals"] = (
+            self._prior_tick_evidence.to_dict())
 
         # THE DAY'S ONE STRATEGY, ACROSS A RESTART.
         #
@@ -4591,6 +4625,18 @@ class OptionsOSRunner:
         """
         journal = getattr(self, "_tick_journal", None)
         if journal is None:
+            # SAY SO, rather than leaving the key absent. A configuration with
+            # no websocket (replay, store-backed) legitimately records no
+            # ticks -- but silence and "no journal was expected" are different
+            # claims, and only the session itself can tell them apart. Leaving
+            # the key absent made the verdict infer legitimacy from silence,
+            # which a negative control caught: a session that recorded nothing
+            # at all still certified.
+            self._governor_result_summary["tick_journal"] = {
+                "expected": False,
+                "detail": "no tick feed in this configuration; no ticks were "
+                          "recorded and none were expected",
+            }
             return
         try:
             from bujji.tick_journal import JournalManifest, MANIFEST_VERSION
@@ -4630,6 +4676,30 @@ class OptionsOSRunner:
                 "TICK JOURNAL sealed -- %d records, %d dropped, complete=%s, "
                 "manifest at %s",
                 stats.written, stats.dropped, stats.complete, manifest_path)
+
+            # THE WRITER'S CLAIM IS NOT EVIDENCE. Everything above is the
+            # journal describing itself -- "I was offered N, wrote N, dropped
+            # 0". Nothing had opened the file back up. A journal truncated
+            # after its last fsync, or altered on disk, self-reports faithful.
+            #
+            # This reads it back through `read_journal`, which re-derives the
+            # content hash, checks it against the manifest, verifies the
+            # sequence has no gaps, and compares the count to what the manifest
+            # said. The verdict below reads `verified`, not `faithful`.
+            from bujji.production_runtime.tick_evidence import (
+                reproduce_recorded_ticks, verify_sealed_journal)
+
+            verified = verify_sealed_journal(journal.path, self._logger)
+            self._governor_result_summary["tick_journal"]["verified"] = verified.to_dict()
+
+            # POST-SESSION AUDIT, after all trading has ended. Reads the sealed
+            # journal back and proves the recorded input stream reproduces.
+            # Holds no broker and constructs no order: it takes a path and
+            # returns a report, so it cannot trigger or repeat an order.
+            reproduced, replay_report = reproduce_recorded_ticks(
+                journal.path, self._logger)
+            replay_report["reproduced"] = reproduced
+            self._governor_result_summary["tick_journal"]["replay"] = replay_report
         except Exception as exc:  # noqa: BLE001 -- teardown must not mask the session result
             self._logger.critical(
                 "TICK JOURNAL could not be sealed (%s: %s) -- the session's tick "
@@ -4832,6 +4902,7 @@ def _run_session(args, as_of_date: str) -> int:
         )
 
         verdict = evaluate_session_safety(summary)
+        summary["session_safety_verdict"] = verdict.as_dict()
         if not verdict.safe:
             logger.critical(
                 "SESSION ENDED UNSAFE (%d reason(s)) -- exiting %d so systemd "
@@ -4839,6 +4910,17 @@ def _run_session(args, as_of_date: str) -> int:
                 len(verdict.reasons), EXIT_UNSAFE_SESSION,
                 " | ".join(verdict.reasons))
             return EXIT_UNSAFE_SESSION
+        # SAFE IS NOT THE SAME AS CERTIFIED. Nothing went wrong, but the
+        # session could not establish its own evidence, so it must not be
+        # reported as a success.
+        if verdict.pending_evidence:
+            logger.critical(
+                "SESSION ENDED PENDING_EVIDENCE (%d reason(s)) -- nothing is known "
+                "to be wrong, but this session cannot prove what it saw, so it is "
+                "not certified. Exiting %d: %s",
+                len(verdict.pending_reasons), EXIT_PENDING_EVIDENCE,
+                " | ".join(verdict.pending_reasons))
+            return EXIT_PENDING_EVIDENCE
         return EXIT_OK
     except (ConfigurationError, MissingRegimeInputError, MarketDataUnavailableError) as exc:
         logging.getLogger("bujji-options-os-shadow").error("Configuration/input failure: %s", exc)

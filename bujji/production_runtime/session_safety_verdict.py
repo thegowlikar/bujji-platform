@@ -108,17 +108,36 @@ def _blindness_detail(reason: str):
 
 @dataclass(frozen=True)
 class SessionSafetyVerdict:
-    """`safe=False` must become a non-zero process exit, never a warning."""
+    """`safe=False` must become a non-zero process exit, never a warning.
+
+    PENDING_EVIDENCE IS A THIRD OUTCOME, and it is not a softer `safe`.
+    `safe` says nothing went wrong. `pending_evidence` says the session's own
+    evidence was never established -- a verification that had to run did not
+    reach a verdict. A session that cannot prove what it saw is not a
+    successful session, so it does not exit 0; but it is not the same claim as
+    "something is wrong", and an operator reading the alert should not have to
+    guess which they have.
+    """
 
     safe: bool
     reasons: Tuple[str, ...]
     position_existed: bool
+    pending_evidence: bool = False
+    pending_reasons: Tuple[str, ...] = ()
+
+    @property
+    def certified(self) -> bool:
+        """Safe AND provable. The only state that may exit 0."""
+        return self.safe and not self.pending_evidence
 
     def as_dict(self) -> Dict[str, Any]:
         return {
             "safe": self.safe,
             "reasons": list(self.reasons),
             "position_existed": self.position_existed,
+            "pending_evidence": self.pending_evidence,
+            "pending_reasons": list(self.pending_reasons),
+            "certified": self.certified,
         }
 
 
@@ -128,6 +147,82 @@ def _position_existed(summary: Dict[str, Any]) -> bool:
             return True
     # entry_filled is written on every entry attempt, True only on a real fill.
     return summary.get("entry_filled") is True
+
+
+def _tick_evidence_findings(summary):
+    """(unsafe_reasons, pending_reasons) from the tick journal's READ side.
+
+    Before M2 was integrated, `tick_journal.faithful` was the WRITER stating
+    its own drop count and nothing ever opened the file back up. These read
+    the verdicts that `bujji.production_runtime.tick_evidence` records after
+    actually reading the journals.
+    """
+    unsafe, pending = [], []
+
+    # 1. What earlier processes left behind, inspected at startup.
+    prior = summary.get("prior_tick_journals")
+    if isinstance(prior, dict):
+        if not prior.get("inspected"):
+            pending.append(
+                f"prior tick journals were never inspected "
+                f"({prior.get('error') or 'inspection did not run'}) -- whether an "
+                f"earlier process died mid-session was not established")
+        for record in prior.get("corrupt") or ():
+            unsafe.append(
+                f"a prior tick journal is CORRUPT ({record.get('path')}) -- that "
+                f"session's evidence can never be read, so nothing about it can "
+                f"be reconstructed or certified")
+    else:
+        pending.append(
+            "prior tick journals were never inspected -- the startup evidence "
+            "check did not run at all")
+
+    # 2. This session's own journal, verified by reading it back.
+    journal = summary.get("tick_journal")
+    if not isinstance(journal, dict):
+        # NOT the same as "no journal was expected". The runner now always
+        # records this key, stating `expected: False` when the configuration
+        # has no feed. An absent key means the session never said -- so it
+        # cannot be certified, though nothing is known to be wrong.
+        pending.append(
+            "the session recorded nothing about a tick journal at all -- not "
+            "even that none was expected, so what it saw cannot be established")
+        return unsafe, pending
+
+    if journal.get("expected") is False:
+        # Declared absent, legitimately: a replay or store-backed session
+        # records no ticks. There is nothing to verify, and nothing missing.
+        return unsafe, pending
+
+    verified = journal.get("verified")
+    if not isinstance(verified, dict):
+        pending.append(
+            "this session's tick journal was never read back -- `faithful` is "
+            "the writer's own count, which a truncated or altered file also "
+            "reports")
+    elif verified.get("outcome") == "NOT_FAITHFUL":
+        unsafe.append(
+            f"the tick journal does not verify against its manifest "
+            f"({verified.get('detail')}) -- the writer's counters and the file "
+            f"on disk disagree, so the recorded evidence is not trustworthy")
+    elif verified.get("outcome") != "VERIFIED":
+        pending.append(
+            f"the tick journal could not be verified ({verified.get('detail')}) "
+            f"-- evidence for this session is not established")
+
+    # 3. The post-session replay audit.
+    replay = journal.get("replay")
+    if not isinstance(replay, dict):
+        pending.append(
+            "the post-session replay audit never ran -- it is not known whether "
+            "the recorded inputs reproduce")
+    elif not replay.get("reproduced"):
+        unsafe.append(
+            f"the recorded tick inputs did not reproduce on replay "
+            f"({replay.get('detail')}) -- the session's own evidence is not "
+            f"self-consistent and cannot support certification")
+
+    return unsafe, pending
 
 
 def evaluate_session_safety(summary: Dict[str, Any]) -> SessionSafetyVerdict:
@@ -181,11 +276,21 @@ def evaluate_session_safety(summary: Dict[str, Any]) -> SessionSafetyVerdict:
                     f"blind, and a blind session's silence is not evidence that "
                     f"nothing needed doing")
 
+    # -- TICK EVIDENCE, read back rather than self-reported. ---------------
+    #
+    # These apply WHETHER OR NOT a position was opened. A corrupt prior journal
+    # means an earlier session can never be reconstructed, and a verification
+    # that did not reach a verdict means this one cannot be certified. Neither
+    # depends on today having taken risk.
+    evidence_reasons, pending = _tick_evidence_findings(summary)
+    truth_reasons.extend(evidence_reasons)
+
     had_position = _position_existed(summary)
     if not had_position:
         return SessionSafetyVerdict(
             safe=not truth_reasons, reasons=tuple(truth_reasons),
-            position_existed=False)
+            position_existed=False,
+            pending_evidence=bool(pending), pending_reasons=tuple(pending))
 
     reasons = list(truth_reasons)
 
@@ -260,4 +365,5 @@ def evaluate_session_safety(summary: Dict[str, Any]) -> SessionSafetyVerdict:
             f"broker is unknown, so the position cannot be called closed")
 
     return SessionSafetyVerdict(
-        safe=not reasons, reasons=tuple(reasons), position_existed=True)
+        safe=not reasons, reasons=tuple(reasons), position_existed=True,
+        pending_evidence=bool(pending), pending_reasons=tuple(pending))
