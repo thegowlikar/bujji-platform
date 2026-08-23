@@ -133,8 +133,8 @@ are deliberately absent from the table above.
 starts, which modules production can reach. Current measurement:
 
 ```
-python files            1863
-  test modules           574
+python files            1864
+  test modules           575
   production modules    1289
 
 REACHABLE                487   (37.8% of production)
@@ -487,6 +487,77 @@ refuses on, and every one fails closed.
 An UNKNOWN answer is never converted to a safe one at any gate.
 
 ---
+
+## 5e. Strategy selection: one authority, three implementations
+
+Three strategy selectors exist in this repository. Only one decides anything.
+
+| Module | Reachable from the trading entrypoint? | Role |
+|---|---|---|
+| `production_runtime/trading_session_governor/strategy_selector.py` | **yes** | **the only trade-decision authority** |
+| `trading_brain/strategy_selector/registry.py` (11 `StrategyDefinition`s) | no — not on the import closure at all | built, tested, never called |
+| `msi_strategy_selector/engine.py` | yes, but only from `intelligence_cycle_recorder` and `live_shadow_validation` | records what a selector *would* say; places nothing |
+
+Established by `tools/reachability.py` from `bujji_options_os_runner.py`, the
+module `bujji-options-os-trading.service` actually starts. The positive
+control is that the known caller (`session_governor.select_and_lock_strategy`)
+resolves; the negative is that `trading_brain.strategy_selector.registry` does
+not appear in a 487-module closure.
+
+**This is why there is no fourth registry.** The instruction to replace
+scattered conditionals with one auditable registry describes a system whose
+selection logic is spread across the runtime. Bujji's is not: it is one pure
+function of two inputs. The real defect was narrower and different — that
+function declared nothing about the shapes it chose between, recorded no
+rejected candidates, and returned a bare string. Adding a registry would have
+made three unreachable ones and left the authority untouched.
+
+### The declarative contract
+
+`STRATEGY_RULES` declares, per shape Bujji may sell: eligible trend and
+volatility regimes; vetoing conditions; whether the shape is structurally
+defined-risk and hedged; required generic data capabilities; and the named
+owner of its margin check, lot-size check, exit policy and EOD behaviour.
+
+`_evaluate_candidates()` scores **every** declared rule on every evaluation
+and returns a `StrategyCandidate` for each — status, reason code, detail — so
+a shape that was not chosen is accounted for rather than absent. These ride on
+`StrategySelectionResult.candidates` and are published to the session journal
+by `select_and_lock_strategy`.
+
+**The rules do not decide anything yet, deliberately.** `select_strategy()`'s
+branch bodies still produce the outcome; the rules produce an independent
+record for the same inputs, and
+`tests/test_strategy_rules_match_decision.py` asserts the two agree across the
+full cross product of the regime vocabulary in both risk modes. Making the
+branches *driven* by the table is a behaviour-preserving refactor that can
+only be proven safe once that equivalence test exists — so it is the next
+commit, not this one.
+
+### Capability requirements are unconfigured, not satisfied
+
+Rules declare generic capabilities (`QUOTE_LAST_PRICE`,
+`QUOTE_TWO_SIDED_MARKET`, `QUOTE_OPEN_INTEREST`) — never FYERS field names,
+never thresholds. No live payload has been measured. `available_capabilities`
+defaults to `None`, meaning **not evaluated**; it does not mean satisfied, and
+nothing in the runtime records that the feed is capable of anything. Once Gate
+1 measures which capabilities the feed genuinely supplies, supplying a policy
+set makes an unsatisfied requirement a refusal. A test asserts no rule names a
+broker-specific field.
+
+### The typed plan already exists downstream
+
+`msi_trade_construction.models.TradeConstructionAssessment` is already a fully
+typed plan: legs, expiry decision with reasoning, entry reference prices,
+expected credit/debit, risk profile, required margin (or the explicit reason
+margin is unavailable), supporting assessment IDs, an `Explanation`, a
+provenance string and a schema version. A new `TradePlan` dataclass carrying
+legs would be a second plan model.
+
+What is genuinely missing is not a type but a **binding**: nothing today joins
+the selection evidence (regime inputs, candidates, universe version,
+analytical snapshot references) to the construction assessment that resulted
+from it. That binding is the decision-evidence work, not a new model — see §7.
 
 ## 6. Deprecations
 

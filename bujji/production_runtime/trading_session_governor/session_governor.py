@@ -160,6 +160,16 @@ class TradingSessionGovernor:
         self._publish("STRATEGY_SELECTION_EVALUATED", {
             "trend_regime": result.trend_regime, "volatility_regime": result.volatility_regime,
             "selected_strategy": result.selected_strategy, "reasoning": result.reasoning, "confidence": result.confidence,
+            # EVERY shape considered, with the reason it was or was not
+            # available -- not just the winner. Without this the journal can
+            # say what Bujji traded but never why it declined the alternatives,
+            # which is the half of the record an operator actually needs on a
+            # no-trade day.
+            "candidates": [
+                {"family": c.family, "status": c.status,
+                 "reason_code": c.reason_code, "detail": c.detail}
+                for c in result.candidates
+            ],
         })
         # ALREADY LOCKED IS THE RETRY CASE, NOT AN ERROR.
         #
