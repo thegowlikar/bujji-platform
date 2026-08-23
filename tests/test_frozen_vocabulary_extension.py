@@ -22,6 +22,14 @@ so the order placed to REDUCE exposure was counted AS exposure. Recording the
 attempt where it belongs -- on the exposure group, as an event that the fold
 does not recognise and therefore cannot move -- is the smaller change.
 
+M4b needed a third: an orphan-exposure record type. The broker can hold a
+position no journal group claims, and the right risk action is to flatten it --
+refusing leaves naked overnight exposure. But a flatten that is only logged is
+a side channel: a process dying mid-flatten leaves an order at the venue that
+no restart can find, and the next run rediscovers the position and sends a
+second one. The record is session-scoped because there IS no position group,
+and minting one would make Bujji claim it opened a position it did not.
+
 WHAT IS AUTHORISED IS THE CHANGE, NOT THE FILE. `paper.py`'s existing
 exception is a bare filename filter: any future edit to that file passes
 unnoticed. This one is narrower. Every added line in
@@ -41,8 +49,9 @@ AUTHORISED_FILE = "bujji/trading_brain/risk_governor/position_group_validation.p
 # The two authorised extensions, by the token every one of their lines must
 # mention. Adding a name here is the deliberate act of authorising a third --
 # it is not something an unrelated edit can do by accident.
-AUTHORISED_TOKENS = ("SESSION_TRANSITION", "EXIT_ATTEMPT")
-AUTHORISED_TYPES = ("SESSION_TRANSITION", "EXIT_ATTEMPT_RECORDED")
+AUTHORISED_TOKENS = ("SESSION_TRANSITION", "EXIT_ATTEMPT", "ORPHAN")
+AUTHORISED_TYPES = ("SESSION_TRANSITION", "EXIT_ATTEMPT_RECORDED",
+                    "ORPHAN_EXPOSURE_RECORDED")
 AUTHORISED_TOKEN = AUTHORISED_TOKENS[0]  # retained for the messages below
 
 
@@ -86,7 +95,12 @@ def test_every_added_line_belongs_to_the_authorised_extension():
     in_block = False
     for line in added:
         stripped = line.strip()
-        if any(token in line for token in AUTHORISED_TOKENS):
+        # Case-insensitive so a local variable belonging to an extension
+        # (`orphan_quantity`) counts as part of it, while a line that mentions
+        # no extension at all still does not. The narrowing is unchanged: an
+        # unrelated addition to this file names none of these tokens in any
+        # case, and test_an_unrelated_line_is_still_refused proves it.
+        if any(token.lower() in line.lower() for token in AUTHORISED_TOKENS):
             in_block = True
             continue
         if not stripped:
@@ -163,3 +177,33 @@ def test_the_journal_itself_took_no_convenience_method():
     """The freeze already caught this once: a date-scoped query added to
     PositionGroupJournal for the restart guard. It went into a caller instead."""
     assert _diff("bujji/journal/", stat=True).strip() == ""
+
+
+def test_an_unrelated_line_is_still_refused():
+    """THE RATCHET'S OWN NEGATIVE CONTROL.
+
+    Three extensions are now authorised in this file, and each widening is a
+    chance for the narrowing to quietly stop narrowing. This runs the same
+    classifier over a line that belongs to no extension and asserts it is
+    still caught -- so "all added lines are authorised" keeps meaning
+    something.
+    """
+    stray = []
+    in_block = False
+    for line in ["    " + AUTHORISED_TYPES[0] + ",", "        UNRELATED = 42"]:
+        stripped = line.strip()
+        if any(token.lower() in line.lower() for token in AUTHORISED_TOKENS):
+            in_block = True
+            continue
+        if not stripped:
+            continue
+        if stripped.startswith("#") and in_block:
+            continue
+        if stripped.startswith(("'", '"')) or stripped.startswith(")"):
+            continue
+        if in_block and (stripped.startswith(("if ", "raise ", "return", "f\"", "\""))
+                         or stripped.endswith((",", "(", ":"))):
+            continue
+        stray.append(line)
+    assert stray == ["        UNRELATED = 42"], (
+        f"the classifier no longer catches an unrelated added line: {stray}")

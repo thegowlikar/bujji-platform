@@ -83,6 +83,16 @@ _BLINDNESS_REFUSALS = {
         "the journal records open exposure from an earlier trading day that "
         "nothing has reconciled -- either it was closed and never recorded, or "
         "it is still live, and both need an operator",
+    # Beside HISTORICAL_UNRESOLVED_EXPOSURE, and blindness for the same
+    # reason. It covers two sub-cases -- the broker could not be read, or the
+    # broker confirmed the orphan is still open -- and BOTH are states in
+    # which this process cannot account for what the account holds. Classing
+    # it as a disciplined decline would exit 0 on an account carrying exposure
+    # Bujji never opened.
+    "ORPHAN_EXPOSURE_UNRESOLVED":
+        "the broker held a position no journal group claims and nothing has "
+        "proved it closed -- either it is still live or its flatten was never "
+        "confirmed, and only a broker-confirmed flat resolves it",
     "PRIOR_FILLS_UNREADABLE":
         "the position group journal could not be read, so whether this "
         "account already traded today was never established",
@@ -331,6 +341,28 @@ def evaluate_session_safety(summary: Dict[str, Any]) -> SessionSafetyVerdict:
                 f"historical exposure was never inspected "
                 f"({historical.get('error') or 'the check did not run'}) -- "
                 f"whether an earlier day left open exposure was not established")
+
+    # UNRESOLVED ORPHAN EXPOSURE is UNSAFE, on the same reasoning as
+    # historical exposure and with the same asymmetry: the broker held
+    # something no journal group claims, and nothing has proved it gone. A
+    # session that ends with one outstanding has not established that the
+    # account is flat, whatever its own positions did.
+    orphan = summary.get("orphan_exposure")
+    if isinstance(orphan, dict):
+        for record in orphan.get("unresolved") or ():
+            truth_reasons.append(
+                f"unresolved orphan exposure {record.get('symbol')} "
+                f"x{record.get('signed_quantity')} "
+                f"[{record.get('record_state')}, "
+                f"broker={record.get('broker_truth_state') or 'UNREAD'}] -- the "
+                f"broker held this and no journal group claims it; only a "
+                f"broker-confirmed flat resolves it")
+        if not orphan.get("inspected"):
+            truth_reasons.append(
+                f"orphan exposure was never inspected "
+                f"({orphan.get('error') or 'the check did not run'}) -- whether "
+                f"the account holds exposure Bujji never opened was not "
+                f"established")
 
     had_position = _position_existed(summary)
     if not had_position:

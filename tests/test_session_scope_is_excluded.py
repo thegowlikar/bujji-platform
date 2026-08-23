@@ -395,3 +395,37 @@ def test_consistent_scopes_pass_the_assertion(group_id, event_type):
 def test_inconsistent_scopes_fail_the_assertion(group_id, event_type):
     with pytest.raises(SessionScopeViolation):
         assert_scope_consistent(group_id, event_type)
+
+
+def test_session_scoped_writers_go_through_the_sanctioned_append():
+    """THE WRITER-SIDE RATCHET.
+
+    `assert_scope_consistent` only protects what actually flows through
+    `append_scoped_event`. A module that reaches `journal.append_event`
+    directly bypasses the namespace invariant entirely -- and the modules that
+    write under a SESSION: identity are exactly the ones where a misdirected
+    event becomes exposure no boundary can see.
+
+    Scoped to the modules that write session-scoped events. It is a ratchet on
+    the ones that can do the specific harm, not a blanket ban: the entry path
+    writes only to real position groups and is covered by its own tests.
+    """
+    import ast
+
+    repo = pathlib.Path(__file__).resolve().parent.parent
+    must_use_sanctioned_append = [
+        "bujji/production_runtime/exit_lifecycle.py",
+        "bujji/production_runtime/orphan_exposure.py",
+    ]
+    offenders = []
+    for rel in must_use_sanctioned_append:
+        path = repo / rel
+        assert path.exists(), f"{rel} no longer exists; this ratchet is stale"
+        for node in ast.walk(ast.parse(path.read_text())):
+            if (isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute)
+                    and node.func.attr in ("append_event", "append_linked_events")):
+                offenders.append(f"{rel}:{node.lineno}:{node.func.attr}")
+    assert offenders == [], (
+        f"session-scoped writer bypasses the namespace invariant: {offenders} "
+        f"-- use position_group_scope.append_scoped_event, which is the only "
+        f"append that checks scope")

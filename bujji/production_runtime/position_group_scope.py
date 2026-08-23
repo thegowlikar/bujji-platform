@@ -40,6 +40,35 @@ SESSION_SCOPE_PREFIX = "SESSION:"
 # The only event type that may carry a session-scoped identity.
 SESSION_EVENT_TYPE = "SESSION_TRANSITION"
 
+# The COMPLETE list of event types permitted under a SESSION: identity, and
+# the narrowing is the point: the namespace is not a place to put things, it
+# is a place to put exactly these things.
+#
+#   SESSION_TRANSITION       the session's own lifecycle (M4)
+#   ORPHAN_EXPOSURE_RECORDED broker exposure no journal group claims (M4b) --
+#                            a session-scoped representation of what the
+#                            broker holds, never a synthetic position
+#   EXIT_ATTEMPT_RECORDED    exit attempts against that orphan exposure; the
+#                            same event type lives on exposure groups for
+#                            ordinary exits, and is the ONLY type valid in
+#                            both scopes
+#
+# Everything else -- MINTED, CONSTRUCTED, fills, reductions, cancels,
+# reconciliations -- is a position event, and a position event under a
+# session identity is exposure no boundary can see.
+SESSION_PERMITTED_EVENT_TYPES = (
+    "SESSION_TRANSITION",
+    "ORPHAN_EXPOSURE_RECORDED",
+    "EXIT_ATTEMPT_RECORDED",
+)
+
+# Types that may ONLY appear under a session identity. EXIT_ATTEMPT_RECORDED
+# is deliberately absent: its home is the exposure group.
+SESSION_ONLY_EVENT_TYPES = (
+    "SESSION_TRANSITION",
+    "ORPHAN_EXPOSURE_RECORDED",
+)
+
 
 def session_scope_id(session_id: str) -> str:
     """The journal identity for a session's own lifecycle rows."""
@@ -54,6 +83,14 @@ def is_session_scoped(group_id: Any) -> bool:
     prefix inline -- so the namespace can never mean two things.
     """
     return isinstance(group_id, str) and group_id.startswith(SESSION_SCOPE_PREFIX)
+
+
+def session_scope_ids(journal) -> List[str]:
+    """Every SESSION: identity in the journal. THE SANCTIONED ENUMERATION for
+    session-scoped reads, exactly as `position_group_ids` is for positions --
+    a restart inspecting unresolved orphan records from PRIOR sessions must
+    find their scopes without touching `read_all_group_ids` directly."""
+    return [g for g in journal.read_all_group_ids() if is_session_scoped(g)]
 
 
 def position_group_ids(journal) -> List[str]:
@@ -159,18 +196,21 @@ def assert_scope_consistent(position_group_id, event_type) -> None:
         position-group boundary can see.
     """
     session_id_shaped = is_session_scoped(position_group_id)
-    if event_type == SESSION_EVENT_TYPE and not session_id_shaped:
+    if event_type in SESSION_ONLY_EVENT_TYPES and not session_id_shaped:
         raise SessionScopeViolation(
-            f"{SESSION_EVENT_TYPE} may only be written under a "
+            f"{event_type} may only be written under a "
             f"{SESSION_SCOPE_PREFIX!r} identity; {position_group_id!r} is a "
-            f"position group. Session history inside an exposure group is "
-            f"stripped by every read-side filter and would be lost.")
-    if event_type != SESSION_EVENT_TYPE and session_id_shaped:
+            f"position group. Session-scoped history inside an exposure group "
+            f"is stripped by every read-side filter and would be lost -- and "
+            f"an ORPHAN record on a real group would claim the group holds "
+            f"exposure it never opened.")
+    if session_id_shaped and event_type not in SESSION_PERMITTED_EVENT_TYPES:
         raise SessionScopeViolation(
             f"{event_type!r} may not be written under the session identity "
-            f"{position_group_id!r}. Position events there are invisible to "
-            f"margin, reconciliation and closure -- exposure no boundary can "
-            f"see is worse than exposure recorded plainly.")
+            f"{position_group_id!r}. Only {SESSION_PERMITTED_EVENT_TYPES} may "
+            f"live there; position events under a session identity are "
+            f"invisible to margin, reconciliation and closure -- exposure no "
+            f"boundary can see is worse than exposure recorded plainly.")
 
 
 _scope_violations: List[dict] = []

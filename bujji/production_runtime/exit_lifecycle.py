@@ -57,7 +57,8 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional, Tuple
 
-from bujji.production_runtime.position_group_scope import SESSION_SCOPE_PREFIX
+from bujji.production_runtime.position_group_scope import (
+    SESSION_SCOPE_PREFIX, append_scoped_event, session_scope_ids)
 from bujji.trading_brain.risk_governor.position_group_fold import (
     fold, net_quantity)
 from bujji.trading_brain.risk_governor.position_group_validation import (
@@ -299,7 +300,8 @@ def exposure_by_contract(journal, position_group_ids_fn=None) -> Dict[str, Dict[
     return held
 
 
-def holdings_for_symbols(journal, symbols_and_quantities, session_id) -> Tuple[
+def holdings_for_symbols(journal, symbols_and_quantities, session_id,
+                         signed_quantities=None, evidence_reference=None) -> Tuple[
         List[Tuple[str, str, int]], List[Dict[str, Any]]]:
     """(holdings, orphans) for what the broker reports as open.
 
@@ -328,7 +330,15 @@ def holdings_for_symbols(journal, symbols_and_quantities, session_id) -> Tuple[
             holdings.append((session_scope, symbol, int(quantity)))
             orphans.append({
                 "symbol": symbol, "quantity": int(quantity),
+                # SIGNED, because the sign is what says whether flattening
+                # this means buying or selling. An unsigned quantity read back
+                # after a restart cannot be acted on without guessing the side,
+                # and guessing wrong DOUBLES the exposure instead of closing it.
+                "signed_quantity": int(
+                    (signed_quantities or {}).get(symbol, quantity)),
                 "exposure_position_group_id": session_scope,
+                "evidence_reference": evidence_reference or (
+                    f"broker position read, session {session_id}"),
                 "reason": "the broker holds this position and no journal group "
                           "claims it -- Bujji has no record of opening it. It "
                           "is being flattened, but its provenance is unknown"})
@@ -360,8 +370,13 @@ def _append_attempt(journal, exposure_group_id, *, attempt_id, broker_coid,
         "target_contract_id": target_contract_id,
     }
     payload.update(extra or {})
-    return journal.append_event(
-        exposure_group_id, EVENT_EXIT_ATTEMPT,
+    # Through the ONE sanctioned append, so the writer-side namespace
+    # invariant sees every attempt -- on an exposure group and on a session
+    # scope alike. Writing via journal.append_event directly here would make
+    # orphan attempts a side channel the invariant never checks, which is how
+    # a misdirected event becomes exposure no boundary can see.
+    return append_scoped_event(
+        journal, exposure_group_id, EVENT_EXIT_ATTEMPT,
         f"{exposure_group_id}:{EVENT_EXIT_ATTEMPT}:{attempt_id}:{attempt_state}",
         payload, clock=clock)
 
@@ -561,8 +576,8 @@ def record_fill(journal, plan, leg, filled_quantity, average_price, clock,
         # in the attempt history above; inventing a reduction against a leg
         # that does not exist would be a fabricated accounting entry.
         return None
-    return journal.append_event(
-        leg.exposure_position_group_id, EVENT_REDUCTION,
+    return append_scoped_event(
+        journal, leg.exposure_position_group_id, EVENT_REDUCTION,
         f"{leg.exposure_position_group_id}:{EVENT_REDUCTION}:{leg.exit_attempt_id}",
         {"source_client_order_id": leg.broker_client_order_id,
          "source_position_group_id": leg.exposure_position_group_id,

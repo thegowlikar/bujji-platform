@@ -848,6 +848,25 @@ class OptionsOSRunner:
         self._governor_result_summary["historical_exposure"] = (
             self._historical_exposure.to_dict())
 
+        # ORPHAN EXPOSURE, RECONCILED BEFORE ENTRY.
+        #
+        # A previous process may have found the broker holding a position no
+        # journal group claims, flattened it, and died before the flatten was
+        # confirmed. That record is session-scoped -- there is no position
+        # group to attach it to -- so `historical_exposure` above, which walks
+        # position groups, cannot see it. This runs beside it and asks the
+        # same question of the other scope.
+        #
+        # It reads EVERY session scope, not just this one's: an orphan is
+        # exactly the thing a prior session failed to finish.
+        from bujji.production_runtime.orphan_exposure import (
+            inspect as _inspect_orphan_exposure)
+
+        self._orphan_exposure = _inspect_orphan_exposure(
+            self._journal, _position_truth_for(self).read(), self._logger)
+        self._governor_result_summary["orphan_exposure"] = (
+            self._orphan_exposure.to_dict())
+
         # THE DAY'S ONE STRATEGY, ACROSS A RESTART.
         #
         # AFTER the unresolved-order refusal above, deliberately: if this
@@ -2750,6 +2769,21 @@ class OptionsOSRunner:
                 historical.operator_instructions()
                 or f"inspection did not run ({historical.error})")
             self._block_entry("HISTORICAL_UNRESOLVED_EXPOSURE")
+            return False
+
+        # ORPHAN EXPOSURE, beside historical exposure and for the same reason:
+        # an account that cannot be reconciled against its own record may not
+        # take new risk. The two gates cover different scopes -- position
+        # groups above, session-scoped orphan records here -- and neither
+        # substitutes for the other.
+        orphans = getattr(self, "_orphan_exposure", None)
+        if orphans is not None and orphans.blocks_entry:
+            self._logger.critical(
+                "ENTRY REFUSED -- unresolved orphan exposure. %s",
+                orphans.operator_instructions()
+                or orphans.detail
+                or f"inspection did not run ({orphans.error})")
+            self._block_entry("ORPHAN_EXPOSURE_UNRESOLVED")
             return False
 
         prior_fills = getattr(self, "_prior_fills_today", None)

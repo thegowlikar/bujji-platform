@@ -86,7 +86,45 @@ KNOWN_EVENT_TYPES = frozenset({
     # TARGET_GROUP_REDUCTION_APPLIED, which is what actually reduces a leg,
     # and which is unchanged here.
     "EXIT_ATTEMPT_RECORDED",
+    # ORPHAN_EXPOSURE_RECORDED -- M4b, authorised 2026-08-23. The THIRD narrow
+    # extension of this frozen vocabulary; see
+    # tests/test_frozen_vocabulary_extension.py, which authorises THIS change
+    # specifically rather than unfreezing the file.
+    #
+    # WHY IT EXISTS. The broker can hold a position no journal group claims --
+    # exposure Bujji has no record of opening. The right risk action is to
+    # flatten it (refusing leaves naked overnight option exposure), and the
+    # right record is neither silence nor a minted group: silence makes the
+    # flatten a side channel nothing can recover after a crash, and a minted
+    # group makes Bujji claim it opened a position it did not -- the exact
+    # synthetic-exposure defect the EXIT_ATTEMPT extension removed.
+    #
+    # SO IT IS A SESSION-SCOPED RECORD OF BROKER EXPOSURE. It lives ONLY under
+    # a SESSION: identity (the writer-side invariant in position_group_scope
+    # enforces the namespace; this validator enforces the payload), it is
+    # invisible to apply_event_to_state, and position_group_ids() excludes its
+    # scope -- margin, reconciliation, enumeration and reconstructed exposure
+    # are untouched BY CONSTRUCTION. It is a representation of what the broker
+    # holds, not a new store and not a synthetic margin position.
+    #
+    # ONLY A BROKER-CONFIRMED FLAT MAY TERMINALLY RESOLVE ONE. The
+    # RESOLVED_FLAT branch below refuses any other broker_truth_state, so "we
+    # flattened it and heard nothing since" cannot be written as resolution.
+    "ORPHAN_EXPOSURE_RECORDED",
 })
+
+# What an orphan-exposure record may say. A CLOSED SET: the whole purpose of
+# the record is to distinguish "the broker confirmed this is gone" from every
+# weaker claim, and a free-text state would let the weak be written as the
+# strong.
+ORPHAN_DISCOVERED = "DISCOVERED"
+ORPHAN_BROKER_OPEN = "BROKER_OPEN_CONFIRMED"
+ORPHAN_BROKER_UNKNOWN = "BROKER_UNKNOWN_OBSERVED"
+ORPHAN_RESOLVED_FLAT = "RESOLVED_FLAT"
+_VALID_ORPHAN_RECORD_STATES = (
+    ORPHAN_DISCOVERED, ORPHAN_BROKER_OPEN, ORPHAN_BROKER_UNKNOWN,
+    ORPHAN_RESOLVED_FLAT,
+)
 
 # What an exit attempt may be. A CLOSED SET, because the whole purpose of the
 # record is to distinguish "this order is finished with" from "nobody knows",
@@ -138,6 +176,17 @@ _REQUIRED_FIELDS = {
     "EXIT_ATTEMPT_RECORDED": ("exit_attempt_id", "exposure_position_group_id",
                               "broker_client_order_id", "cause", "attempt_state",
                               "target_contract_id"),
+    # The full orphan contract. Everything an operator or a restart needs to
+    # act on the record without this process's memory: what the broker holds
+    # (symbol, SIGNED quantity, contract), which session found it and when,
+    # what evidence the discovery rests on, and what the broker last said.
+    # Exit-attempt history and broker order ids live in the
+    # EXIT_ATTEMPT_RECORDED events under the same session scope, linked by
+    # orphan_id/target contract -- one journal, one authority.
+    "ORPHAN_EXPOSURE_RECORDED": ("orphan_id", "session_id", "symbol",
+                                 "signed_quantity", "contract_id",
+                                 "discovered_at", "evidence_reference",
+                                 "record_state", "broker_truth_state"),
     "CANCEL_INTENT": ("client_order_id",),
     "CANCEL_ACK": ("client_order_id",),
     "TARGET_GROUP_REDUCTION_APPLIED": (
@@ -197,6 +246,59 @@ def validate_event(
                 f"SESSION_TRANSITION from {payload['prior_state']!r} to itself "
                 f"carries no information; a state that did not change is not a "
                 f"transition")
+        return
+
+    if event_type == "ORPHAN_EXPOSURE_RECORDED":
+        if payload["record_state"] not in _VALID_ORPHAN_RECORD_STATES:
+            raise IllegalEventError(
+                f"ORPHAN_EXPOSURE_RECORDED.record_state must be one of "
+                f"{_VALID_ORPHAN_RECORD_STATES}, got {payload['record_state']!r}")
+        for field_name in ("orphan_id", "session_id", "symbol", "contract_id",
+                           "evidence_reference"):
+            if not payload[field_name]:
+                raise IllegalEventError(
+                    f"ORPHAN_EXPOSURE_RECORDED requires a non-empty "
+                    f"{field_name} -- a record an operator cannot act on is a "
+                    f"side channel, not evidence")
+        orphan_quantity = payload["signed_quantity"]
+        if not isinstance(orphan_quantity, int) or isinstance(orphan_quantity, bool):
+            raise IllegalEventError(
+                "ORPHAN_EXPOSURE_RECORDED.signed_quantity must be a signed "
+                f"integer, got {orphan_quantity!r} -- the SIGN is what says "
+                "whether flattening means buying or selling")
+        if payload["record_state"] == ORPHAN_DISCOVERED and orphan_quantity == 0:
+            raise IllegalEventError(
+                "an orphan DISCOVERED with signed_quantity 0 is not exposure; "
+                "recording it would let a no-op masquerade as a finding")
+        orphan_discovered_raw = payload["discovered_at"]
+        if not isinstance(orphan_discovered_raw, str):
+            raise IllegalEventError(
+                "ORPHAN_EXPOSURE_RECORDED.discovered_at must be an ISO-8601 string")
+        try:
+            orphan_parsed = datetime.fromisoformat(orphan_discovered_raw)
+        except ValueError as exc:
+            raise IllegalEventError(
+                f"ORPHAN_EXPOSURE_RECORDED.discovered_at is not valid ISO-8601: {exc}")
+        if orphan_parsed.tzinfo is None:
+            raise IllegalEventError(
+                "ORPHAN_EXPOSURE_RECORDED.discovered_at must be timezone-aware")
+        # THE TERMINAL STATE IS EARNED, NOT ASSERTED. RESOLVED_FLAT with any
+        # broker_truth_state other than CONFIRMED_FLAT is the exact lie this
+        # record type exists to make unwritable: local intent, a swallowed
+        # exception, or "we sent the exit and heard nothing" presenting as a
+        # broker-confirmed flat.
+        if (payload["record_state"] == ORPHAN_RESOLVED_FLAT
+                and payload["broker_truth_state"] != "CONFIRMED_FLAT"):
+            raise IllegalEventError(
+                f"ORPHAN_EXPOSURE_RECORDED may only reach RESOLVED_FLAT with "
+                f"broker_truth_state CONFIRMED_FLAT; got "
+                f"{payload['broker_truth_state']!r}. UNKNOWN is not FLAT, and "
+                f"neither is a submitted exit of unproven fate")
+        # Session-scoped BY CONTRACT, like SESSION_TRANSITION: no group
+        # preconditions apply. The writer-side invariant in
+        # position_group_scope refuses this type on any position-group
+        # identity; apply_event_to_state does not recognise it, so it cannot
+        # move a leg or a lifecycle state anywhere.
         return
 
     if event_type == "EXIT_ATTEMPT_RECORDED":

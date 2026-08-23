@@ -98,6 +98,8 @@ class EodClosureResult:
 
 
 from bujji.broker_truth import for_broker  # noqa: E402
+from bujji.production_runtime.orphan_exposure import (  # noqa: E402
+    record_discovery as _record_orphan_discovery)
 from bujji.production_runtime.exit_lifecycle import (  # noqa: E402
     CAUSE_EOD, ExitJournalUnreadable, ExitPlanRefused, holdings_for_symbols,
     plan as plan_exit, record_ack as record_exit_ack,
@@ -345,10 +347,26 @@ def run_eod_closure(*, broker, place_fn, run_async, journal, journal_db_path,
         # minted here -- an exit is not exposure, and a group per attempt put
         # the order that REDUCES exposure into the margin-active set.
         try:
+            # SIGNED quantity carried alongside the absolute one: the exit
+            # request needs the magnitude, the orphan RECORD needs the sign --
+            # a record read back after a restart cannot say whether flattening
+            # means buying or selling without it, and guessing wrong doubles
+            # the exposure instead of closing it.
+            signed_quantities = {}
+            for pos in positions:
+                symbol = pos.get("symbol")
+                if not symbol:
+                    continue
+                magnitude = abs(int(pos.get("qty") or 0))
+                side = str(pos.get("side") or "").upper()
+                signed_quantities[str(symbol)] = (
+                    -magnitude if side == "SELL" else magnitude)
             holdings, orphans = holdings_for_symbols(
                 journal, [(str(pos.get("symbol")), abs(int(pos.get("qty") or 0)))
                           for pos in positions if pos.get("symbol")],
-                session_id)
+                session_id, signed_quantities=signed_quantities,
+                evidence_reference=f"broker position read, session {session_id}, "
+                                   f"attempt {attempt}")
         except ExitJournalUnreadable as exc:
             result.state = STATE_UNFLATTENED
             result.flat = False
@@ -361,6 +379,28 @@ def run_eod_closure(*, broker, place_fn, run_async, journal, journal_db_path,
 
         result.orphan_exposure = tuple(orphans)
         for orphan in orphans:
+            # JOURNAL THE DISCOVERY BEFORE THE EXIT IS PLANNED. Without this
+            # the flatten is a side channel: a process dying mid-flatten would
+            # leave an order at the venue with no record of what it was for,
+            # and the next run would rediscover the position and send another.
+            # A failure to record is NOT allowed to stop the flatten -- the
+            # naked exposure is the bigger risk -- but it is made loud, and
+            # the exit attempt itself is still journaled below.
+            try:
+                _record_orphan_discovery(
+                    journal, session_id=session_id, symbol=orphan["symbol"],
+                    signed_quantity=orphan["signed_quantity"],
+                    contract_id=orphan["symbol"],
+                    discovered_at=clock().isoformat(),
+                    evidence_reference=orphan["evidence_reference"],
+                    clock=clock, logger=logger)
+            except Exception as exc:  # noqa: BLE001
+                orphan["record_error"] = f"{type(exc).__name__}: {exc}"
+                logger.critical(
+                    "ORPHAN RECORD FAILED for %s (%s). The flatten proceeds -- "
+                    "naked exposure is the larger risk -- but this orphan has "
+                    "no durable discovery record. Operator review required.",
+                    orphan["symbol"], exc)
             # A BROKER POSITION NO JOURNAL GROUP CLAIMS. It IS flattened --
             # leaving naked overnight option exposure is far worse than an exit
             # whose provenance needs explaining -- but its attempt history goes
