@@ -67,6 +67,7 @@ import signal as _signal
 import sys
 import threading as _threading
 import uuid
+import time as _time
 from datetime import time as dt_time
 from pathlib import Path
 from typing import Any, Dict, Optional
@@ -179,6 +180,50 @@ def _entry_failure_reason(cycle_result) -> str:
     if not getattr(cycle_result, "proposal", None):
         return "not constructed"
     return "constructed but not filled (no blocking reason reported)"
+
+
+# Why a cycle's prices may not be used. A typed reason, because "blind" was
+# one word covering four different operational situations.
+PRICE_REASON_OK = "OK"
+PRICE_REASON_NO_PROVIDER = "NO_PRICE_PROVIDER"
+PRICE_REASON_PROVIDER_FAILED = "PRICE_PROVIDER_FAILED"
+PRICE_REASON_QUALITY_REFUSED = "PRICE_QUALITY_REFUSED"
+
+
+class LegPriceView:
+    """This cycle's price evidence, and whether a decision may rest on it.
+
+    A PLAIN CLASS, deliberately. `@dataclass` resolves annotations through
+    `sys.modules[cls.__module__]`, which is None when this module is loaded by
+    path -- as several test modules do -- and the whole file then fails to
+    import. A dataclass here would buy nothing and cost the suite.
+
+    `prices` is EMPTY unless `valid`. There is deliberately no field holding a
+    fallback: the type itself makes "priced from something else" impossible to
+    express, which is stronger than a convention a reader has to know.
+    """
+
+    __slots__ = ("valid", "reason", "detail", "quotes", "prices",
+                 "priced_from_ticks", "quality")
+
+    def __init__(self, valid, reason, detail="", quotes=None, prices=None,
+                 priced_from_ticks=False, quality=None):
+        self.valid = bool(valid)
+        self.reason = reason
+        self.detail = detail
+        self.quotes = dict(quotes or {})
+        # Enforced, not merely documented: an invalid view carries no prices,
+        # whatever a caller passed.
+        self.prices = dict(prices or {}) if valid else {}
+        self.priced_from_ticks = bool(priced_from_ticks) and bool(valid)
+        self.quality = quality
+
+    def summary(self) -> dict:
+        return {"valid": self.valid, "reason": self.reason,
+                "detail": str(self.detail)[:300],
+                "legs_quoted": len(self.quotes),
+                "legs_priced": len(self.prices),
+                "priced_from_ticks": self.priced_from_ticks}
 
 
 def _emergency_brake(*, unrealized_pnl, realized_pnl, daily_loss_limit,
@@ -3525,61 +3570,63 @@ class OptionsOSRunner:
 
         pg_id = self._governor._position_group_id
         as_of = self._clock().isoformat()
-        prices, priced_from_ticks = self._current_leg_prices(as_of)
-        if priced_from_ticks:
+        view = self._current_leg_quotes(as_of)
+        priced_from_ticks = view.priced_from_ticks
+        self._governor_result_summary["last_price_view"] = view.summary()
+
+        if view.valid:
             self._priced_from_ticks_cycles += 1
             self._consecutive_blind_cycles = 0
         else:
-            # LOUD, every time. A blind cycle is a cycle where this
-            # position was revalued against its own ENTRY prices, so
-            # unrealized P&L is 0 by construction and no stop, target or
-            # thesis-invalidation could possibly fire. Historically this
-            # degraded silently and a fully blind session was
-            # indistinguishable from a healthy one in the logs.
+            # NO SUBSTITUTION. Previously this cycle revalued the position
+            # against its own ENTRY prices, which made unrealized P&L zero by
+            # construction, made every stop and target incapable of firing,
+            # and -- through `leg.current_price` -- handed entry prices to the
+            # governor as the reference price for a forced exit.
+            #
+            # The cycle is now simply INVALID for price-dependent decisions.
+            # Nothing is valued, nothing is priced, and the blind counter
+            # advances toward the emergency brake below, which is the
+            # already-hardened escalation for exactly this state.
             self._blind_cycles += 1
-            # The blind-brake counts only cycles where a tick source EXISTS
-            # and failed to price the book -- that is the dangerous state
-            # (we expected sight and lost it). A session with NO tick source
-            # configured is blind BY DESIGN (replay dates with no captured
-            # ticks -- see _current_leg_prices' own docstring) and keeps the
-            # long-established flagged-not-terminated behaviour.
             if self._price_provider is not None:
                 self._consecutive_blind_cycles = getattr(self, "_consecutive_blind_cycles", 0) + 1
             self._logger.warning(
-                "%s -- BLIND CYCLE: revalued from ENTRY prices, not market prices. "
-                "Unrealized P&L is 0 by construction; stop-loss/profit-target CANNOT fire "
-                "this cycle. (blind=%d priced_from_ticks=%d)",
-                stage_label, self._blind_cycles, self._priced_from_ticks_cycles,
-            )
-        ts_map = {symbol: as_of for symbol in prices}
-        valuations = asyncio.run(
-            self._portfolio_engine.revalue_all(prices, self._clock, price_timestamps=ts_map)
-        )
-        valuation = valuations.get(pg_id)
-        if valuation is not None and self._canonical_position_id is not None and priced_from_ticks:
-            # Capture the excursion, pass by pass -- but ONLY for cycles
-            # priced from real market data. A blind cycle's unrealized
-            # P&L is 0 because the position was compared against its own
-            # entry price, not because the market did not move; banking
-            # that 0 would turn "we never looked" into "it never moved"
-            # and produce an MFE/MAE that reads as measured when nothing
-            # was measured. `None` from a partially-priced group is still
-            # preserved -- unknown, not flat -- and compute_mfe_mae drops it.
-            self._valuation_history.append(getattr(valuation, "total_unrealized_pnl", None))
-        if valuation is None:
-            self._logger.warning("%s -- no valuation available for %s", stage_label, pg_id)
-            return
+                "%s -- PRICE PATH INVALID (%s): %s. No valuation, no stop, no "
+                "target, no adjustment this cycle. Entry prices are NOT "
+                "substituted. (blind=%d priced_from_ticks=%d consecutive=%d)",
+                stage_label, view.reason, view.detail, self._blind_cycles,
+                self._priced_from_ticks_cycles,
+                getattr(self, "_consecutive_blind_cycles", 0))
+            self._governor_result_summary.setdefault("price_path_invalid", []).append(
+                {"at": as_of, "reason": view.reason, "detail": view.detail[:200]})
 
-        # Snapshot the group's open positions BEFORE any exit runs -- and
-        # before the BRAKE, not after it. Both the emergency route and the
-        # ordinary route need this same list to attribute their fills, and
-        # taking it below the brake meant the emergency route had no list at
-        # all and therefore captured nothing (see _execute_emergency_close).
-        # After an exit executes those positions are flat and the registry
-        # returns nothing, so reading it afterwards silently drops every real
-        # exit fill and leaves the outcome record with no P&L.
+        valuation = None
+        if view.valid:
+            ts_map = {symbol: as_of for symbol in view.prices}
+            valuations = asyncio.run(
+                self._portfolio_engine.revalue_all(view.prices, self._clock,
+                                                   price_timestamps=ts_map)
+            )
+            valuation = valuations.get(pg_id)
+            if valuation is not None and self._canonical_position_id is not None:
+                # Excursion is recorded only for cycles priced from real
+                # market data -- which is now the only kind of cycle that
+                # produces a valuation at all.
+                self._valuation_history.append(
+                    getattr(valuation, "total_unrealized_pnl", None))
+
+        # SNAPSHOT BEFORE THE BRAKE, AND ON BOTH PATHS. The emergency route
+        # needs this list to attribute its fills, and an invalid-price cycle
+        # is precisely when that route runs.
         positions_before_exit = asyncio.run(self._registry.positions_for_group(pg_id))
         symbols_before_exit = [p["symbol"] for p in positions_before_exit]
+
+        if valuation is None and view.valid:
+            # A valid price path that still yielded no valuation: the group is
+            # genuinely absent. Unchanged behaviour.
+            self._logger.warning("%s -- no valuation available for %s", stage_label, pg_id)
+            return
 
         # -- EMERGENCY BRAKE (Master Plan D-6) -- evaluated every pass,
         # BEFORE the ordinary exit policy.
@@ -3608,6 +3655,18 @@ class OptionsOSRunner:
             max_consecutive_blind_cycles=self._config.get("position_management", {}).get(
                 "max_consecutive_blind_cycles", 3),
         )
+        if brake_reason is None and valuation is None:
+            # Blind, but not yet at the brake threshold. The position stays
+            # open and UNVALUED -- deliberately. Every price-dependent
+            # decision below needs a valuation, and running them against
+            # nothing is how the substitution defect existed in the first
+            # place. The consecutive counter advances; the brake escalates.
+            self._logger.warning(
+                "%s -- price path invalid and brake not yet armed "
+                "(consecutive=%d). Position management SUSPENDED this cycle.",
+                stage_label, getattr(self, "_consecutive_blind_cycles", 0))
+            return
+
         if brake_reason is not None:
             self._logger.critical("%s -- EMERGENCY CLOSE: %s", stage_label, brake_reason)
             self._governor_result_summary["emergency_close_reason"] = brake_reason
@@ -3944,41 +4003,88 @@ class OptionsOSRunner:
             return None, answer.detail
         return answer.is_flat, answer.detail
 
-    def _current_leg_prices(self, as_of: str):
-        """Live per-leg prices for this cycle, and whether they are real
-        ticks. Returns `(prices, priced_from_ticks)`.
+    def _current_leg_quotes(self, as_of: str) -> "LegPriceView":
+        """Typed quotes for this cycle, and whether they may price a decision.
 
-        Without a price provider this returns the ENTRY prices, which is
-        the pre-tick-feed behaviour: unrealized P&L reads flat all
-        session. That fallback is deliberate and logged rather than
-        removed -- a replay date with no captured ticks genuinely has no
-        intraday evidence, and inventing some would be worse than
-        reporting flat. `priced_from_ticks` records which happened, so a
-        session's MFE/MAE can never be mistaken for measured excursion
-        when it was only ever the entry price echoed back.
+        WHAT THIS REPLACES, AND WHY IT WAS A P0.
 
-        A leg the provider cannot price is dropped rather than backfilled
-        from its entry price: `revalue()` already refuses to value a group
-        whose legs are not all priced, and a half-real valuation is worse
-        than an honestly absent one.
+        The previous version returned `dict(self._entry_prices)` on three
+        paths -- no provider, provider raised, incomplete coverage -- and a
+        boolean saying so. That boolean was consulted for excursion
+        statistics and for the blind-cycle counter, and NOWHERE ELSE. The
+        entry prices themselves flowed on into `revalue_all()`, became
+        `leg.current_price`, and were read by the session governor as
+        `reference_prices` for a forced exit -- directly under a comment
+        stating "Real current market price per leg ... never the entry
+        price". The guarantee was true only on the branch nobody checked.
+
+        The consequence was not a bad number. An exit priced at entry
+        realises approximately zero P&L however far the market has actually
+        moved, and every stop and target compares the position against
+        itself, so none of them can ever fire.
+
+        AN ENTRY PRICE IS EXECUTION EVIDENCE, NOT A MARKET PRICE. It is still
+        held on `self._entry_prices` and still used for what it legitimately
+        proves -- what we paid. It no longer leaves this method under any
+        condition, and `test_entry_price_is_never_market_price` asserts that
+        structurally.
+
+        Returns a `LegPriceView`. When `valid` is False there are no prices:
+        the caller must not value, must not price an exit, and must escalate.
         """
-        if self._price_provider is None or not self._contracts_by_symbol:
-            return dict(self._entry_prices), False
-        try:
-            ticked = self._price_provider.get_prices(self._contracts_by_symbol, as_of)
-        except Exception as exc:  # noqa: BLE001 -- market data never kills a session.
-            self._logger.exception("tick provider failed, falling back to entry prices: %s", exc)
-            return dict(self._entry_prices), False
+        from bujji.market_perception.quote import SOURCE_TICK
+        from bujji.production_runtime.market_data_gate import assess_quote_fields
 
-        priced = {sym: px for sym, px in ticked.items() if px is not None}
-        if len(priced) != len(self._entry_prices):
-            self._logger.warning(
-                "tick feed priced %d/%d legs at %s -- falling back to entry prices for this cycle "
-                "(a partially-priced group cannot be valued honestly).",
-                len(priced), len(self._entry_prices), as_of,
-            )
-            return dict(self._entry_prices), False
-        return priced, True
+        if self._price_provider is None or not self._contracts_by_symbol:
+            return LegPriceView(valid=False, reason=PRICE_REASON_NO_PROVIDER,
+                                detail="no tick provider configured for this session")
+        try:
+            quotes = self._price_provider.get_quotes(self._contracts_by_symbol, as_of)
+        except Exception as exc:  # noqa: BLE001 -- market data never kills a session.
+            self._logger.exception("tick provider failed: %s", exc)
+            return LegPriceView(valid=False, reason=PRICE_REASON_PROVIDER_FAILED,
+                                detail=f"{type(exc).__name__}: {exc}")
+
+        # EVERY leg, or none. `revalue()` already refuses a partially priced
+        # group; asking the gate for the whole set makes the refusal explicit
+        # and gives it a typed reason instead of a silent substitution.
+        required = list(self._entry_prices)
+        allowed = tuple(self._config.get("position_management", {}).get(
+            "allowed_price_sources", (SOURCE_TICK,))) if isinstance(
+                getattr(self, "_config", None), dict) else (SOURCE_TICK,)
+        verdict = assess_quote_fields(
+            quotes, ["ltp"], now_mono=_time.monotonic(),
+            max_age_seconds=float(self._config.get("position_management", {}).get(
+                "max_price_age_seconds", 90.0))
+            if isinstance(getattr(self, "_config", None), dict) else 90.0,
+            allowed_sources=allowed, required_symbols=required)
+
+        if not verdict.may_trade:
+            return LegPriceView(
+                valid=False, reason=PRICE_REASON_QUALITY_REFUSED,
+                detail="; ".join(verdict.reasons[:4]),
+                quotes=dict(quotes), quality=verdict)
+
+        # DERIVED HERE, LOCALLY, AND ONLY FROM GATE-PASSED QUOTES. This is the
+        # single place a float is taken out of a quote on the management path.
+        prices = {sym: float(quotes[sym].ltp) for sym in required}
+        return LegPriceView(valid=True, reason=PRICE_REASON_OK,
+                            detail=f"{len(prices)} leg(s) priced from "
+                                   f"{verdict.origin or 'live ticks'}",
+                            quotes=dict(quotes), prices=prices,
+                            priced_from_ticks=True, quality=verdict)
+
+    def _current_leg_prices(self, as_of: str):
+        """DEPRECATED one-way adapter. Derived from `_current_leg_quotes`.
+
+        Retained only so an unmigrated caller keeps compiling. It CANNOT
+        reintroduce the defect: when the view is invalid it returns an EMPTY
+        mapping, never the entry prices. A caller that treats empty as
+        "nothing to value" behaves correctly; one that treats it as a price
+        set gets nothing to price with.
+        """
+        view = self._current_leg_quotes(as_of)
+        return (dict(view.prices) if view.valid else {}), view.priced_from_ticks
 
     def _capture_exit_fills(self, exit_symbols, result) -> None:
         """Harvest REAL per-leg exit prices from an execution that
