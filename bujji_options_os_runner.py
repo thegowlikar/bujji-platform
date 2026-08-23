@@ -1212,6 +1212,11 @@ class OptionsOSRunner:
                 )
             self._market_data_provider = ReplayChainProvider(bhavcopy_path=bhavcopy_path, underlying=underlying)
 
+        # DEFERRED, NOT SKIPPED. The thesis derivation used to run here, inside
+        # this block. It now runs after the tick source exists and the universe
+        # is subscribed -- see the block at the end of this method. Declared
+        # before the branch so no path can reach the check with it unset.
+        derive_thesis_regime = False
         regime_cfg = providers_cfg.get("regime", {})
         regime_type = (regime_cfg.get("type") or "human_supplied").lower()
         if regime_type == "market_thesis":
@@ -1244,7 +1249,7 @@ class OptionsOSRunner:
             # LIVE. The runner is the only place that knows which broker it
             # built, so it is the only place that can say.
             self._intelligence_origin = "REPLAY"
-            self._regime_provider = self._build_market_thesis_regime_provider()
+            derive_thesis_regime = True
         elif regime_type == "market_thesis_live":
             # The LIVE equivalent needs no new facade: FyersBroker already
             # exposes the same six read-only market-data methods the
@@ -1278,7 +1283,7 @@ class OptionsOSRunner:
             ))
             import asyncio as _asyncio
             _asyncio.run(self._intelligence_broker.connect())
-            self._regime_provider = self._build_market_thesis_regime_provider()
+            derive_thesis_regime = True
         else:
             self._regime_provider = HumanSuppliedRegimeProvider(
                 trend_regime=regime_cfg.get("trend_regime"), volatility_regime=regime_cfg.get("volatility_regime"),
@@ -1455,13 +1460,79 @@ class OptionsOSRunner:
                 "construction. Test/replay use only; never a live campaign.")
         else:
             self._logger.warning(
-                "Tick source: NONE. Every management cycle will be BLIND -- positions will be "
-                "revalued against their own entry prices, so unrealized P&L is 0 by construction "
-                "and no stop-loss or profit-target can fire. Set providers.tick_source.type."
+                "Tick source: NONE. Every management cycle will be BLIND -- no price "
+                "can be obtained, so the cycle produces NO valuation, suspends "
+                "price-dependent management and escalates to the emergency brake. "
+                "Positions are NOT revalued against their entry prices; that was the "
+                "P0 removed in 21742eb, and this warning described it as current "
+                "behaviour until 2026-08-24. Set providers.tick_source.type."
             )
 
         self._session_cfg = session_cfg
 
+        # ---- THE FIRST CYCLE IS NO LONGER TICK-BLIND. ----
+        #
+        # The thesis derivation used to run inside the regime block ABOVE,
+        # before the tick source was constructed and long before the universe
+        # was subscribed -- subscription happened in the entry gate. So the
+        # first MarketSnapshot of every session was built with no tick path in
+        # existence, and `tick_rest_coverage()` could only ever report zero
+        # coverage on it. That was structural, not a timing accident: no amount
+        # of waiting would help, because nothing had subscribed.
+        #
+        # WHY THIS IS SAFE TO MOVE. The tick block above is documented as
+        # constructed "AFTER the regime block, on purpose", and that is true --
+        # but the dependency is on `self._intelligence_broker`, which is built
+        # in the regime block and STILL IS. It was never a dependency on the
+        # regime having been DERIVED. Only the derivation call moved; the
+        # broker construction did not.
+        #
+        # Ordering now: intelligence broker -> tick source -> universe
+        # subscribed -> derivation. The derivation runs a warm-up of spaced
+        # spot polls (minutes, when configured), so ticks accumulate while it
+        # warms rather than arriving after every decision was already made.
+        # `_await_market_open()` has already run by here (early in _startup),
+        # so this subscribes into an open market, not a closed one.
+        if derive_thesis_regime:
+            self._pre_subscribe_for_first_derivation()
+            self._regime_provider = self._build_market_thesis_regime_provider()
+
+    def _pre_subscribe_for_first_derivation(self) -> None:
+        """Subscribe the universe before the first snapshot, WITHOUT letting a
+        startup-time failure latch.
+
+        `_ensure_universe_subscribed` is idempotent by an early return on
+        `_universe_error` being set, which is exactly right at entry time and
+        exactly wrong here: a transient failure at startup would latch the
+        error and refuse entry for the whole session, on a path that
+        previously had no opportunity to fail at all. So a failed pre-subscribe
+        is rolled back to UNATTEMPTED and the entry gate retries it on its own
+        terms, reaching the identical behaviour this method never had.
+
+        A SUCCESSFUL pre-subscribe is deliberately left latched: that is the
+        idempotency doing its job, and the entry gate's later call becomes the
+        no-op it should be rather than a second subscription.
+        """
+        try:
+            self._ensure_universe_subscribed()
+        except Exception as exc:  # noqa: BLE001 -- see below; never fatal at startup
+            self._logger.warning(
+                "PRE-SUBSCRIBE -- universe subscription raised at startup (%s: %s). "
+                "The entry gate will attempt it again.", type(exc).__name__, exc)
+        if self._universe is None:
+            # Roll back to UNATTEMPTED so the entry gate is not answering a
+            # question this earlier, more fragile attempt already failed.
+            if self._universe_error is not None:
+                self._logger.warning(
+                    "PRE-SUBSCRIBE -- could not subscribe the universe before the "
+                    "first derivation (%s). Cleared so the entry gate retries; the "
+                    "first snapshot will be tick-blind, which is recorded rather "
+                    "than assumed.", self._universe_error)
+                self._universe_error = None
+            return
+        self._logger.info(
+            "PRE-SUBSCRIBE -- universe subscribed BEFORE the first market snapshot; "
+            "the first derivation can see tick evidence.")
 
     def _warm_up_observation_memory(self, adapter):
         """Poll real spot, gate the result for sampling stability, and

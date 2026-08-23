@@ -133,8 +133,8 @@ are deliberately absent from the table above.
 starts, which modules production can reach. Current measurement:
 
 ```
-python files            1869
-  test modules           578
+python files            1870
+  test modules           579
   production modules    1291
 
 REACHABLE                487   (37.7% of production)
@@ -633,18 +633,28 @@ Recorded here so no reader has to infer it from silence.
   **`build_snapshot` is unchanged and still REST-only** -- a test asserts it
   does not consult the quote source.
 
-  **Why the merge is not done, and what actually blocks it.** Two reasons, and
-  neither is effort. First, no tick has ever arrived in this configuration, so
-  making strike selection depend on the feed would rest the highest-consequence
-  input on something unmeasured. Second, and structurally: the first regime
-  derivation of a session runs BEFORE the universe is subscribed --
-  `_price_provider` is assigned after the regime provider is built, and
-  `_ensure_universe_subscribed()` not until the entry gate -- so at that moment
-  the tick path has nothing to offer by construction. A continuous session's
-  later cycles do have a subscribed feed, and the same closure reports real
-  coverage there. Merging therefore requires either reordering session startup
-  or accepting a tick-blind first cycle. That is a design decision, and it
-  should be made against Monday's measurement rather than ahead of it.
+  **The startup ordering is fixed (2026-08-24).** The first regime derivation
+  used to run before the universe was subscribed, so the first snapshot of
+  every session was tick-blind by construction. Startup now orders:
+  intelligence broker -> tick source -> universe subscribed -> derivation.
+  Only the derivation call moved; the tick block still follows the regime
+  block, because its dependency was always on `self._intelligence_broker`
+  being built there, never on the regime having been derived.
+  `tools/reachability.py` aside, this is asserted structurally --
+  `tests/test_first_cycle_not_tick_blind.py` fails if the derivation drifts
+  back, if the feed is built after it, or if the broker drifts after the feed.
+
+  A startup-time subscription failure is rolled back to UNATTEMPTED rather
+  than latching, because `_ensure_universe_subscribed` returns early forever
+  once `_universe_error` is set -- correct at entry time, and a whole-session
+  entry refusal if a newly-added earlier attempt were allowed to latch.
+
+  **What still blocks the merge.** One reason now, not two: no tick has ever
+  arrived in this configuration. Making strike selection depend on the feed
+  would rest the highest-consequence input on something unmeasured. Monday
+  measures it; `tick_rest_coverage()` on the first snapshot is now capable of
+  reporting real coverage rather than a structural zero, which is what makes
+  that measurement worth reading.
 - ~~Strategy selection is conditionals, not a registry.~~ **Partly resolved,
   and the original framing was wrong.** Selection was never scattered: it is
   one pure function of two inputs. What it lacked was declaration and a record
