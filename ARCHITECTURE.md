@@ -133,8 +133,8 @@ are deliberately absent from the table above.
 starts, which modules production can reach. Current measurement:
 
 ```
-python files            1868
-  test modules           577
+python files            1869
+  test modules           578
   production modules    1291
 
 REACHABLE                487   (37.7% of production)
@@ -624,9 +624,27 @@ Recorded here so no reader has to infer it from silence.
   UNKNOWN machinery is correct and largely untestable, because the read it
   guards cannot fail.
 - **`FYERS_POSITION_SCHEMA_VERIFIED = False`** and remains false.
-- **Two market-data paths still exist.** Position pricing runs on the tick
-  path; strategy selection runs on a REST-fed `MarketDataAdapter` that is not
-  given a `quote_source`. One authority is not yet achieved for market data.
+- **Two market-data paths still exist, but they are now comparable.**
+  Position pricing runs on the tick path; regime derivation and strike
+  selection run on a REST-fed `MarketDataAdapter`. `quote_source` is now
+  supplied (2026-08-24), giving `live_quotes()` its first caller anywhere in
+  the repository, and `tick_rest_coverage()` records per snapshot how many
+  chain symbols the tick path held and where the prices differed.
+  **`build_snapshot` is unchanged and still REST-only** -- a test asserts it
+  does not consult the quote source.
+
+  **Why the merge is not done, and what actually blocks it.** Two reasons, and
+  neither is effort. First, no tick has ever arrived in this configuration, so
+  making strike selection depend on the feed would rest the highest-consequence
+  input on something unmeasured. Second, and structurally: the first regime
+  derivation of a session runs BEFORE the universe is subscribed --
+  `_price_provider` is assigned after the regime provider is built, and
+  `_ensure_universe_subscribed()` not until the entry gate -- so at that moment
+  the tick path has nothing to offer by construction. A continuous session's
+  later cycles do have a subscribed feed, and the same closure reports real
+  coverage there. Merging therefore requires either reordering session startup
+  or accepting a tick-blind first cycle. That is a design decision, and it
+  should be made against Monday's measurement rather than ahead of it.
 - ~~Strategy selection is conditionals, not a registry.~~ **Partly resolved,
   and the original framing was wrong.** Selection was never scattered: it is
   one pure function of two inputs. What it lacked was declaration and a record

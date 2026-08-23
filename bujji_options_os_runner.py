@@ -656,6 +656,9 @@ class OptionsOSRunner:
         # behaviour until 2026-08-24.)
         self._price_provider = None
         self._tick_feed = None  # set only by tick_source.type=websocket
+        # Evidence only: how much of the REST chain the tick path could
+        # have priced, and where they disagreed. Never a decision input.
+        self._tick_rest_coverage = None
         # UNIVERSE-FIRST SUBSCRIPTION (see _ensure_universe_subscribed).
         self._universe = None
         self._universe_requested = ()
@@ -1555,8 +1558,48 @@ class OptionsOSRunner:
         # replay broker silently produced snapshots labelled live. Origin is
         # now carried from the construction site that knows the truth.
         origin = getattr(self, "_intelligence_origin", None)
+        # ONE MARKET-DATA PATH, MEASURED BEFORE IT IS MERGED.
+        #
+        # Bujji reads the market twice: this REST-fed snapshot feeds regime
+        # derivation and strike selection, and a websocket tick path feeds
+        # position pricing. `quote_source` is what would let the adapter see
+        # the tick path -- it has existed on MarketDataAdapter all along, and
+        # was never supplied, so `live_quotes()` had zero callers anywhere in
+        # the repository and the two paths could not even be compared.
+        #
+        # IT IS WIRED FOR EVIDENCE, NOT FOR DECISIONS. Nothing in the snapshot
+        # is built from it; `build_snapshot()` is unchanged. It exists so
+        # `tick_rest_coverage()` can answer the question that has to be
+        # answered before a merge is honest: of the chain REST returned, how
+        # many symbols did the tick path hold, and did they agree?
+        #
+        # LAZY ON PURPOSE. `self._tick_feed` is assigned AFTER this method
+        # first runs (the regime provider is built at setup, the tick provider
+        # some 60 lines later), and the universe is not subscribed until the
+        # entry gate. So the first derivation of a session is tick-blind by
+        # construction and this returns {}. On a continuous session's later
+        # cycles the feed exists and has been subscribed, and the same closure
+        # then reports real coverage. Reading the attribute at call time
+        # rather than binding it here is what makes both true.
+        #
+        # THE FEED, NEVER THE PROVIDER. `WebsocketTickProvider.get_quotes()`
+        # falls back to REST and labels the result REST_FALLBACK. Sourcing
+        # this from the provider would compare REST against REST and report
+        # perfect agreement -- the most misleading possible answer.
+        def _tick_quotes(symbols):
+            feed = getattr(self, "_tick_feed", None)
+            if feed is None:
+                return {}
+            try:
+                everything = feed.all_quotes()
+            except Exception:  # noqa: BLE001 -- evidence collection never ends a session
+                return {}
+            wanted = set(symbols)
+            return {sym: q for sym, q in everything.items() if sym in wanted}
+
         adapter = MarketDataAdapter(
             broker, self._clock, underlying=self._root.underlying,
+            quote_source=_tick_quotes,
             **({"source": f"fyers_{origin.lower()}"} if origin else {}))
 
         # WARM-UP + STABILITY GATE (opt-in via regime.warmup).
@@ -1592,6 +1635,16 @@ class OptionsOSRunner:
             underlying=self._root.underlying)
 
         snapshot = asyncio.run(adapter.build_snapshot())
+        # Measured beside the snapshot, never folded into it. On the first
+        # derivation this records tick_covered=0 with tick_source_wired=True,
+        # which is the honest reading: a feed was available to ask and had
+        # nothing yet, as distinct from no feed being wired at all.
+        try:
+            self._tick_rest_coverage = adapter.tick_rest_coverage(snapshot)
+            self._governor_result_summary["tick_rest_coverage"] = self._tick_rest_coverage
+        except Exception as exc:  # noqa: BLE001 -- a measurement never ends a session
+            self._logger.warning("tick/REST coverage measurement failed (%s)", exc)
+            self._tick_rest_coverage = None
         candles = asyncio.run(broker.get_recent_candles(self._root.underlying, 5, 75))
         # D-5: record_cycle RETURNS the understanding layer's own honest
         # record of this cycle's conclusions. It used to be called for its
