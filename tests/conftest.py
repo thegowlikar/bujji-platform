@@ -69,3 +69,51 @@ def c(hh, mm, o, h, low, cl, vol=1000) -> Candle:
     # Tz-aware IST, matching what real/paper brokers now produce in production
     # (D2) — keeps naive-vs-aware datetime arithmetic consistent everywhere.
     return Candle(datetime(2026, 7, 5, hh, mm, tzinfo=IST), o, h, low, cl, vol)
+
+@pytest.fixture
+def require_populated_sqlite():
+    return _require_populated_sqlite
+
+
+def _require_populated_sqlite(db_path, table: str, what: str):
+    """Skip -- explicitly -- unless a real corpus is present.
+
+    GUARD ON THE DATA, NOT THE FILE. Several tests guarded on
+    `path.exists()`, which a schema-only database satisfies: the file is
+    there, the table is there, and it holds zero rows. The test then ran and
+    failed on an assertion, reporting a broken behaviour when the truth was a
+    missing corpus.
+
+    A bare `return` is not the answer either -- that reports as PASSED, which
+    is the same dishonesty pointed the other way. `pytest.skip` says the true
+    thing: this test did not run, and here is exactly what it needed.
+    """
+    import sqlite3
+
+    from pathlib import Path as _P
+    path = _P(db_path)
+    if not path.exists():
+        pytest.skip(f"{what}: {path} is absent")
+    try:
+        conn = sqlite3.connect(f"file:{path}?mode=ro", uri=True)
+        rows = conn.execute(f"select count(*) from {table}").fetchone()[0]
+    except Exception as exc:  # noqa: BLE001
+        pytest.skip(f"{what}: {path} is unreadable ({type(exc).__name__})")
+    if not rows:
+        pytest.skip(f"{what}: {path} holds the schema but 0 rows in {table!r} "
+                    f"-- a schema-only database is not the corpus")
+    return path
+
+
+@pytest.fixture
+def require_existing_path():
+    return _require_existing_path
+
+
+def _require_existing_path(path, what: str):
+    """Skip unless an un-versioned data path this test needs is present."""
+    from pathlib import Path as _P
+    p = _P(path)
+    if not p.exists():
+        pytest.skip(f"{what}: {p} is absent (not version-controlled)")
+    return p
