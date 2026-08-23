@@ -190,7 +190,11 @@ def test_the_derivation_mirrors_on_message():
               if isinstance(n, ast.FunctionDef) and n.name == "on_message")
     body = ast.unparse(fn)
     assert "msg.get('symbol')" in body and "msg.get('ltp')" in body
-    assert "if symbol is None or ltp is None" in body
+    # Both guards must still exist; they are now separate statements so that
+    # an acknowledgement (symbol, no ltp) is recorded as coverage instead of
+    # being dropped. `_derive` mirrors the same extraction either way.
+    assert "if symbol is None" in body, "the symbol guard disappeared"
+    assert "if ltp is None" in body, "the ltp guard disappeared"
 
 
 # ------------------------------------------- 3. corruption REFUSES
@@ -317,8 +321,31 @@ def test_the_journal_records_before_any_field_is_read():
 def test_the_journal_records_before_the_ack_early_return():
     fn = next(n for n in ast.walk(ast.parse(FEED_SRC))
               if isinstance(n, ast.FunctionDef) and n.name == "on_message")
-    body = ast.unparse(fn)
-    assert body.index("self._journal.offer(msg)") < body.index("if symbol is None or ltp is None")
+    # STRUCTURAL, NOT TEXTUAL. The invariant is that the journal offer
+    # precedes EVERY early return -- not that the guard is spelled one
+    # particular way. Asserting the literal made a correct refactor (splitting
+    # the symbol and ltp guards so an acknowledgement is recorded as coverage
+    # rather than discarded) look like a violation, while a genuine reordering
+    # spelled differently would have slipped past. This checks the property.
+    offer_line = next(
+        (n.lineno for n in ast.walk(fn)
+         if isinstance(n, ast.Call)
+         and getattr(n.func, "attr", None) == "offer"
+         and "journal" in ast.unparse(n.func)), None)
+    assert offer_line is not None, "on_message no longer offers to the journal"
+    returns = [n.lineno for n in ast.walk(fn) if isinstance(n, ast.Return)]
+    assert returns, "on_message has no early return to protect against"
+    assert offer_line < min(returns), (
+        f"a return at line {min(returns)} precedes the journal offer at "
+        f"{offer_line} -- a callback could be discarded unrecorded")
+    # And nothing may read a field before the offer either.
+    first_get = next(
+        (n.lineno for n in ast.walk(fn)
+         if isinstance(n, ast.Call) and getattr(n.func, "attr", None) == "get"
+         and ast.unparse(n.func).startswith("msg.")), None)
+    if first_get is not None:
+        assert offer_line < first_get, (
+            "a field was read from the payload before it was journaled")
 
 
 def test_the_runner_opens_a_journal_and_hands_it_to_the_feed():

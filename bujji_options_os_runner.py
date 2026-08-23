@@ -1346,10 +1346,18 @@ class OptionsOSRunner:
                 "TICK JOURNAL open at %s -- every payload is recorded verbatim "
                 "before any field is read from it.", self._tick_journal.path)
 
+            # ONE FEED, ONE JOURNAL, ONE PROJECTION.
+            #
+            # `journal` makes the verbatim callback durable BEFORE any field is
+            # read; `session_id` travels onto every typed quote so a decision's
+            # evidence can be tied back to the session that captured it. No
+            # second feed, no second store: the same callback produces both the
+            # journal record and the quote.
             self._tick_feed = FyersTickFeed(
                 app_id, token, self._logger,
                 log_path=str(REPO_ROOT / "logs"),
-                journal=self._tick_journal)
+                journal=self._tick_journal,
+                session_id=self._session_id)
             self._tick_feed.start()
             watchdog = TickSilenceWatchdog(
                 silence_threshold_seconds=float(tick_cfg.get("silence_threshold_seconds", 120.0)),

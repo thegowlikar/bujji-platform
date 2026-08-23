@@ -33,12 +33,34 @@ class MarketDataAdapter:
     def __init__(
         self, broker, clock: Clock, source: str = "fyers_live", underlying: str = "NIFTY",
         chain_config: Optional[OptionChainConfig] = None,
+        quote_source=None,
     ) -> None:
         self._broker = broker
         self._clock = clock
         self._source = source
         self._underlying = underlying
         self._chain_config = chain_config or OptionChainConfig()
+        # OPTIONAL, AND DECLARED. When supplied, this is a callable returning
+        # `{symbol: Quote}` from the journal-backed tick path. REST remains
+        # available and keeps working exactly as before when it is absent --
+        # but a REST value can never present itself as tick evidence, because
+        # every quote carries its own source and this adapter does not rewrite
+        # it. Mixed-source snapshots stay legible for that reason.
+        self._quote_source = quote_source
+
+    def live_quotes(self, symbols) -> dict:
+        """Typed quotes for these symbols, or {} when no tick source is wired.
+
+        Deliberately does NOT fall back to REST here: the caller asked for
+        tick evidence, and quietly answering with something else is the
+        substitution this whole migration exists to make impossible.
+        """
+        if self._quote_source is None:
+            return {}
+        try:
+            return dict(self._quote_source(symbols) or {})
+        except Exception:  # noqa: BLE001 -- an unreadable tick source is 'none', never wrong data
+            return {}
 
     async def build_snapshot(self) -> MarketSnapshot:
         start = self._clock()
