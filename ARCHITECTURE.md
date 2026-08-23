@@ -77,7 +77,7 @@ is true.
 | Leg quote (readiness) | `ReadinessQuote` | `bujji.production_runtime.leg_readiness` | OWNED |
 | Leg state (readiness) | `ReadinessLegState` | `bujji.production_runtime.leg_readiness` | OWNED |
 | Decision trace | `DecisionTrace` | `bujji.core.decision_trace` | CONTESTED |
-| Session store | `SessionStore` | `bujji.shadow_observatory.session_store` | CONTESTED |
+| Session store | `SessionStore` | `bujji.shadow_observatory.session_store` | OWNED |
 
 ### Contested entries and the milestone that resolves each
 
@@ -85,7 +85,7 @@ is true.
 | --- | --- | --- |
 | `SpotSnapshot`, `VixSnapshot`, `MarketSnapshot` | `bujji.market_reality_snapshot.models`, `bujji.broker.simulation.market_snapshot` | **M1** — one market model family; the perception family is the one on the entry path. |
 | `OrderRequest` | `bujji.trading_brain.order_construction.models` | **M3** — resolved with the broker-truth boundary, which is what consumes it. |
-| `DecisionTrace`, `SessionStore` | `bujji.trading_brain.risk_governor.risk_governor_pipeline`, `bujji.core.session_state` | **M6** — resolved with the session evidence package. |
+| `DecisionTrace` | `bujji.trading_brain.risk_governor.risk_governor_pipeline` | **M6** — resolved with the session evidence package. |
 
 **Resolved.** `LegQuote` and `LegState` were introduced by the market-data
 campaign and collided with `execution_reality.models` and
@@ -133,14 +133,14 @@ are deliberately absent from the table above.
 starts, which modules production can reach. Current measurement:
 
 ```
-python files            1832
-  test modules           555
+python files            1833
+  test modules           556
   production modules    1277
 
-REACHABLE                551   (43.1% of production)
-orphaned                 726
-  test-only              512
-  unreferenced           214
+REACHABLE                480   (37.6% of production)
+orphaned                 797
+  test-only              603
+  unreferenced           194
 ```
 
 **`test-only` is a classification, not a verdict.** It means exactly one thing:
@@ -195,10 +195,50 @@ silently.
 | Module | Patterns | Status |
 | --- | --- | --- |
 | `bujji.market_timeseries.subscription` | fixed-strike-count, broker-symbol-built | QUARANTINED |
+| `bujji.core.orchestrator` | fixed-strike-count | QUARANTINED — legacy stack |
+| `run_live_shadow` | fixed-strike-count | QUARANTINED — no unit runs it |
 | `bujji.trading_brain.nifty_contract_builder.engine` | independent-atm | QUARANTINED |
 | `scripts.certify_fyers_optionchain_reality_access` | fixed-strike-count | QUARANTINED |
 | `scripts.gate1.build_universe` | independent-atm | QUARANTINED |
 | `scripts.verify_fo_access` | fixed-strike-count | QUARANTINED |
+
+### The legacy stack — retired, and held retired
+
+`bujji.app` is the **deprecated ORB-VWAP ATM Seller**, superseded by Bujji
+Options OS. Its unit is `bujji-orb-vwap-legacy.service`: **disabled, no timer,
+zero journal entries.** `run_live_shadow` is referenced by no unit at all.
+`scripts.run_paper_intelligence_campaign`'s timer is disabled.
+
+Everything reachable only from those three is therefore **not production
+code**, and no safety claim may rest on it:
+
+| Module | What it duplicates | Status |
+| --- | --- | --- |
+| `bujji.core.orchestrator` | its own session FSM, `reconcile()`, recovery path | RETIRED — unreachable |
+| `bujji.core.session_state` | `SessionStore`, `trades_taken` | RETIRED — unreachable |
+| `bujji.replay.broker` | a Broker implementation | RETIRED — unreachable |
+| `bujji.shadow_lifecycle.orchestrator` | contract construction | RETIRED — unreachable |
+
+**This was not visible until 2026-08-22**, because `tools/reachability.py`
+declared `bujji.app` as the shadow-decision-campaign's entry point. That
+service runs `scripts/run_phase20_13_live_entrypoint.py`. So the whole legacy
+stack was counted as production, `bujji.core.orchestrator` sat in the table
+below as a violation that "defines what production trades", and the modules the
+shadow campaign really reaches were counted as unreachable. Correcting the list
+moved reachability from 43.1% to **37.6%** — the earlier figure overstated
+production reach by roughly 70 modules.
+
+**THE RATCHET, and it runs in two places.**
+`tests/test_reachability_entry_points.py` pins `ENTRY_POINTS` to the enabled
+unit files in both directions: a unit's module missing from the list fails, and
+a not-enabled module present in it fails. It also asserts each retired module
+above stays unreachable. So enabling a unit, or adding a production import that
+reaches the legacy stack, breaks the build until the migration is made
+deliberately and written down here.
+
+Retired is not deleted. These modules keep working for whoever runs them by
+hand; what they may not do is come back into the runtime silently, or be cited
+as evidence about the system that trades.
 
 ### Known reachable violations — declared, and shrinking
 
@@ -212,10 +252,8 @@ safe-looking direction and an entry cannot sit resolved-but-listed forever.
 
 | Module | Pattern | Clears in |
 | --- | --- | --- |
-| `bujji.core.orchestrator` | fixed-strike-count | M1 |
 | `bujji.shadow_runtime.intelligence_pipeline_adapter` | independent-atm | M1 |
 | `bujji.trading_brain.risk_governor.msi_entry_bridge` | broker-symbol-built | M1 |
-| `run_live_shadow` | fixed-strike-count | M1 |
 
 **`bujji.broker.paper` cleared in M3 (2026-08-22).** It built
 `f"{underlying}{strike}{opt.value}"` — `"NIFTY24500CE"` — with no expiry and
