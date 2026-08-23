@@ -56,7 +56,60 @@ KNOWN_EVENT_TYPES = frozenset({
     # query therefore skips it BY CONSTRUCTION, with no frozen consumer
     # changed and no synthetic exposure group created.
     "SESSION_TRANSITION",
+    # EXIT_ATTEMPT_RECORDED -- M4b, authorised 2026-08-23. The SECOND narrow
+    # extension of this frozen vocabulary; see
+    # tests/test_frozen_vocabulary_extension.py, which authorises THIS change
+    # specifically rather than unfreezing the file.
+    #
+    # WHY IT EXISTS. An exit is attempted, may be rejected, cancelled, time
+    # out, or end UNKNOWN, and may then be retried. That history has to be
+    # durable BEFORE any order is placed, or a crash leaves an order nothing
+    # can find. The first M4b draft recorded it by minting a position group
+    # per attempt, and that was wrong in a way worth writing down: an acked
+    # but unfilled exit group folds to CONSTRUCTED, which is in
+    # whole_book_margin_provider._ACTIVE_LIFECYCLE_STATES -- so the order that
+    # REDUCES exposure was counted as exposure, doubling the measured book.
+    # Group enumeration went from one group to one-per-attempt with it.
+    #
+    # WHY IT MINTS NOTHING. A position group means underlying exposure. An
+    # exit attempt is not exposure; it is an event in the life of exposure
+    # that already exists. So this event is appended to the ORIGINAL exposure
+    # group, and the attempts of one exposure are ordered history on that one
+    # group -- not siblings of it.
+    #
+    # WHY IT CANNOT CONTAMINATE ANYTHING. `apply_event_to_state` does not
+    # recognise this type, so it mutates no leg, no lifecycle_state, and no
+    # closure reason: the group folds exactly as it would without it. Margin,
+    # reconciliation, group enumeration and reconstructed exposure therefore
+    # see one group whose state is unchanged BY CONSTRUCTION, with no frozen
+    # consumer modified. The exposure change itself is carried by
+    # TARGET_GROUP_REDUCTION_APPLIED, which is what actually reduces a leg,
+    # and which is unchanged here.
+    "EXIT_ATTEMPT_RECORDED",
 })
+
+# What an exit attempt may be. A CLOSED SET, because the whole purpose of the
+# record is to distinguish "this order is finished with" from "nobody knows",
+# and a free-text state would let the second be written as the first.
+EXIT_ATTEMPT_INTENT = "INTENT"
+EXIT_ATTEMPT_ACKED = "ACKED"
+EXIT_ATTEMPT_FILLED = "FILLED"
+EXIT_ATTEMPT_REJECTED = "REJECTED"
+EXIT_ATTEMPT_CANCELLED = "CANCELLED"
+EXIT_ATTEMPT_UNKNOWN = "UNKNOWN"
+EXIT_ATTEMPT_RECONCILED = "RECONCILED"
+_VALID_EXIT_ATTEMPT_STATES = (
+    EXIT_ATTEMPT_INTENT, EXIT_ATTEMPT_ACKED, EXIT_ATTEMPT_FILLED,
+    EXIT_ATTEMPT_REJECTED, EXIT_ATTEMPT_CANCELLED, EXIT_ATTEMPT_UNKNOWN,
+    EXIT_ATTEMPT_RECONCILED,
+)
+
+# The states from which an attempt may never be retried, because the order is
+# NOT known to be gone. UNKNOWN is deliberately absent from the terminal set
+# below for the same reason.
+EXIT_ATTEMPT_TERMINAL_STATES = (
+    EXIT_ATTEMPT_REJECTED, EXIT_ATTEMPT_CANCELLED, EXIT_ATTEMPT_RECONCILED,
+)
 
 # CLOSED and ABORTED are NOT in this vocabulary -- both are purely derived
 # by position_group_fold.py, never directly appendable. Attempting to
@@ -78,6 +131,13 @@ _REQUIRED_FIELDS = {
     # result -- so a reader can follow any state back to what caused it.
     "SESSION_TRANSITION": ("session_id", "prior_state", "next_state", "cause",
                            "evidence_ref"),
+    # `broker_client_order_id`, deliberately NOT `client_order_id`: this is the
+    # id of an EXIT order at the broker, not a leg of the exposure group. The
+    # name keeps it out of the leg-existence check below, and out of the way of
+    # anything that reads client_order_id expecting a leg.
+    "EXIT_ATTEMPT_RECORDED": ("exit_attempt_id", "exposure_position_group_id",
+                              "broker_client_order_id", "cause", "attempt_state",
+                              "target_contract_id"),
     "CANCEL_INTENT": ("client_order_id",),
     "CANCEL_ACK": ("client_order_id",),
     "TARGET_GROUP_REDUCTION_APPLIED": (
@@ -137,6 +197,43 @@ def validate_event(
                 f"SESSION_TRANSITION from {payload['prior_state']!r} to itself "
                 f"carries no information; a state that did not change is not a "
                 f"transition")
+        return
+
+    if event_type == "EXIT_ATTEMPT_RECORDED":
+        if payload["attempt_state"] not in _VALID_EXIT_ATTEMPT_STATES:
+            raise IllegalEventError(
+                f"EXIT_ATTEMPT_RECORDED.attempt_state must be one of "
+                f"{_VALID_EXIT_ATTEMPT_STATES}, got {payload['attempt_state']!r}")
+        if not payload["exit_attempt_id"]:
+            raise IllegalEventError(
+                "EXIT_ATTEMPT_RECORDED requires a non-empty exit_attempt_id -- it "
+                "is what distinguishes one attempt from a retry, and without it "
+                "two attempts collapse into one record")
+        # ORPHAN EXPOSURE: the broker holds something no journal group claims.
+        # Its attempt history is recorded against the SESSION identity, which
+        # is NOT a position group -- position_group_ids() excludes it, so it
+        # cannot reach margin, reconciliation, or reconstructed exposure.
+        #
+        # WHY ORPHANS ARE FLATTENED AT ALL, rather than refused: refusing
+        # leaves naked overnight option exposure, which is a far worse outcome
+        # than an exit whose provenance needs an operator to explain. The
+        # position gets closed; the anomaly gets escalated.
+        if str(payload["exposure_position_group_id"]).startswith("SESSION:"):
+            return
+        if current_state is None:
+            raise IllegalEventError(
+                "EXIT_ATTEMPT_RECORDED requires an already-minted group: an exit "
+                "attempt is an event in the life of EXISTING exposure, and this "
+                "event never mints one")
+        if not current_state.constructed:
+            raise IllegalEventError(
+                "EXIT_ATTEMPT_RECORDED requires a constructed group -- there are "
+                "no legs to exit before construction")
+        # DELIBERATELY EXEMPT FROM TERMINALITY. A group reaches CLOSED the
+        # moment its last leg is reduced, and the attempt that caused it still
+        # has to be recordable afterwards -- as does a late reconciliation of
+        # an attempt whose fate arrived after closure. It mutates nothing, so
+        # allowing it past terminality cannot alter a terminal group's state.
         return
 
     if event_type == "MINTED":

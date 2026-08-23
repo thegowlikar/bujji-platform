@@ -257,3 +257,111 @@ def test_a_clean_history_certifies():
                "historical_exposure": {"inspected": True, "stale": [],
                                        "resolved": [], "blocks_entry": False}}
     assert _verdict(summary).certified
+
+
+# --------------------------------------------------------------------------
+# AN OPERATOR CORRECTION MAY NEVER OVERRIDE THE BROKER.
+#
+# It settles ONE thing: a historical disagreement between the journal and an
+# account that is provably flat RIGHT NOW. It is a statement about the past,
+# and the past cannot be reconciled against a present nobody can read.
+# --------------------------------------------------------------------------
+
+def _corrected(tmp_path, name):
+    j, group = _open_group(tmp_path, YESTERDAY, name=name)
+    j.append_event(group, CORRECTION_EVENT, f"{group}:OC",
+                   _correction(RESOLUTION_KEY, True), clock=_clock(TODAY))
+    return j, group
+
+
+def test_a_correction_cannot_clear_a_block_while_the_broker_holds_the_position():
+    """CONFIRMED_OPEN. The exposure is live. A correction here would be a human
+    asserting flatness against the account itself -- the exact phantom flat
+    this system refuses everywhere else."""
+    import tempfile
+    tmp = pathlib.Path(tempfile.mkdtemp())
+    j, group = _corrected(tmp, "open.db")
+
+    report = inspect(j, TODAY, _OPEN, LOG)
+    assert report.blocks_entry
+    assert report.resolved == []
+    assert [g.position_group_id for g in report.stale] == [group]
+    assert any("CONFIRMED_OPEN" in r["reason"] for r in report.refused_corrections)
+
+
+def test_a_correction_cannot_clear_a_block_while_broker_truth_is_unknown():
+    """UNKNOWN is not FLAT, and a signature does not make it one."""
+    import tempfile
+    tmp = pathlib.Path(tempfile.mkdtemp())
+    j, _group = _corrected(tmp, "unk.db")
+
+    report = inspect(j, TODAY, unknown("socket closed", "paper"), LOG)
+    assert report.blocks_entry
+    assert report.resolved == []
+    assert any("UNKNOWN" in r["reason"] for r in report.refused_corrections)
+
+
+def test_a_correction_cannot_clear_a_block_with_no_broker_read_at_all():
+    import tempfile
+    tmp = pathlib.Path(tempfile.mkdtemp())
+    j, _group = _corrected(tmp, "none.db")
+    report = inspect(j, TODAY, None, LOG)
+    assert report.blocks_entry and report.resolved == []
+
+
+def test_a_correction_clears_the_block_only_against_a_provably_flat_account():
+    """The one case it is for. Asserted alongside the refusals so the
+    difference is visible, and so a guard that refuses everything would fail."""
+    import tempfile
+    tmp = pathlib.Path(tempfile.mkdtemp())
+    j, group = _corrected(tmp, "flat.db")
+
+    report = inspect(j, TODAY, _FLAT, LOG)
+    assert not report.blocks_entry
+    assert report.resolved == [group]
+    assert report.refused_corrections == []
+
+
+@pytest.mark.parametrize("blank_field", [
+    "operator_id", "justification", "evidence_reference"])
+def test_a_correction_missing_any_audit_field_does_not_clear_the_block(
+        tmp_path, blank_field):
+    """The journal validates that these KEYS exist. A correction with an empty
+    operator_id or a blank justification satisfies the schema and states
+    nothing -- and this is the one mechanism that can stop a safety block."""
+    j, group = _open_group(tmp_path, YESTERDAY, name=f"b-{blank_field}.db")
+    payload = _correction(RESOLUTION_KEY, True)
+    payload[blank_field] = "   "
+    j.append_event(group, CORRECTION_EVENT, f"{group}:OC", payload, clock=_clock(TODAY))
+
+    report = inspect(j, TODAY, _FLAT, LOG)
+    assert report.blocks_entry
+    assert any(blank_field in r["reason"] for r in report.refused_corrections)
+
+
+def test_a_refused_correction_tells_the_operator_why(tmp_path):
+    """Someone who wrote a correction and still sees a refusal must be told
+    the reason, not left to guess."""
+    j, _group = _open_group(tmp_path, YESTERDAY, name="why.db")
+    j.append_event(_group, CORRECTION_EVENT, f"{_group}:OC",
+                   _correction(RESOLUTION_KEY, True), clock=_clock(TODAY))
+
+    text = inspect(j, TODAY, _OPEN, LOG).operator_instructions()
+    assert "DID NOT CLEAR THE BLOCK" in text
+    assert "CONFIRMED_OPEN" in text
+
+
+def test_the_journal_itself_refuses_a_blank_review_time(tmp_path):
+    """`reviewed_at` needs no check of mine: the journal validates it as
+    ISO-8601 at write time, so a blank one never reaches the record. Asserted
+    here so the division of responsibility is visible -- and so removing my
+    check for the other three does not look like it covers this one too."""
+    from bujji.trading_brain.risk_governor.position_group_validation import (
+        IllegalEventError)
+
+    j, group = _open_group(tmp_path, YESTERDAY, name="rt.db")
+    payload = _correction(RESOLUTION_KEY, True)
+    payload["reviewed_at"] = "   "
+    with pytest.raises(IllegalEventError, match="ISO-8601"):
+        j.append_event(group, CORRECTION_EVENT, f"{group}:OC", payload,
+                       clock=_clock(TODAY))

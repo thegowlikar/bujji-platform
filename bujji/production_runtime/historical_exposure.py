@@ -90,6 +90,10 @@ class HistoricalExposureReport:
     inspected: bool = False
     stale: List[StaleGroup] = field(default_factory=list)
     resolved: List[str] = field(default_factory=list)
+    # Corrections that were recorded but could NOT clear the block, and why.
+    # Surfaced so an operator who wrote one and still sees a refusal is told
+    # the reason rather than left to guess.
+    refused_corrections: List[Dict[str, Any]] = field(default_factory=list)
     broker_state: Optional[str] = None
     error: Optional[str] = None
 
@@ -118,6 +122,12 @@ class HistoricalExposureReport:
                          f"  net {g.net_quantity}")
             for leg in g.open_legs:
                 lines.append(f"      leg {leg}")
+        if self.refused_corrections:
+            lines.append("")
+            lines.append("  A CORRECTION WAS RECORDED AND DID NOT CLEAR THE BLOCK:")
+            for r in self.refused_corrections:
+                lines.append(f"    {r['position_group_id']}: {r['reason']}")
+
         lines += [
             "",
             "RECONCILE BEFORE THE NEXT SESSION:",
@@ -149,6 +159,7 @@ class HistoricalExposureReport:
         return {"inspected": self.inspected,
                 "stale": [g.to_dict() for g in self.stale],
                 "resolved": list(self.resolved),
+                "refused_corrections": list(self.refused_corrections),
                 "broker_state": self.broker_state,
                 "error": self.error,
                 "blocks_entry": self.blocks_entry}
@@ -163,13 +174,62 @@ def _event_date(event) -> Optional[str]:
     return when.astimezone(IST).date().isoformat()
 
 
-def _is_resolved_by_operator(events) -> bool:
-    for event in events:
-        if getattr(event, "event_type", None) != CORRECTION_EVENT:
-            continue
-        if (getattr(event, "payload", {}) or {}).get(RESOLUTION_KEY) is True:
-            return True
-    return False
+def _correction_is_complete(payload) -> Tuple[bool, str]:
+    """(complete, why_not). Every required audit field must be present and
+    non-empty.
+
+    The journal already validates that these KEYS exist. This additionally
+    requires them to say something: a correction with an empty operator_id or
+    a blank justification satisfies the schema and states nothing, and this is
+    the one mechanism that can stop a safety block."""
+    missing = [f for f in ("operator_id", "justification", "evidence_reference",
+                           "reviewed_at")
+               if not str(payload.get(f) or "").strip()]
+    if missing:
+        return False, f"missing or empty audit field(s): {', '.join(missing)}"
+    return True, ""
+
+
+def _operator_resolution(events, broker_truth) -> Tuple[bool, Optional[str]]:
+    """(resolved, refusal_reason).
+
+    AN OPERATOR CORRECTION MAY NEVER OVERRIDE THE BROKER.
+
+    It settles ONE thing: a historical disagreement between the journal and an
+    account that is provably flat RIGHT NOW. It is a statement about the past,
+    and the past cannot be reconciled against a present nobody can read.
+
+      broker CONFIRMED_FLAT  -- a complete correction clears the block
+      broker CONFIRMED_OPEN  -- REFUSED. The exposure is live. A correction
+                                here would be a human asserting flatness
+                                against the account itself, which is the exact
+                                phantom flat this system refuses everywhere
+                                else.
+      broker UNKNOWN         -- REFUSED. Nothing is established, so there is
+                                nothing to reconcile against. UNKNOWN is not
+                                FLAT, and a signature does not make it one.
+    """
+    corrections = [e for e in events
+                   if getattr(e, "event_type", None) == CORRECTION_EVENT
+                   and (getattr(e, "payload", {}) or {}).get(RESOLUTION_KEY) is True]
+    if not corrections:
+        return False, None
+
+    state = getattr(broker_truth, "state", None) if broker_truth is not None else None
+    if state != "CONFIRMED_FLAT":
+        return False, (
+            f"an operator correction is recorded, but broker truth is "
+            f"{state or 'UNREADABLE'} -- a correction settles a HISTORICAL "
+            f"disagreement against an account that is provably flat now, and "
+            f"may never override CONFIRMED_OPEN or UNKNOWN")
+
+    for event in corrections:
+        complete, why_not = _correction_is_complete(getattr(event, "payload", {}) or {})
+        if complete:
+            return True, None
+    return False, (
+        f"an operator correction is recorded but is not usable: "
+        f"{why_not}")
 
 
 def inspect(journal, trading_date: str, broker_truth, logger=None
@@ -204,9 +264,13 @@ def inspect(journal, trading_date: str, broker_truth, logger=None
             last = max(dates) if dates else None
             if last is not None and last >= trading_date:
                 continue                      # today's own work, not history
-            if _is_resolved_by_operator(events):
+            resolved, refusal = _operator_resolution(events, broker_truth)
+            if resolved:
                 report.resolved.append(group_id)
                 continue
+            if refusal:
+                report.refused_corrections.append(
+                    {"position_group_id": group_id, "reason": refusal})
             open_legs = tuple(sorted(
                 str(leg.contract_id or coid)
                 for coid, leg in state.legs.items() if net_quantity(leg) > 0))

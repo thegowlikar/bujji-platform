@@ -38,6 +38,7 @@ from bujji.trading_brain.risk_governor.position_lifecycle_intelligence import (
     ACTION_REDUCE_SIZE,
 )
 
+from bujji.production_runtime import exit_lifecycle as _exit_lifecycle
 from .lifecycle_order_builder import IllegalLifecycleOrderError, build_hedge_order, build_reduce_order
 from .position_lifecycle_runtime import LifecycleEvaluationResult, PositionLifecycleRuntime
 from .position_reality_registry import PositionRealityRegistry
@@ -89,7 +90,8 @@ class TradeLifecycleExecutor:
 
     def __init__(
         self, broker, registry: PositionRealityRegistry, lifecycle_runtime: PositionLifecycleRuntime,
-        event_bus=None, place_fn=None,
+        event_bus=None, place_fn=None, journal=None, session_id=None,
+        logger=None,
     ) -> None:
         self._broker = broker
         self._registry = registry
@@ -102,6 +104,18 @@ class TradeLifecycleExecutor:
         # response. Optional so every existing construction site keeps its
         # exact prior behaviour; the production runner supplies it.
         self._place_fn = place_fn
+        # JOURNALED EXITS (M4b). Without these, `_place` below was reached
+        # with NOTHING in the journal naming the order, under a
+        # timestamp-derived client_order_id -- the same defect the EOD path
+        # had. Optional only so existing construction sites keep their exact
+        # prior behaviour; the production runner supplies both, and
+        # tests/test_executor_journals_exits.py ratchets that it does.
+        self._journal = journal
+        self._session_id = session_id
+        self._logger = logger
+
+    def _exit_journal_available(self) -> bool:
+        return self._journal is not None and self._session_id is not None
 
     async def _place(self, order_request):
         """One placement, through broker truth where available."""
@@ -114,8 +128,14 @@ class TradeLifecycleExecutor:
         reduce_quantity: Optional[int] = None, hedge_instruction: Optional[dict] = None,
         reference_prices: Optional[Dict[str, float]] = None,
         quantity_by_symbol: Optional[Dict[str, int]] = None,
+        cause: str = _exit_lifecycle.CAUSE_STRATEGY,
     ) -> LifecycleExecutionResult:
-        """`reference_prices`: optional {symbol: current_market_price},
+        """`cause`: WHY this exit is happening -- one of exit_lifecycle's four.
+        Recorded on every exit attempt so the journal says why a position
+        closed. Defaults to a strategy exit, which is what an ordinary
+        lifecycle recommendation is; the emergency brake passes its own.
+
+        `reference_prices`: optional {symbol: current_market_price},
         e.g. straight from F.3's own Portfolio Reality valuation.
         Passed through to each leg's closing order as the real fill
         basis. Defaults to None -- preserving every existing caller's
@@ -136,7 +156,8 @@ class TradeLifecycleExecutor:
 
         if action in (ACTION_REDUCE_SIZE, ACTION_MANDATORY_EXIT):
             return await self._execute_reduce(pg_id, action, reduce_quantity, clock,
-                                              reference_prices, quantity_by_symbol)
+                                              reference_prices, quantity_by_symbol,
+                                              cause=cause)
 
         if action == ACTION_ADD_HEDGE:
             return await self._execute_hedge(pg_id, action, hedge_instruction, clock)
@@ -150,10 +171,61 @@ class TradeLifecycleExecutor:
             reason=f"unrecognized action {action!r}",
         )
 
+    def _record_exit_fate(self, exit_plan, exit_leg, result, clock, exception):
+        """Write the broker's answer for one exit attempt.
+
+        THE DEFAULT IS "LIVE", NOT "FAILED". An outcome this does not
+        recognise records ACK, so the attempt reads as an order that exists at
+        the venue. The opposite default would clear the leg for a retry and
+        place a second exit against the same position.
+        """
+        try:
+            if exception is not None:
+                _exit_lifecycle.record_unknown(
+                    self._journal, exit_plan, exit_leg,
+                    f"{type(exception).__name__}: {exception}", clock)
+                return
+            status = getattr(getattr(result, "status", None), "value",
+                             str(getattr(result, "status", None)))
+            status_text = str(status or "").upper()
+            filled = int(getattr(result, "filled_quantity", 0) or 0)
+            if status_text in ("REJECTED", "EXPIRED"):
+                _exit_lifecycle.record_rejection(
+                    self._journal, exit_plan, exit_leg,
+                    f"broker reported {status_text}", clock)
+            elif status_text in ("CANCELLED", "CANCELED"):
+                _exit_lifecycle.record_cancellation(
+                    self._journal, exit_plan, exit_leg,
+                    f"broker reported {status_text}", clock)
+            elif status_text == "UNKNOWN":
+                _exit_lifecycle.record_unknown(
+                    self._journal, exit_plan, exit_leg,
+                    "broker reported UNKNOWN", clock)
+            elif filled > 0:
+                _exit_lifecycle.record_fill(
+                    self._journal, exit_plan, exit_leg, filled,
+                    getattr(result, "average_price", None), clock)
+            else:
+                _exit_lifecycle.record_ack(
+                    self._journal, exit_plan, exit_leg,
+                    getattr(result, "order_id", None), status_text or "UNKNOWN",
+                    clock)
+        except Exception as exc:  # noqa: BLE001 -- the order is already placed
+            # Only the RECORD of the fate failed. The attempt's INTENT record
+            # still stands, so the leg reads unresolved and will not be
+            # re-sent -- the safe side of this failure.
+            if self._logger is not None:
+                self._logger.critical(
+                    "exit %s was PLACED but its outcome could not be journaled "
+                    "(%s: %s). The attempt is unresolved and will not be "
+                    "re-sent.", exit_leg.broker_client_order_id,
+                    type(exc).__name__, exc)
+
     async def _execute_reduce(
         self, pg_id: str, action: str, reduce_quantity: Optional[int], clock: Clock,
         reference_prices: Optional[Dict[str, float]] = None,
         quantity_by_symbol: Optional[Dict[str, int]] = None,
+        cause: str = _exit_lifecycle.CAUSE_STRATEGY,
     ) -> LifecycleExecutionResult:
         if reduce_quantity is None or reduce_quantity <= 0:
             self._publish("LIFECYCLE_ACTION_FAILED", pg_id, action, clock)
@@ -171,11 +243,69 @@ class TradeLifecycleExecutor:
                 reason="no open position exists for this group -- nothing to reduce.",
             )
 
+        # JOURNAL EVERY EXIT'S INTENT BEFORE ANY PLACEMENT. One call, ahead of
+        # the loop, so a crash between recording and sending still leaves each
+        # order named in the journal. It also answers the question this loop
+        # could never ask: whether an earlier attempt for this leg is already
+        # live at the venue.
+        exit_plan = None
+        if self._exit_journal_available():
+            holdings = []
+            for position in positions:
+                symbol = position["symbol"]
+                leg_qty = reduce_quantity
+                if quantity_by_symbol and symbol in quantity_by_symbol:
+                    leg_qty = min(int(quantity_by_symbol[symbol]), int(reduce_quantity))
+                if leg_qty > 0:
+                    holdings.append((pg_id, symbol, int(leg_qty)))
+            try:
+                exit_plan = _exit_lifecycle.plan(
+                    self._journal, session_id=self._session_id, cause=cause,
+                    holdings=holdings, broker_truth=None, clock=clock,
+                    logger=self._logger)
+            except _exit_lifecycle.ExitPlanRefused as exc:
+                # Nothing placed, deliberately. An order the journal does not
+                # know about is unrecoverable after a crash, so a failure to
+                # record must stop the placement rather than proceed without it.
+                if self._logger is not None:
+                    self._logger.critical(
+                        "EXIT REFUSED for %s -- intent could not be journaled "
+                        "(%s). NOTHING was placed; the position may still be "
+                        "OPEN. Operator intervention required.", pg_id, exc)
+                self._publish("LIFECYCLE_ACTION_FAILED", pg_id, action, clock)
+                return LifecycleExecutionResult(
+                    position_group_id=pg_id, action=action, orders_submitted=(),
+                    status=STATUS_FAILED_VALIDATION,
+                    reason=f"exit intent could not be journaled: {exc}")
+            for refusal in exit_plan.refused:
+                if self._logger is not None:
+                    self._logger.critical(
+                        "NOT re-sending an exit for %s -- a prior attempt (%s) "
+                        "has an unresolved fate. Reconcile broker order truth.",
+                        refusal["target_contract_id"],
+                        refusal["prior_exit_attempt_id"])
+        elif self._logger is not None:
+            self._logger.critical(
+                "EXIT PLACED WITHOUT A JOURNAL for %s -- no exit_lifecycle "
+                "journal was supplied to this executor, so these orders are "
+                "not recoverable after a crash.", pg_id)
+
+        legs_by_symbol = {l.target_contract_id: l
+                          for l in (exit_plan.legs if exit_plan else ())}
+
         order_results = []
         for index, position in enumerate(positions):
             symbol = position["symbol"]
             contract = self._registry.contract_for_symbol(pg_id, symbol)
-            client_order_id = f"{pg_id}-REDUCE-{clock().isoformat()}-{index}"
+            exit_leg = legs_by_symbol.get(symbol)
+            if exit_plan is not None and exit_leg is None:
+                # Already exited, or refused above because a prior attempt's
+                # fate is unknown. Either way this leg must not be re-sent.
+                self._publish("LIFECYCLE_LEG_EXIT_ALREADY_OUTSTANDING", pg_id,
+                              action, clock)
+                continue
+            client_order_id = (exit_leg.broker_client_order_id if exit_leg
+                               else f"{pg_id}-REDUCE-{clock().isoformat()}-{index}")
             leg_reference_price = reference_prices.get(symbol) if reference_prices else None
             # PER-LEG BROKER RESIDUAL (2026-08-21). One `reduce_quantity` was
             # applied to EVERY leg. Over-reducing a short does not stop at
@@ -202,8 +332,19 @@ class TradeLifecycleExecutor:
                     status=STATUS_FAILED_VALIDATION, reason=str(exc),
                 )
             self._publish("LIFECYCLE_ORDER_CREATED", pg_id, action, clock)
-            result = await self._place(order_request)
+            try:
+                result = await self._place(order_request)
+            except Exception as exc:  # noqa: BLE001
+                # RECORDED AS UNKNOWN, NOT AS A FAILURE. The CALL failed; that
+                # is not evidence the ORDER was never received. UNKNOWN is not
+                # terminal, so this leg will not be re-sent until broker order
+                # truth resolves it.
+                if exit_leg is not None:
+                    self._record_exit_fate(exit_plan, exit_leg, None, clock, exc)
+                raise
             order_results.append(result)
+            if exit_leg is not None:
+                self._record_exit_fate(exit_plan, exit_leg, result, clock, None)
             # TELEMETRY MUST MATCH REALITY. This published
             # LIFECYCLE_ORDER_FILLED unconditionally, immediately after
             # place_order returned, without ever reading result.is_filled --

@@ -12,11 +12,21 @@ no-trade day, a refusal, a startup and a completion have durable history in
 the SAME event authority as position lifecycle. The alternative was a second
 session store -- exactly the duplicate authority this whole effort removes.
 
+M4b needed a second: an exit-attempt event type. An exit is attempted, may be
+rejected, cancelled, time out or end UNKNOWN, and may then be retried, and
+that history has to be durable BEFORE any order is placed. The first M4b draft
+avoided touching this file by minting a position group per attempt instead --
+and that was worse, not safer: an acked-but-unfilled exit group folds to
+CONSTRUCTED, which is in whole_book_margin_provider._ACTIVE_LIFECYCLE_STATES,
+so the order placed to REDUCE exposure was counted AS exposure. Recording the
+attempt where it belongs -- on the exposure group, as an event that the fold
+does not recognise and therefore cannot move -- is the smaller change.
+
 WHAT IS AUTHORISED IS THE CHANGE, NOT THE FILE. `paper.py`'s existing
 exception is a bare filename filter: any future edit to that file passes
 unnoticed. This one is narrower. Every added line in
-`position_group_validation.py` must belong to the SESSION_TRANSITION block, so
-an unrelated edit to the very same file still fails.
+`position_group_validation.py` must belong to one of the two authorised
+blocks, so an unrelated edit to the very same file still fails.
 """
 from __future__ import annotations
 
@@ -28,7 +38,12 @@ import pytest
 REPO_ROOT = pathlib.Path(__file__).resolve().parent.parent
 FROZEN_SINCE = "360c003"
 AUTHORISED_FILE = "bujji/trading_brain/risk_governor/position_group_validation.py"
-AUTHORISED_TOKEN = "SESSION_TRANSITION"
+# The two authorised extensions, by the token every one of their lines must
+# mention. Adding a name here is the deliberate act of authorising a third --
+# it is not something an unrelated edit can do by accident.
+AUTHORISED_TOKENS = ("SESSION_TRANSITION", "EXIT_ATTEMPT")
+AUTHORISED_TYPES = ("SESSION_TRANSITION", "EXIT_ATTEMPT_RECORDED")
+AUTHORISED_TOKEN = AUTHORISED_TOKENS[0]  # retained for the messages below
 
 
 def _diff(*paths, stat=False):
@@ -71,7 +86,7 @@ def test_every_added_line_belongs_to_the_authorised_extension():
     in_block = False
     for line in added:
         stripped = line.strip()
-        if AUTHORISED_TOKEN in line:
+        if any(token in line for token in AUTHORISED_TOKENS):
             in_block = True
             continue
         if not stripped:
@@ -86,7 +101,7 @@ def test_every_added_line_belongs_to_the_authorised_extension():
         stray.append(line)
     assert stray == [], (
         f"lines added to the frozen {AUTHORISED_FILE} that are not part of the "
-        f"authorised {AUTHORISED_TOKEN} extension: {stray}")
+        f"authorised {AUTHORISED_TOKENS} extensions: {stray}")
 
 
 def test_the_authorised_change_removes_nothing():
@@ -97,7 +112,7 @@ def test_the_authorised_change_removes_nothing():
         f"the authorised extension deletes frozen lines: {removed}")
 
 
-def test_the_extension_did_not_widen_the_vocabulary_beyond_one_type():
+def test_the_extension_did_not_widen_the_vocabulary_beyond_the_authorised_types():
     from bujji.trading_brain.risk_governor.position_group_validation import (
         KNOWN_EVENT_TYPES)
 
@@ -106,11 +121,11 @@ def test_the_extension_did_not_widen_the_vocabulary_beyond_one_type():
         "FILL_OBSERVED", "CANCEL_INTENT", "CANCEL_ACK",
         "TARGET_GROUP_REDUCTION_APPLIED", "RECONCILIATION_ATTEMPTED",
         "FINAL_RECONCILIATION_CONFIRMED", "OPERATOR_CORRECTION_RECORDED",
-        AUTHORISED_TOKEN,
+        *AUTHORISED_TYPES,
     }
     assert set(KNOWN_EVENT_TYPES) == expected, (
-        "exactly one type was authorised; the vocabulary now differs by "
-        f"{set(KNOWN_EVENT_TYPES) ^ expected}")
+        f"exactly {len(AUTHORISED_TYPES)} type(s) were authorised; the "
+        f"vocabulary now differs by {set(KNOWN_EVENT_TYPES) ^ expected}")
 
 
 # --------------------------------------------------------------------------

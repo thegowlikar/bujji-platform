@@ -42,6 +42,7 @@ from bujji.trading_brain.risk_governor.position_lifecycle_intelligence import (
 )
 from bujji.production_runtime.position_lifecycle_runtime import LifecycleEvaluationResult, PositionLifecycleRuntime
 from bujji.production_runtime.position_reality_registry import PositionRealityRegistry
+from bujji.production_runtime import exit_lifecycle as _exit_lifecycle
 from bujji.production_runtime.trade_lifecycle_executor import (
     ACTION_MANDATORY_EXIT, LifecycleExecutionResult, TradeLifecycleExecutor,
 )
@@ -348,6 +349,12 @@ class TradingSessionGovernor:
                     forced_evaluation, self._clock,
                     reduce_quantity=full_quantity, reference_prices=reference_prices,
                     quantity_by_symbol=quantity_by_symbol,
+                    # WHY this exit happened, carried into the journal. A
+                    # forced exit IS the emergency brake; anything else is the
+                    # strategy's own decision. The distinction is recorded
+                    # rather than inferred later from timestamps.
+                    cause=(_exit_lifecycle.CAUSE_EMERGENCY if force_exit_reason
+                           else _exit_lifecycle.CAUSE_STRATEGY),
                 )
                 # EXITED ONLY ON A CONFIRMED EXIT. This transitioned on the
                 # mere RETURN of execute(), whether the orders filled, were

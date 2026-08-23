@@ -68,6 +68,10 @@ class EodClosureResult:
     # this path and the management path from attributing fills differently.
     # Deliberately absent from to_dict(): an OrderResult is not JSON.
     exit_fills: Tuple[Tuple[str, Any], ...] = ()
+    # Broker positions no journal group claimed. Flattened, but unaccounted
+    # for -- surfaced so a session that closed cleanly still reports that it
+    # closed something it never opened.
+    orphan_exposure: Tuple[Dict[str, Any], ...] = ()
     cancellations: Tuple[Dict[str, Any], ...] = ()
     attempts: int = 0
     detail: str = ""
@@ -94,6 +98,62 @@ class EodClosureResult:
 
 
 from bujji.broker_truth import for_broker  # noqa: E402
+from bujji.production_runtime.exit_lifecycle import (  # noqa: E402
+    CAUSE_EOD, ExitJournalUnreadable, ExitPlanRefused, holdings_for_symbols,
+    plan as plan_exit, record_ack as record_exit_ack,
+    record_rejection as record_exit_rejection,
+    record_unknown as record_exit_unknown)
+
+
+def _utc_now():
+    from datetime import datetime, timezone
+    return datetime.now(timezone.utc)
+
+
+# Broker statuses that mean THE ORDER IS FINISHED AND DID NOT SURVIVE. Anything
+# not in this set -- including PENDING, TRANSIT, and anything unrecognised --
+# is treated as live, because an order whose status we do not understand is not
+# an order we may assume is gone.
+_TERMINAL_REJECTIONS = frozenset({"REJECTED", "CANCELLED", "CANCELED", "EXPIRED"})
+
+# The broker answered, and its answer was "I do not know". Distinct from a
+# rejection: a rejection is terminal and clears the leg for a retry, this
+# does not.
+_UNKNOWN_STATUSES = frozenset({"UNKNOWN"})
+
+
+def _record_exit_outcome(journal, exit_plan, leg, outcome, clock, logger) -> None:
+    """Write the broker's answer for one exit attempt into the journal.
+
+    THE DEFAULT IS "LIVE", NOT "FAILED". A status this function does not
+    recognise records an ACK, so the attempt is treated as an order that
+    exists at the venue. The opposite default -- unrecognised means failed --
+    would clear the leg for a retry and place a second exit against the same
+    position.
+    """
+    status = getattr(getattr(outcome, "status", None), "value",
+                     str(getattr(outcome, "status", None)))
+    status_text = str(status or "").upper()
+    try:
+        if status_text in _TERMINAL_REJECTIONS:
+            record_exit_rejection(journal, exit_plan, leg,
+                                  f"broker reported {status_text}", clock)
+            return
+        if status_text in _UNKNOWN_STATUSES:
+            record_exit_unknown(journal, exit_plan, leg,
+                                f"broker reported {status_text}", clock)
+            return
+        record_exit_ack(journal, exit_plan, leg,
+                        getattr(outcome, "order_id", None), status_text or "UNKNOWN",
+                        clock, logger)
+    except Exception as exc:  # noqa: BLE001 -- the order is already placed
+        # The placement happened; only the record of its fate failed. The
+        # attempt's INTENT record still stands, so the leg reads as unresolved
+        # and will not be re-sent -- the safe side of this failure.
+        logger.critical(
+            "EOD: exit %s was PLACED but its outcome could not be journaled "
+            "(%s: %s). The attempt is unresolved and will not be re-sent.",
+            leg.broker_client_order_id, type(exc).__name__, exc)
 
 
 def discover_broker_positions(broker, run_async, truth=None
@@ -214,7 +274,7 @@ def build_flatten_request(position: Dict[str, Any], *, underlying: str, lot_size
 
 def run_eod_closure(*, broker, place_fn, run_async, journal, journal_db_path,
                     underlying: str, lot_size: int, session_id: str, logger,
-                    max_attempts: int = 2) -> EodClosureResult:
+                    max_attempts: int = 2, clock=_utc_now) -> EodClosureResult:
     """The closure protocol. COMPLETE only on positively verified flatness.
 
     IDEMPOTENT. Every attempt re-derives everything from broker truth: it
@@ -274,21 +334,100 @@ def run_eod_closure(*, broker, place_fn, run_async, journal, journal_db_path,
         # 4/5. RESIDUALS + EXIT INTENTS -- exactly the broker's own quantity,
         #      per symbol, through the canonical broker-truth boundary.
         result.steps.append(f"attempt{attempt}:SUBMIT_EXIT_INTENTS")
+
+        # JOURNAL THE INTENT BEFORE THE PLACEMENT. Until this existed,
+        # `place_fn` below was reached with nothing in the journal naming the
+        # order: a process that died between the send and the response left an
+        # exit order that no later run could find, and the next attempt's
+        # residual read could re-send it.
+        #
+        # Attempts are recorded as history ON THE EXPOSURE GROUP. Nothing is
+        # minted here -- an exit is not exposure, and a group per attempt put
+        # the order that REDUCES exposure into the margin-active set.
+        try:
+            holdings, orphans = holdings_for_symbols(
+                journal, [(str(pos.get("symbol")), abs(int(pos.get("qty") or 0)))
+                          for pos in positions if pos.get("symbol")],
+                session_id)
+        except ExitJournalUnreadable as exc:
+            result.state = STATE_UNFLATTENED
+            result.flat = False
+            result.detail = f"exposure could not be read from the journal: {exc}"
+            result.cancellations = tuple(cancellations)
+            result.exits_submitted = tuple(exits)
+            result.exit_fills = tuple(fills)
+            logger.critical("EOD: REFUSING TO PLACE -- %s.", exc)
+            return result
+
+        result.orphan_exposure = tuple(orphans)
+        for orphan in orphans:
+            # A BROKER POSITION NO JOURNAL GROUP CLAIMS. It IS flattened --
+            # leaving naked overnight option exposure is far worse than an exit
+            # whose provenance needs explaining -- but its attempt history goes
+            # to the SESSION identity, not a minted group, so nothing that
+            # measures exposure ever sees a group Bujji did not open.
+            logger.critical(
+                "EOD: %s x%d is held at the broker and NO journal group claims "
+                "it. It is being flattened, and its exit is recorded against "
+                "the session rather than a position group. Operator review "
+                "required: Bujji has no record of opening this.",
+                orphan["symbol"], orphan["quantity"])
+
+        try:
+            exit_plan = plan_exit(journal, session_id=session_id, cause=CAUSE_EOD,
+                                  holdings=holdings, broker_truth=None,
+                                  clock=clock, logger=logger)
+        except ExitPlanRefused as exc:
+            # Nothing was placed, deliberately. An unjournalable exit is worse
+            # than an unattempted one: it is an order nobody can find.
+            result.state = STATE_UNFLATTENED
+            result.flat = False
+            result.detail = f"exit intent could not be journaled: {exc}"
+            result.cancellations = tuple(cancellations)
+            result.exits_submitted = tuple(exits)
+            result.exit_fills = tuple(fills)
+            logger.critical(
+                "EOD: REFUSING TO PLACE -- %s. The position may still be OPEN. "
+                "Operator intervention required.", exc)
+            return result
+
+        for refusal in exit_plan.refused:
+            exits.append({"symbol": refusal["target_contract_id"],
+                          "outcome": "REFUSED_UNRESOLVED_PRIOR_EXIT",
+                          "detail": refusal["reason"],
+                          "prior_exit_attempt_id": refusal["prior_exit_attempt_id"]})
+            logger.critical(
+                "EOD: NOT re-sending an exit for %s -- a prior attempt (%s) has "
+                "an unresolved fate. Reconcile broker order truth.",
+                refusal["target_contract_id"], refusal["prior_exit_attempt_id"])
+
+        by_contract = {leg.target_contract_id: leg for leg in exit_plan.legs}
         for position in positions:
             symbol = str(position.get("symbol"))
-            coid = f"EOD-{session_id}-A{attempt}-{symbol}"
+            leg = by_contract.get(symbol)
+            if leg is None:
+                continue  # already exited, refused, or an orphan
+            coid = leg.broker_client_order_id
             try:
                 request = build_flatten_request(
-                    position, underlying=underlying, lot_size=lot_size, client_order_id=coid)
+                    position, underlying=underlying, lot_size=lot_size,
+                    client_order_id=coid)
             except Exception as exc:  # noqa: BLE001 -- never guess a side
                 exits.append({"symbol": symbol, "outcome": "REFUSED", "detail": str(exc)})
                 logger.critical("EOD: refusing to flatten %s -- %s", symbol, exc)
+                # The intent is journaled but nothing will ever be sent for it.
+                # Recording that terminal fate is what lets a retry proceed;
+                # leaving it unresolved would block this leg forever.
+                record_exit_rejection(journal, exit_plan, leg,
+                                      f"refused before placement: {exc}", clock)
                 continue
             try:
                 outcome = place_fn(request)
+                _record_exit_outcome(journal, exit_plan, leg, outcome, clock, logger)
                 fills.append((symbol, outcome))
                 exits.append({
                     "symbol": symbol, "client_order_id": coid,
+                    "exit_attempt_id": leg.exit_attempt_id,
                     "quantity": int(position["qty"]),
                     "side": getattr(request.side, "value", str(request.side)),
                     "status": getattr(getattr(outcome, "status", None), "value",
@@ -301,8 +440,22 @@ def run_eod_closure(*, broker, place_fn, run_async, journal, journal_db_path,
                 })
             except Exception as exc:  # noqa: BLE001
                 exits.append({"symbol": symbol, "client_order_id": coid,
+                              "exit_attempt_id": leg.exit_attempt_id,
                               "outcome": "SUBMIT_FAILED", "detail": str(exc)})
                 logger.critical("EOD: flatten submit failed for %s: %s", symbol, exc)
+                # RECORDED AS UNKNOWN, NOT AS A FAILURE. An exception from the
+                # send tells us the CALL failed, not that the ORDER was never
+                # received. UNKNOWN is not terminal, so this leg will not be
+                # re-sent until broker order truth resolves it -- which is the
+                # correct outcome, not a defect.
+                try:
+                    record_exit_unknown(journal, exit_plan, leg,
+                                        f"{type(exc).__name__}: {exc}", clock)
+                except Exception as record_exc:  # noqa: BLE001
+                    logger.critical(
+                        "EOD: could not journal the UNKNOWN fate of %s (%s). The "
+                        "leg's INTENT record still blocks a blind re-send.",
+                        coid, record_exc)
 
         # 6. RECONCILE happens as the next attempt's discovery, or below.
 

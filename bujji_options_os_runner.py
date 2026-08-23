@@ -973,8 +973,16 @@ class OptionsOSRunner:
         # did not -- through the SAME broker-truth placement function, so
         # there is exactly one order path for entry, exit and closure.
         self._exit_place_fn = _exit_place_fn
+        # journal + session_id: every exit this executor places is journaled
+        # BEFORE placement and reconciled against prior attempts. Without them
+        # it falls back to unjournaled placement, which is the defect M4b
+        # closes -- tests/test_executor_journals_exits.py ratchets that the
+        # production runner supplies them.
         self._executor = TradeLifecycleExecutor(self._broker, self._registry, self._lifecycle_runtime,
                                                 place_fn=_exit_place_fn,
+                                                journal=self._journal,
+                                                session_id=self._session_id,
+                                                logger=self._logger,
                                                  event_bus=self._root.event_bus)
 
         mandatory_exit_time = None
