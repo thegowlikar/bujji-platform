@@ -104,16 +104,27 @@ def test_the_alert_unit_exists_and_records_the_failure():
         "the OnFailure target must leave a durable record, not just a log line")
 
 
-def test_the_onfailure_wiring_is_deployed_only_and_recorded_here():
-    """A FINDING, pinned so it cannot be forgotten: `OnFailure=` lives in a
-    drop-in on the host and is NOT version-controlled. The repo therefore
-    cannot prove the alert is wired -- only that nothing suppresses it. If the
-    drop-in is ever added to deploy/, this test should be replaced by one that
-    asserts the file's real content."""
-    assert not list(DEPLOY.glob("*.conf")), (
-        "a drop-in now exists in deploy/ -- assert its content directly "
-        "instead of relying on the recorded fixture")
-    assert "OnFailure=bujji-alert@%n.service" in DEPLOYED_DROPINS["onfailure.conf"]
+def test_the_onfailure_wiring_is_now_version_controlled():
+    """RESOLVED 2026-08-22. This previously asserted the drop-in's ABSENCE and
+    carried the observed content as a fixture, because `OnFailure=` lived only
+    on the host. The canonical copies now exist under deploy/, so this asserts
+    the real file -- which is what the earlier version said to do the moment it
+    became possible."""
+    dropin = DEPLOY / "bujji-options-os-trading.service.d" / "onfailure.conf"
+    assert dropin.is_file(), "the alert wiring must be version-controlled"
+    directives = [l.strip() for l in dropin.read_text().splitlines()
+                  if l.strip() and not l.strip().startswith("#")]
+    assert "OnFailure=bujji-alert@%n.service" in directives
+    assert DEPLOYED_DROPINS["onfailure.conf"].strip() in "\n".join(directives), (
+        "the repository copy no longer matches what was observed deployed")
+
+
+def test_the_token_gate_is_now_version_controlled():
+    dropin = DEPLOY / "bujji-options-os-trading.service.d" / "token-gate.conf"
+    assert dropin.is_file()
+    directives = [l.strip() for l in dropin.read_text().splitlines()
+                  if l.strip() and not l.strip().startswith("#")]
+    assert "Requires=bujji-token-preflight.service" in directives
 
 
 # --------------------------------------------------------------------------

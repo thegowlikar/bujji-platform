@@ -133,8 +133,8 @@ are deliberately absent from the table above.
 starts, which modules production can reach. Current measurement:
 
 ```
-python files            1837
-  test modules           558
+python files            1838
+  test modules           559
   production modules    1279
 
 REACHABLE                481   (37.6% of production)
