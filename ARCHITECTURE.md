@@ -133,14 +133,14 @@ are deliberately absent from the table above.
 starts, which modules production can reach. Current measurement:
 
 ```
-python files            1870
+python files            1871
   test modules           579
-  production modules    1291
+  production modules    1292
 
 REACHABLE                487   (37.7% of production)
-orphaned                 804
+orphaned                 805
   test-only              603
-  unreferenced           201
+  unreferenced           202
 ```
 
 **`test-only` is a classification, not a verdict.** It means exactly one thing:
