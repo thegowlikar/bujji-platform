@@ -736,7 +736,7 @@ class FyersBroker(Broker):
 
     async def get_option_chain(
         self, underlying: str, spot: float, strike_count: int = 5
-    ) -> Optional[list[tuple[float, float, float]]]:
+    ) -> Optional[list[tuple[float, Optional[float], Optional[float]]]]:
         """LIVE-VERIFIED (2026-07-20, see docs/MARKET_INTELLIGENCE_CORE.md's
         Structure Brain section): the real `optionchain` endpoint (distinct
         from the plain `quotes` call `get_quote` uses above) returns
@@ -755,7 +755,7 @@ class FyersBroker(Broker):
         # nested under a top-level "data" key -- confirmed by direct
         # inspection of the raw response, not assumed from the SDK docstring.
         rows = data.get("data", {}).get("optionsChain", [])
-        by_strike: dict[float, dict[str, float]] = {}
+        by_strike: dict[float, dict[str, Optional[float]]] = {}
         for row in rows:
             strike = row.get("strike_price")
             opt_type = row.get("option_type")
@@ -764,8 +764,20 @@ class FyersBroker(Broker):
                 continue  # Skips the underlying/VIX rows (strike_price=-1, option_type="").
             entry = by_strike.setdefault(float(strike), {})
             entry["ce_oi" if opt_type == "CE" else "pe_oi"] = float(oi)
+        # ABSENT OI IS None, NEVER 0.0.
+        #
+        # This returned `values.get("ce_oi", 0.0)`, so a strike carrying a CE
+        # row but no PE row was reported as a PE with ZERO open interest. A
+        # real 0 and an unfetched value rendered identically, and downstream
+        # the minimum-OI liquidity check compares that number to a threshold
+        # -- so a manufactured zero could refuse a perfectly liquid strike, or
+        # a genuine zero could be mistaken for a gap.
+        #
+        # None propagates the absence. Callers that cannot yet handle it
+        # should refuse rather than substitute; see _liquidity_ok, which now
+        # names the two refusals separately.
         return [
-            (strike, values.get("ce_oi", 0.0), values.get("pe_oi", 0.0))
+            (strike, values.get("ce_oi"), values.get("pe_oi"))
             for strike, values in sorted(by_strike.items())
         ]
 

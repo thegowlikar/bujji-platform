@@ -133,14 +133,14 @@ are deliberately absent from the table above.
 starts, which modules production can reach. Current measurement:
 
 ```
-python files            1902
-  test modules           579
-  production modules    1323
+python files            1906
+  test modules           580
+  production modules    1326
 
-REACHABLE                487   (36.8% of production)
-orphaned                 836
-  test-only              603
-  unreferenced           233
+REACHABLE                487   (36.7% of production)
+orphaned                 839
+  test-only              605
+  unreferenced           234
 ```
 
 **`test-only` is a classification, not a verdict.** It means exactly one thing:
@@ -593,6 +593,76 @@ chain that strikes were selected from is not part of the evidence package.
 Strikes cannot be re-derived from a book nobody wrote down. Whether a
 per-entry chain snapshot is worth its size is an operator decision about
 evidence volume, recorded here rather than patched quietly.
+
+## 5g. Market Intelligence: descriptive, offline, and deliberately inert
+
+### The OI pipeline, and where it was lossy
+
+```
+FYERS optionchain (oi, prev_oi, oich)
+  -> LiveChainProvider          -> OptionObservation   [the snapshot-fact authority]
+  -> _build_strike_evidence     -> _StrikeEvidence.oi_evidence
+  -> _liquidity_ok              -> named, replayable refusal
+  -> TradeConstructionAssessment.explanation.dominant_constraints
+```
+
+**Two authorities, one of them lossy.** `LiveChainProvider` feeds the trading
+path and already carried `oi` and `oich`; `FyersBroker.get_option_chain()` feeds
+the `MarketSnapshot` path and carried only `oi` — substituting **`0.0` for an
+absent CE/PE row**, so a strike nobody reported arrived as a hard zero and could
+be compared to `MIN_OPEN_INTEREST`. Both are repaired in place. Neither was
+replaced, and no third chain path exists.
+
+`prev_oi` was discarded by both. It is now a first-class observation field,
+`FIELD_PREVIOUS_OPEN_INTEREST` — **non-mandatory**, because bhavcopy has no
+previous-OI column and making it mandatory would mark every bhavcopy
+observation permanently incomplete for a field that source structurally cannot
+supply.
+
+### `OptionObservation` is the OI model. There is no other.
+
+It already carries contract identity, chain timestamp, `missing_fields`, and
+all three OI values. Decision evidence records its **identity**, not a copy —
+`observation_id`, `instrument_symbol`, `chain_timestamp`, `provenance`,
+availability — so an OI-dependent accept or refusal can be replayed against the
+exact record it used.
+
+The broker's own `oich` is kept verbatim. Bujji does **not** compute a competing
+`oi - prev_oi` delta: two answers to one question is how a split starts.
+
+### OI is a REST fact and can never be a tick fact
+
+Measured on 2026-08-24: **zero occurrences** of `open_interest`, `"oi"` or
+`prev_oi` across a 394 MB websocket corpus, on options as well as futures. The
+verifier therefore treats any tick provenance on an OI fact as a refusal
+(`TICK_PROVENANCE_ON_REST_FACT`) — it is a false claim of simultaneity, not a
+mislabel.
+
+### `bujji.market_intelligence` — offline by reachability, not by docstring
+
+Descriptive reporting over persisted observations: OI level and availability,
+put/call ratio with its denominator stated, concentration and OI-weighted
+distance from spot, broker `oich` dispersion, per-expiry rollup, and data
+quality. It defines **no** OI model, emits **no** signal, and is **absent from
+the reachability closure of every declared entrypoint** — asserted by a test,
+because "offline" in a docstring has meant "reachable and simply not called
+yet" in this codebase before.
+
+**What it may never say.** OI is unsigned and aggregated. It cannot identify
+buyer or seller initiation, participant class, opening versus closing flow, or
+bullish/bearish intent — a rise in OI with a rise in price cannot distinguish a
+buyer opening from a seller opening, because both create exactly one contract.
+The quadrant vocabulary contains no directional member and no quadrant is
+emitted from a single snapshot, since a price/OI quadrant needs a price change
+over the *same* interval as the OI change.
+
+### The intelligence-to-decision contract is built and consumed by nothing
+
+`decision_market_context()` produces the record a later policy would read —
+named facts, their timestamps and sources, and the fields that were
+unavailable. Its status is literally `CONSTRUCTED_NOT_CONSUMED`, and a test
+asserts no module outside the package imports it. **Activating it is a separate
+decision requiring measured evidence about OI freshness that does not exist.**
 
 ## 6. Deprecations
 

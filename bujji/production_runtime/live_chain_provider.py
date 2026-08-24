@@ -392,6 +392,13 @@ class LiveChainProvider(MarketDataProvider):
                 volume=row.get("volume"),
                 open_interest=row.get("oi"),
                 change_in_open_interest=row.get("oich"),
+                # PREVIOUS OI, CARRIED VERBATIM. The endpoint returns
+                # oi/prev_oi/oich per strike and Bujji kept only the first
+                # two. prev_oi is retained rather than derived: oich is the
+                # broker's own arithmetic, live-verified as oi - prev_oi, and
+                # recomputing a competing delta from two numbers we also hold
+                # would create a second answer to one question.
+                previous_open_interest=row.get("prev_oi"),
                 underlying_price=spot,
                 origin="fyers_optionchain_live",
                 acquisition_timestamp=as_of_date, normalization_timestamp=as_of_date,

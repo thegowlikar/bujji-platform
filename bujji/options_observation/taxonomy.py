@@ -213,6 +213,20 @@ FIELD_SETTLEMENT = "SETTLEMENT"
 FIELD_VOLUME = "VOLUME"
 FIELD_OPEN_INTEREST = "OPEN_INTEREST"
 FIELD_CHANGE_IN_OPEN_INTEREST = "CHANGE_IN_OPEN_INTEREST"
+# The broker's OWN previous-session open interest, carried verbatim.
+#
+# The FYERS optionchain endpoint returns oi/prev_oi/oich per strike, with
+# oich == oi - prev_oi confirmed to hold exactly on real NIFTY strikes
+# (bujji/broker/fyers.py, live-verified 2026-07-20). Bujji retained only oi
+# and discarded the other two, so the broker handed it a verified OI change
+# and the extraction threw it away.
+#
+# NOT MANDATORY, deliberately. Bhavcopy has no previous-OI column, so making
+# it mandatory would mark every Bhavcopy-sourced observation permanently
+# INCOMPLETE for a field that source structurally cannot supply -- the same
+# reasoning that keeps BID/ASK out of the mandatory set. It still appears in
+# missing_fields whenever absent, because disclosure is unconditional.
+FIELD_PREVIOUS_OPEN_INTEREST = "PREVIOUS_OPEN_INTEREST"
 FIELD_UNDERLYING_PRICE = "UNDERLYING_PRICE"
 FIELD_BID = "BID"                    # Never populated from Bhavcopy -- see evidence above.
 FIELD_ASK = "ASK"                    # Never populated from Bhavcopy -- see evidence above.
@@ -228,6 +242,7 @@ ALL_OPTIONS_OBSERVATION_FIELDS = (
     FIELD_VOLUME,
     FIELD_OPEN_INTEREST,
     FIELD_CHANGE_IN_OPEN_INTEREST,
+    FIELD_PREVIOUS_OPEN_INTEREST,
     FIELD_UNDERLYING_PRICE,
     FIELD_BID,
     FIELD_ASK,
@@ -260,6 +275,7 @@ MANDATORY_OPTIONS_OBSERVATION_FIELDS = (
 # Bhavcopy source. Always contributes to `missing_fields`, never to
 # the completeness denominator.
 KNOWN_UNAVAILABLE_FROM_BHAVCOPY = (
+    FIELD_PREVIOUS_OPEN_INTEREST,
     FIELD_BID,
     FIELD_ASK,
     FIELD_BID_QUANTITY,

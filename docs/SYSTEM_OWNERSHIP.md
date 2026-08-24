@@ -74,6 +74,31 @@ is not mistaken for an oversight.
 | Broker glue | `bujji/broker/factory.py`, `bujji/broker/fyers_ws.py` |
 | Tests | 31 files under `tests/` referencing ORB/VWAP (e.g. `test_vwap.py`, `test_trade_manager.py`, `test_signal_engine.py`) |
 
+## Market Intelligence ownership (added 2026-08-24)
+
+Derived from `tools/reachability.py`, not from intent.
+
+| Concern | Owner | Reachable from a trading entrypoint? |
+|---|---|---|
+| Option snapshot fact — `oi` / `prev_oi` / `oich`, contract identity, chain timestamp, `missing_fields` | `bujji.options_observation` (`OptionObservation`) | yes |
+| Live chain ingestion | `bujji.production_runtime.live_chain_provider` | yes |
+| MarketSnapshot chain ingestion | `bujji.broker.fyers.get_option_chain` → `bujji.market_perception.option_chain_adapter` | yes |
+| OI-dependent liquidity gate | `bujji.msi_trade_construction.engine._liquidity_ok` | yes |
+| OI decision evidence | `_StrikeEvidence.oi_evidence` — the observation's identity, not a copy | yes |
+| Descriptive OI intelligence | `bujji.market_intelligence.engine` | **no — offline, asserted by test** |
+| OI evidence verifier | `bujji.market_intelligence.verifier` | **no — offline, asserted by test** |
+| Intelligence-to-decision contract | `market_intelligence.verifier.decision_market_context` | **no — CONSTRUCTED_NOT_CONSUMED** |
+
+There is exactly one OI model (`OptionObservation`) and exactly one
+OI-dependent gate. `bujji.market_intelligence` defines neither, and may never
+define either — its role is to describe what the snapshots show, not to become
+a second source of truth about them.
+
+**Two chain ingestion paths exist and both are authoritative for their own
+consumer**: `live_chain_provider` feeds the trading path, `fyers.get_option_chain`
+feeds the `MarketSnapshot` path. They were repaired in place rather than merged;
+merging them is a separate decision with its own evidence requirements.
+
 ## Bujji Options OS ownership
 
 | Concern | Files |

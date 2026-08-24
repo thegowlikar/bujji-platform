@@ -97,14 +97,19 @@ def select_calendar_expiries(
 # ---------------------------------------------------------------------------
 
 class _StrikeEvidence:
+    # oi_evidence: the identity and provenance of the OBSERVATION the open
+    # interest came from -- not a second OI model. OptionObservation already
+    # is the typed, provenance-carrying record; this carries its identity so a
+    # decision can name the exact contract record it rested on.
     __slots__ = ("strike", "option_type", "premium", "premium_basis",
-                 "open_interest", "iv", "delta")
+                 "open_interest", "iv", "delta", "oi_evidence")
 
     def __init__(self, strike, option_type, premium, open_interest, iv, delta,
-                 premium_basis=None):
+                 premium_basis=None, oi_evidence=None):
         self.strike = strike
         self.option_type = option_type
         self.premium = premium
+        self.oi_evidence = oi_evidence or {}
         # WHICH observed number the IV was inverted from. Recorded because an
         # IV is only as current as the price behind it: a settlement, a
         # two-sided mid and a possibly-stale last trade are three different
@@ -186,10 +191,36 @@ def _build_strike_evidence(
             iv = solve_implied_volatility(premium, spot, row.strike, t_years, r, opt)
             if iv is not None:
                 delta = _bs_delta(spot, row.strike, t_years, r, iv, opt)
+        # THE OBSERVATION IS THE EVIDENCE. Recorded by identity and
+        # provenance so an OI-dependent accept or refusal can be replayed
+        # against the exact contract record it used -- rather than against a
+        # float whose origin and age nobody kept.
+        #
+        # REST-CHAIN PROVENANCE ONLY. `timestamp` here is the chain fetch
+        # time. It is never a tick time and must never be presented beside a
+        # tick as though the two were one simultaneous observation.
+        _oi_ev = {}
+        try:
+            _oi_ev = {
+                "observation_id": getattr(row, "observation_id", None),
+                "instrument_symbol": getattr(row, "instrument_symbol", None),
+                "chain_timestamp": getattr(row, "timestamp", None),
+                "provenance": "REST_CHAIN_SNAPSHOT",
+                "open_interest": row.open_interest,
+                "previous_open_interest": getattr(row, "previous_open_interest", None),
+                "change_in_open_interest": getattr(row, "change_in_open_interest", None),
+                "availability": ("AVAILABLE" if row.open_interest is not None
+                                 else "UNAVAILABLE"),
+                "missing_fields": tuple(getattr(row, "missing_fields", ()) or ()),
+            }
+        except Exception:  # noqa: BLE001 -- evidence capture never breaks construction
+            _oi_ev = {"availability": "UNKNOWN",
+                      "provenance": "REST_CHAIN_SNAPSHOT",
+                      "capture_error": True}
         evidence[(row.strike, row.option_type)] = _StrikeEvidence(
             strike=row.strike, option_type=row.option_type, premium=premium,
             open_interest=row.open_interest, iv=iv, delta=delta,
-            premium_basis=premium_basis,
+            premium_basis=premium_basis, oi_evidence=_oi_ev,
         )
     return evidence
 
@@ -226,16 +257,58 @@ def _at_strike(evidence: Dict, option_type: str, strike: float):
 # Liquidity validation (Deliverable 1 finding: OI proxy, not spread)
 # ---------------------------------------------------------------------------
 
+# Named, replayable refusal reasons. Two different facts used to render as one
+# sentence: "open_interest=None < MIN_OPEN_INTEREST=500" is not a comparison,
+# it is a missing measurement wearing the costume of a failed one. An operator
+# reading a no-trade day has to be able to tell "this strike is illiquid" from
+# "nobody told us whether it is".
+LIQUIDITY_REFUSED_OI_UNAVAILABLE = "OI_UNAVAILABLE"
+LIQUIDITY_REFUSED_OI_BELOW_MINIMUM = "OI_BELOW_MINIMUM"
+
+
 def _liquidity_ok(evidences: Iterable[_StrikeEvidence]) -> Tuple[bool, Tuple[str, ...]]:
-    failing = [e for e in evidences if e.open_interest is None or e.open_interest < _config.MIN_OPEN_INTEREST]
-    if failing:
-        return False, tuple(
-            f"{e.option_type}{int(e.strike)} open_interest="
-            f"{e.open_interest} < MIN_OPEN_INTEREST={_config.MIN_OPEN_INTEREST} "
-            f"(liquidity proxy -- real bid/ask unavailable in this data source)"
-            for e in failing
-        )
-    return True, ()
+    """Refuse on unavailable OI explicitly, and separately from illiquidity.
+
+    UNAVAILABLE IS NOT ZERO AND NOT ILLIQUID. Until 2026-08-24 the broker
+    extraction substituted 0.0 for an absent CE/PE row, so a strike nobody
+    reported could arrive here as a hard zero and be refused as illiquid --
+    indistinguishable from a genuinely dead strike. That substitution is gone;
+    absence now arrives as None and is refused under its own name.
+
+    Both remain refusals. This does not loosen the gate: an OI-dependent
+    decision may not proceed on an OI nobody supplied.
+    """
+    unavailable = [e for e in evidences if e.open_interest is None]
+    below = [e for e in evidences
+             if e.open_interest is not None
+             and e.open_interest < _config.MIN_OPEN_INTEREST]
+    if not unavailable and not below:
+        return True, ()
+    def _src(e):
+        """Name the observation behind the number, so the refusal replays."""
+        ev = getattr(e, "oi_evidence", None) or {}
+        oid = ev.get("observation_id")
+        ts = ev.get("chain_timestamp")
+        if not oid and not ts:
+            return " [evidence: NO OBSERVATION REFERENCE RECORDED]"
+        return (f" [evidence: {ev.get('provenance', 'UNKNOWN')} "
+                f"observation={oid} chain_timestamp={ts}]")
+
+    reasons = tuple(
+        f"{LIQUIDITY_REFUSED_OI_UNAVAILABLE}: {e.option_type}{int(e.strike)} "
+        f"open_interest is UNAVAILABLE (not zero, not measured) -- an "
+        f"OI-dependent decision cannot rest on an OI nobody supplied"
+        + _src(e)
+        for e in unavailable
+    ) + tuple(
+        f"{LIQUIDITY_REFUSED_OI_BELOW_MINIMUM}: {e.option_type}{int(e.strike)} "
+        f"open_interest={e.open_interest} < MIN_OPEN_INTEREST="
+        f"{_config.MIN_OPEN_INTEREST} "
+        f"(liquidity proxy -- real bid/ask unavailable in this data source)"
+        + _src(e)
+        for e in below
+    )
+    return False, reasons
 
 
 # ---------------------------------------------------------------------------
