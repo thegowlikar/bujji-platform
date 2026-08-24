@@ -113,6 +113,29 @@ session that ran, not a session that passed.
 
 ---
 
+## 3a. Gate 1 scope, as of 2026-08-25
+
+Tomorrow measures continuous capture from the opening-ready subscription set
+during **09:15:00–15:40:00 IST**. Reconnect recovery and subscription capacity
+are intentionally unmeasured and deferred to dedicated no-trade live-venue
+experiments.
+
+The claim that run may make is exactly:
+
+> "Bujji captured every SDK callback it received from the opening-ready
+> subscription set during 09:15:00–15:40:00 IST."
+
+It may **never** claim every exchange tick was delivered by FYERS. The corpus
+records what arrived, not what existed — and no measurement taken from inside
+the receiver can distinguish "the venue sent nothing" from "the venue sent
+something we never saw".
+
+**15:40 is the F&O close, not 15:30.** 15:30 is the cash close; Bujji trades
+F&O (NSE circular 2026-05-30, effective 2026-08-03). Anything reasoning about
+Bujji's own instruments wants `FO_MARKET_CLOSE` from
+`bujji/market_calendar.py`, which is the single authority — the Gate 1
+orchestrator now derives its window from it rather than declaring a literal.
+
 ## 4. What a level-2 ceiling means
 
 Today a session that does everything right reaches **level 3** at best, and
