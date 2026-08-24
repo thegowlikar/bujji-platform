@@ -48,6 +48,29 @@ from pathlib import Path
 def is_market(payload: dict) -> bool:
     return isinstance(payload.get("symbol"), str) and bool(payload.get("symbol"))
 
+# INSTRUMENT CLASS, because a blended availability percentage lies.
+#
+# An index carries no order book, so bid/ask/size/volume are absent from every
+# `if` frame BY CONSTRUCTION. Averaging those absences together with option and
+# future frames produced "bid_price 97.14%", which reads as a 3% gap in the
+# feed when it is in fact 100% on every instrument that HAS a bid and 0% on
+# every instrument that cannot. One number for two populations is not a
+# measurement, it is a blend.
+#
+# Class comes from the symbol where the symbol can say, and falls back to the
+# frame type. Deliberately no guessing beyond these: an unclassifiable record
+# is reported as OTHER rather than assigned to whichever bucket looks tidiest.
+def instrument_class(payload: dict) -> str:
+    sym = (payload.get("symbol") or "").upper()
+    if payload.get("type") == "if" or sym.endswith("-INDEX"):
+        return "INDEX (if)"
+    if sym.endswith("CE") or sym.endswith("PE"):
+        return "OPTION (sf)"
+    if "FUT" in sym:
+        return "FUTURE (sf)"
+    return f"OTHER ({payload.get('type')})"
+
+
 PROVENANCE_COLUMNS = ["seq", "recv_ts", "recv_monotonic", "tid"]
 
 
@@ -62,6 +85,8 @@ def sha256(path: Path) -> str:
 def scan(path: Path):
     """One pass to learn the shape, so columns come from the data."""
     key_counts: Counter = Counter()
+    class_totals: Counter = Counter()
+    class_keys: dict = defaultdict(Counter)
     kinds: dict = {}
     type_counts: Counter = Counter()
     shape_counts: Counter = Counter()
@@ -94,8 +119,11 @@ def scan(path: Path):
                 continue
             market += 1
             shape_counts[tuple(sorted(payload.keys()))] += 1
+            cls = instrument_class(payload)
+            class_totals[cls] += 1
             for k in payload:
                 key_counts[k] += 1
+                class_keys[cls][k] += 1
             sym = payload.get("symbol")
             if isinstance(sym, str):
                 symbols.add(sym)
@@ -116,6 +144,7 @@ def scan(path: Path):
         "control_frames": control, "market_records": market,
         "key_counts": key_counts, "type_counts": type_counts,
         "shape_counts": shape_counts, "symbols": symbols, "kinds": kinds,
+        "class_totals": class_totals, "class_keys": class_keys,
         "seq_span": gaps,
     }
 
@@ -174,6 +203,21 @@ def render_summary(path, info, columns, rows, out_csv, digest) -> str:
         shown = pct if exact else min(pct, 99.99)
         note = "" if exact else f"   <- absent on {m - c:,} record(s)"
         lines.append(f"  {k:<24} {c:>10,}  {shown:6.2f}%{note}")
+
+    lines += ["", "FIELD AVAILABILITY BY INSTRUMENT CLASS -- the number that means something"]
+    for cls, total in info["class_totals"].most_common():
+        lines.append(f"  {cls}  ({total:,} records)")
+        ck = info["class_keys"][cls]
+        for k, c in ck.most_common():
+            exact = (c == total)
+            pct = 100.0 * c / total if total else 0.0
+            shown = pct if exact else min(pct, 99.99)
+            note = "" if exact else f"   <- absent on {total - c:,}"
+            lines.append(f"      {k:<22} {c:>10,}  {shown:6.2f}%{note}")
+        missing = sorted(set(info["key_counts"]) - set(ck))
+        if missing:
+            lines.append(f"      NEVER PRESENT on this class: {', '.join(missing)}")
+        lines.append("")
 
     lines += ["", "PAYLOAD SHAPES"]
     for keys, c in info["shape_counts"].most_common(10):
