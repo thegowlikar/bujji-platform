@@ -133,14 +133,14 @@ are deliberately absent from the table above.
 starts, which modules production can reach. Current measurement:
 
 ```
-python files            1906
-  test modules           580
-  production modules    1326
+python files            1914
+  test modules           581
+  production modules    1333
 
-REACHABLE                487   (36.7% of production)
-orphaned                 839
-  test-only              605
-  unreferenced           234
+REACHABLE                487   (36.5% of production)
+orphaned                 846
+  test-only              611
+  unreferenced           235
 ```
 
 **`test-only` is a classification, not a verdict.** It means exactly one thing:
@@ -663,6 +663,76 @@ named facts, their timestamps and sources, and the fields that were
 unavailable. Its status is literally `CONSTRUCTED_NOT_CONSUMED`, and a test
 asserts no module outside the package imports it. **Activating it is a separate
 decision requiring measured evidence about OI freshness that does not exist.**
+
+### `bujji.quant_research` — offline research, and what the data actually supports
+
+Seven modules, none reachable from any declared entrypoint (asserted by the
+same closure test the intelligence package uses). It reads durable artifacts
+and writes research outputs; it feeds no selection, ranking, sizing, risk or
+execution path.
+
+**Dataset identity.** `manifest.py` binds a research dataset to its source
+SHA-256s, universe identity, session date and phase classification, and refuses
+seven ways — a changed file under an unchanged manifest, a missing source, an
+absent universe identity, an unclassified phase, or the inclusion of a phase
+classified INVALID or UNMEASURED. The fingerprint covers the inclusion rule as
+well as the bytes, because the same corpus filtered differently is a different
+dataset and a result does not carry between them.
+
+**No look-ahead, structurally.** `dataset.py` exposes streaming access only.
+A `PointInTime` view has a `history()` and its `future()` raises. Forward
+outcomes come from `label_forward_outcome()`, which is named for what it is and
+stamps every result with a warning that it may not be used as a feature. A
+corpus whose sequence goes backwards raises rather than being silently trusted.
+
+**Tick facts and chain facts are separate types.** `features.py` puts tick
+features and REST-chain OI features in different containers that can only be
+combined through `join_with_staleness()`, which computes the age of the chain
+snapshot, records it as part of the feature, and refuses when the snapshot has
+no timestamp. An unknown age is not a small age.
+
+**Measured capability, 2026-08-24 corpora.** The diagnostics were run against
+both preserved captures. The result constrains what Bujji can honestly test:
+
+| | lite sustained | full ramp |
+| --- | --- | --- |
+| span | 5.64 h | 1.08 h |
+| records | 990,689 | 419,766 |
+| option fields carried | **3** (`ltp`, `symbol`, `type`) | 22 |
+| two-sided quote observations | **0** | 412,503 |
+| median option update rate | 0.068 msg/s | — |
+| options under 1 msg/60s | 78 of 246 | — |
+| median relative spread | not measurable | 0.494% |
+| p95 relative spread | not measurable | 9.524% |
+
+**The constraint this exposes.** Bujji's only long continuous capture carries
+last price and nothing else. No bid, no ask, no size — so it cannot support an
+executable price, a spread, or any P&L that claims to be transactable. The
+capture that does carry quotes ran for one hour of one day. This is a fact
+about the data, discovered before any method was tried, rather than an
+unexplained result surfacing later inside a backtest.
+
+**The evaluation contract refuses by default.** `evaluation.py` returns
+`INSUFFICIENT_EVIDENCE` until eleven gates pass, and its best available verdict
+is `NOT_REJECTED` — the vocabulary contains no word for profitable. The
+multiple-testing gate applies a deflated Sharpe ratio (Bailey & López de
+Prado): the bar a result must clear rises with the number of configurations
+tried, so a strategy chosen from 200 variants faces a far higher threshold than
+one specified in advance. `ledger.py` records every trial including failures,
+because an unrecorded experiment under-reports N and makes the correction
+applied to every later result too weak.
+
+**Eleven negative controls, each verified by defect injection.** Each control
+was confirmed to fail when its specific guard was removed and to pass when
+restored — a control that cannot fire is not evidence. They cover: a future
+tick leaked into a feature; an INVALID phase admitted; an UNMEASURED phase
+admitted; REST OI stamped as a tick fact; P&L formed from LTP without quotes;
+source bytes changed under an unchanged manifest; a one-day in-sample result
+with 200 trials presented as a finding; an out-of-order corpus; a chain fact
+joined with no timestamp; a chain snapshot dated after the decision instant;
+and a ledger that hides failed trials.
+
+**No research output in this package authorizes paper trading or live trading.**
 
 ## 6. Deprecations
 
