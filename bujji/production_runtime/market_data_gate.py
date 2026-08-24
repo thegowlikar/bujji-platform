@@ -35,7 +35,7 @@ quality protects capital, and the safe direction is the other way.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any, Dict, Optional, Tuple
+from typing import Any, Dict, Optional, Sequence, Tuple
 
 QUALITY_GOOD = "GOOD"
 QUALITY_DEGRADED = "DEGRADED"
@@ -53,6 +53,22 @@ REASON_SPOT_UNAVAILABLE = "SPOT_UNAVAILABLE"
 REASON_UNKNOWN_HEALTH = "UNRECOGNISED_HEALTH_STATUS"
 REASON_NON_LIVE_ORIGIN = "NON_LIVE_ORIGIN"
 REASON_EVIDENCE_TRAIL_BROKEN = "EVIDENCE_TRAIL_BROKEN"
+REASON_REQUIRED_FIELD_UNAVAILABLE = "REQUIRED_FIELD_UNAVAILABLE"
+REASON_REQUIRED_FIELD_STALE = "REQUIRED_FIELD_STALE"
+REASON_DISALLOWED_PROVENANCE = "DISALLOWED_FIELD_PROVENANCE"
+REASON_QUOTE_MALFORMED = "QUOTE_MALFORMED"
+
+# WHICH FIELDS A DECISION NEEDS IS THE CALLER'S TO STATE, not this module's.
+#
+# The plumbing here is deliberately GENERIC. A stop-loss needs a price; a
+# spread-sensitive entry needs both book sides; a liquidity filter needs
+# volume or open interest. Hardcoding one policy would make every decision
+# share the strictest requirement, and choosing that policy before Monday's
+# Gate 1 measurement would mean choosing it from assumptions about which
+# FYERS fields arrive at all.
+#
+# So: callers pass what they need, this refuses when they cannot have it, and
+# the FYERS-specific policy is set after there is evidence to set it from.
 
 
 @dataclass(frozen=True)
@@ -163,6 +179,98 @@ def assess_market_data(
         return verdict(QUALITY_DEGRADED, True)
 
     return verdict(QUALITY_GOOD, True)
+
+
+def assess_quote_fields(
+    quotes: Dict[str, Any],
+    required_fields: Sequence[str],
+    *,
+    now_mono: float,
+    max_age_seconds: float,
+    allowed_sources: Sequence[str] = ("LIVE_TICK",),
+    required_symbols: Optional[Sequence[str]] = None,
+) -> DataQualityVerdict:
+    """Can a decision that needs THESE fields be made from THESE quotes?
+
+    Three independent ways to be refused, and they are distinguished because
+    they call for different operator actions:
+
+      UNAVAILABLE  the source never supplied the field. Waiting will not help;
+                   either the field does not arrive on this feed or the
+                   projection does not yet map it.
+      STALE        it arrived, and is too old. The feed may have gone quiet.
+      DISALLOWED   it is present and fresh, but came from a source this
+                   decision does not accept -- a REST price standing in for
+                   book evidence, or replayed data reaching a live decision.
+
+    FAIL CLOSED ON THE UNKNOWN. A symbol with no quote at all, a quote whose
+    age cannot be established, an unrecognised source: all refuse. A gate that
+    permits on the paths its author did not anticipate is not a gate.
+    """
+    reasons: list = []
+    missing: list = []
+    symbols = list(required_symbols if required_symbols is not None else quotes.keys())
+
+    if not symbols:
+        return DataQualityVerdict(
+            quality=QUALITY_UNAVAILABLE, may_trade=False,
+            reasons=(REASON_NO_SNAPSHOT,),
+            missing_fields=tuple(required_fields))
+
+    for symbol in symbols:
+        q = quotes.get(symbol)
+        if q is None:
+            reasons.append(f"{REASON_REQUIRED_FIELD_UNAVAILABLE}:{symbol}:<no quote>")
+            missing.append(f"{symbol}:*")
+            continue
+
+        # Age from the quote's own monotonic stamp. Unknown age is refused,
+        # never treated as fresh.
+        age = None
+        try:
+            age = q.age_seconds(now_mono)
+        except Exception:  # noqa: BLE001
+            age = None
+        if age is None:
+            reasons.append(f"{REASON_QUOTE_MALFORMED}:{symbol}:<no monotonic stamp>")
+            missing.append(f"{symbol}:*")
+            continue
+
+        for name in required_fields:
+            try:
+                fv = q.get(name)
+            except Exception:  # noqa: BLE001
+                reasons.append(f"{REASON_QUOTE_MALFORMED}:{symbol}:{name}")
+                missing.append(f"{symbol}:{name}")
+                continue
+            if not fv.is_available:
+                reasons.append(f"{REASON_REQUIRED_FIELD_UNAVAILABLE}:{symbol}:{name}")
+                missing.append(f"{symbol}:{name}")
+                continue
+            if fv.source not in allowed_sources:
+                reasons.append(f"{REASON_DISALLOWED_PROVENANCE}:{symbol}:{name}"
+                               f":{fv.source}")
+                missing.append(f"{symbol}:{name}")
+                continue
+            field_age = fv.age_seconds(now_mono)
+            if field_age is None or field_age > max_age_seconds:
+                reasons.append(f"{REASON_REQUIRED_FIELD_STALE}:{symbol}:{name}"
+                               f":{'unknown' if field_age is None else round(field_age, 1)}s")
+                missing.append(f"{symbol}:{name}")
+
+    if reasons:
+        return DataQualityVerdict(
+            quality=QUALITY_INVALID, may_trade=False,
+            reasons=tuple(reasons[:40]), missing_fields=tuple(sorted(set(missing))))
+
+    sources = sorted({q.get(f).source for q in
+                      (quotes[s] for s in symbols if quotes.get(s))
+                      for f in required_fields})
+    return DataQualityVerdict(
+        quality=QUALITY_GOOD, may_trade=True,
+        reasons=(f"all required fields available, fresh, and from "
+                 f"{sources or ['<none>']}",),
+        missing_fields=(), origin=",".join(sources) or None)
 
 
 def _origin_of(snapshot: Any) -> Optional[str]:

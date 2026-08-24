@@ -47,6 +47,9 @@ affect live sessions, where the broker supplies chain and ticks together.
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
+
+from bujji.market_perception.quote import (
+    Quote, SOURCE_REST, SOURCE_TICK, from_rest_price, unavailable)
 from typing import Dict, Optional, Sequence
 
 # Payload keys that carry a traded price, in preference order. Options
@@ -92,13 +95,40 @@ def _price_from_payload(payload) -> Optional[float]:
 
 
 class IntradayPriceProvider(ABC):
-    """Answers: what was each of these instruments worth at this moment?"""
+    """Answers: what was each of these instruments worth at this moment?
+
+    TWO CONTRACTS, ONE AUTHORITY.
+
+    `get_quotes()` is the real one. It returns typed quotes that carry the
+    fields the source actually supplied, where each came from, and when --
+    so a decision can say what it was made on.
+
+    `get_prices()` is the LEGACY float projection, retained only while its
+    callers migrate. It is derived FROM `get_quotes()` and is therefore
+    incapable of disagreeing with it; it is not a second source. It discards
+    bid, ask, sizes, volume, open interest, provenance and freshness, which
+    is why nothing new may be built on it.
+    """
 
     @abstractmethod
+    def get_quotes(self, contracts_by_symbol: Dict[str, object],
+                   as_of: str) -> Dict[str, "Quote"]:
+        """`{broker_symbol: Quote}`. A symbol with no usable data is present
+        with an UNAVAILABLE quote rather than absent, so a caller can tell
+        'asked and got nothing' from 'never asked'."""
+
     def get_prices(self, contracts_by_symbol: Dict[str, object],
                    as_of: str) -> Dict[str, Optional[float]]:
-        """`{broker_symbol: price_or_None}` -- keyed by the SAME symbol the
-        caller uses, so the result drops straight into `revalue_all`."""
+        """DEPRECATED one-way adapter over `get_quotes`.
+
+        Kept so unmigrated callers keep working during Phase 1. It is derived,
+        never independent: there is no path by which this can return a price
+        the typed contract does not also hold. Remove it once
+        tests/test_quote_path_is_authoritative.py shows no enabled-runtime
+        caller remains.
+        """
+        return {sym: (q.ltp if q is not None else None)
+                for sym, q in self.get_quotes(contracts_by_symbol, as_of).items()}
 
 
 class HistoricalTickProvider(IntradayPriceProvider):
@@ -110,13 +140,21 @@ class HistoricalTickProvider(IntradayPriceProvider):
         self._resolution = resolution
         self._session_start_suffix = session_start
 
-    def get_prices(self, contracts_by_symbol, as_of):
+    def get_quotes(self, contracts_by_symbol, as_of):
+        """Replayed observations carry a price and nothing else, and say so:
+        source REPLAY, every other field UNAVAILABLE. A replayed bar is not a
+        book, and a decision that needed a spread must not be able to take one
+        from here."""
+        from bujji.market_perception.quote import SOURCE_REPLAY
         day = as_of[:10]
         start = f"{day}{self._session_start_suffix}"
-        prices: Dict[str, Optional[float]] = {}
+        out: Dict[str, Quote] = {}
         for symbol, contract in contracts_by_symbol.items():
-            prices[symbol] = self._last_price_at_or_before(contract, start, as_of)
-        return prices
+            price = self._last_price_at_or_before(contract, start, as_of)
+            q = from_rest_price(symbol, price)
+            out[symbol] = Quote(symbol=symbol, fields=q.fields,
+                                source=SOURCE_REPLAY)
+        return out
 
     def _last_price_at_or_before(self, contract, start: str, as_of: str) -> Optional[float]:
         identity = store_identity_for(contract)
@@ -194,17 +232,25 @@ class WebsocketTickProvider(IntradayPriceProvider):
         self._log = logger or _logging.getLogger("bujji.websocket_tick_provider")
         self._subscribed: set = set()
 
-    def get_prices(self, contracts_by_symbol, as_of):
+    def get_quotes(self, contracts_by_symbol, as_of):
+        """Typed quotes, per symbol, with the source recorded on each.
+
+        MIXED SOURCES STAY VISIBLE. A pass can legitimately price some legs
+        from a live tick and the rest from REST. Previously both arrived as
+        bare floats and the difference vanished; now each quote declares
+        LIVE_TICK or REST_FALLBACK, so a decision made on a mixture can say so.
+        """
         symbols = list(contracts_by_symbol)
         self._ensure_subscribed(symbols)
         self._drive_watchdog(symbols)
 
-        prices: Dict[str, Optional[float]] = {}
+        out: Dict[str, Quote] = {}
         rest_needed = {}
+        now_mono = self._monotonic()
         for symbol, contract in contracts_by_symbol.items():
-            tick = self._fresh_tick(symbol)
-            if tick is not None:
-                prices[symbol] = tick
+            q = self._fresh_quote(symbol, now_mono)
+            if q is not None:
+                out[symbol] = q
             else:
                 rest_needed[symbol] = contract
 
@@ -214,9 +260,73 @@ class WebsocketTickProvider(IntradayPriceProvider):
             # shared host-wide FYERS budget.
             self._log.info(
                 "websocket priced %d/%d legs; falling back to REST for %s",
-                len(prices), len(symbols), sorted(rest_needed))
-            prices.update(self._fallback.get_prices(rest_needed, as_of))
-        return prices
+                len(out), len(symbols), sorted(rest_needed))
+            out.update(self._fallback_quotes(rest_needed, as_of))
+        return out
+
+    def _fallback_quotes(self, needed, as_of):
+        """Typed quotes from the fallback, whichever contract it implements.
+
+        A fallback that predates `get_quotes` still answers in floats, and
+        those are wrapped as REST_FALLBACK quotes carrying LTP alone. The
+        wrapping is what keeps provenance honest: a float from REST becomes a
+        quote that SAYS it came from REST, rather than one that looks like a
+        tick because it arrived through the tick provider.
+        """
+        import time as _t
+        getter = getattr(self._fallback, "get_quotes", None)
+        if getter is not None:
+            try:
+                return dict(getter(needed, as_of) or {})
+            except Exception:  # noqa: BLE001 -- a failed fallback is unknown, never a price
+                return {}
+        try:
+            prices = self._fallback.get_prices(needed, as_of) or {}
+        except Exception:  # noqa: BLE001
+            return {}
+        now_w, now_m = _t.time(), _t.monotonic()
+        return {sym: from_rest_price(sym, price, observed_wall=now_w,
+                                     observed_mono=now_m)
+                for sym, price in prices.items()}
+
+    def _fresh_quote(self, symbol, now_mono):
+        """A typed quote if the feed has one and it is FRESH; else None.
+
+        Freshness is monotonic and per symbol. A quote with no monotonic
+        stamp is not fresh -- unknown age is not youth.
+        """
+        # PREFER THE TYPED QUOTE; fall back to the float interface.
+        #
+        # Not every feed implementation offers `latest_quote` yet -- the
+        # migration is deliberately incremental, and a provider that hard-
+        # required the new method would break every caller holding an older
+        # feed before those callers had anywhere to move to. When only the
+        # float interface exists the quote is SYNTHESISED from it and declared
+        # LIVE_TICK with ltp alone available: honest about carrying no book,
+        # rather than inventing one.
+        getter = getattr(self._feed, "latest_quote", None)
+        if getter is not None:
+            try:
+                q = getter(symbol)
+            except Exception:  # noqa: BLE001 -- unreadable feed is unknown, never a price
+                return None
+            if q is not None:
+                if not q.is_fresh(now_mono, self._max_tick_age_seconds):
+                    return None
+                if not q.get("ltp").is_available or not (q.ltp or 0) > 0:
+                    # Acked-and-silent, or malformed. Evidence, not a price.
+                    return None
+                return q
+
+        price = self._fresh_tick(symbol)
+        if price is None:
+            return None
+        return Quote(
+            symbol=symbol, source=SOURCE_TICK, recv_mono=now_mono,
+            fields={"ltp": __import__(
+                "bujji.market_perception.quote", fromlist=["FieldValue"]
+            ).FieldValue(float(price), "AVAILABLE", SOURCE_TICK,
+                         None, now_mono, "feed.latest")})
 
     # ------------------------------------------------------------------ #
     def _ensure_subscribed(self, symbols) -> None:
@@ -276,12 +386,21 @@ class LiveTickProvider(IntradayPriceProvider):
         self._broker = broker
         self._run_async = run_async
 
-    def get_prices(self, contracts_by_symbol, as_of):
-        prices: Dict[str, Optional[float]] = {}
+    def get_quotes(self, contracts_by_symbol, as_of):
+        """REST reads, each declared REST_FALLBACK with one field.
+
+        Everything except LTP is UNAVAILABLE, because a REST price says
+        nothing about the book. Filling those in would be fabrication.
+        """
+        import time as _t
+        out: Dict[str, Quote] = {}
         for symbol, contract in contracts_by_symbol.items():
             try:
                 price = self._run_async(self._broker.get_ltp(contract))
             except Exception:  # noqa: BLE001 -- a failed quote is unknown, never stale.
                 price = None
-            prices[symbol] = price if (price or 0) > 0 else None
-        return prices
+            price = price if (price or 0) > 0 else None
+            out[symbol] = from_rest_price(symbol, price,
+                                          observed_wall=_t.time(),
+                                          observed_mono=_t.monotonic())
+        return out

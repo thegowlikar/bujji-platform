@@ -20,7 +20,7 @@ import pytest
 
 from bujji.production_runtime.leg_readiness import (
     LEG_INCOMPLETE, LEG_NO_QUOTE, LEG_READY, LEG_SILENT, LEG_STALE, LEG_UNRESOLVED,
-    NOT_READY, READY, UNKNOWN, LegQuote, evaluate_leg_readiness,
+    NOT_READY, READY, UNKNOWN, ReadinessQuote, evaluate_leg_readiness,
 )
 
 MAX_AGE = 90.0
@@ -34,7 +34,7 @@ class Leg:
 
 
 def _good(premium=100.0, bid=99.0, ask=101.0):
-    return LegQuote(premium=premium, bid=bid, ask=ask)
+    return ReadinessQuote(premium=premium, bid=bid, ask=ask)
 
 
 def _eval(legs, ages, quotes):
@@ -81,10 +81,10 @@ def test_a_ticking_leg_with_no_book_row_refuses():
 
 
 @pytest.mark.parametrize("quote,missing", [
-    (LegQuote(premium=100.0, bid=None, ask=101.0), "bid"),
-    (LegQuote(premium=100.0, bid=99.0, ask=None), "ask"),
-    (LegQuote(premium=None, bid=99.0, ask=101.0), "premium"),
-    (LegQuote(premium=100.0, bid=0.0, ask=101.0), "bid"),
+    (ReadinessQuote(premium=100.0, bid=None, ask=101.0), "bid"),
+    (ReadinessQuote(premium=100.0, bid=99.0, ask=None), "ask"),
+    (ReadinessQuote(premium=None, bid=99.0, ask=101.0), "premium"),
+    (ReadinessQuote(premium=100.0, bid=0.0, ask=101.0), "bid"),
 ])
 def test_an_incomplete_book_refuses(quote, missing):
     v = _eval([Leg("A")], {"A": 1.0}, {"A": quote})
@@ -95,7 +95,7 @@ def test_an_incomplete_book_refuses(quote, missing):
 def test_a_crossed_book_refuses():
     """A live feed disagreeing with itself, reported apart from a missing
     field because the cause is different."""
-    v = _eval([Leg("A")], {"A": 1.0}, {"A": LegQuote(premium=100.0, bid=101.0, ask=99.0)})
+    v = _eval([Leg("A")], {"A": 1.0}, {"A": ReadinessQuote(premium=100.0, bid=101.0, ask=99.0)})
     assert v.legs[0].state == LEG_INCOMPLETE
     assert "crossed" in v.legs[0].detail
 
@@ -111,7 +111,7 @@ def test_the_motivating_case_a_wing_with_no_premium():
             Leg("WING_CE", "WING_UPPER"), Leg("WING_PE", "WING_LOWER")]
     ages = {l.symbol: 1.0 for l in legs}
     quotes = {l.symbol: _good() for l in legs}
-    quotes["WING_CE"] = LegQuote(premium=None, bid=None, ask=None)
+    quotes["WING_CE"] = ReadinessQuote(premium=None, bid=None, ask=None)
     v = _eval(legs, ages, quotes)
     assert not v.permits_entry
     bad = [l for l in v.legs if l.state != LEG_READY]

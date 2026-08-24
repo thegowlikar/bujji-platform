@@ -225,7 +225,18 @@ def test_full_simulated_day(tmp_path, chain, spot):
         risk_by_position_group_id={seed_pg: 5000.0}, direction="BULLISH", expected_move_pct=1.2,
     )
     assert cycle_result.filled is True
-    assert root.runtime_state_machine.state == RuntimeState.POSITION_ACTIVE
+    # M4 CONTRACT CHANGE (2026-08-23), not a weakened assertion.
+    #
+    # RuntimeState NO LONGER owns POSITION_ACTIVE. Two machines transitioned
+    # to it from different call sites with no defined relationship, and
+    # neither was journaled, so neither survived a restart. TradingSessionState
+    # is the single owner; the governor journals POSITION_ACTIVE as a durable
+    # SESSION_TRANSITION and every consumer derives from that plus broker
+    # truth. RuntimeState keeps only connectivity and market phase, which are
+    # PROCESS facts that must not be reconstructed after a crash.
+    #
+    # Sole ownership is asserted in tests/test_single_lifecycle_owner.py.
+    assert root.runtime_state_machine.state == RuntimeState.ENTRY_ENABLED
 
     contracts = {
         # Keyed by the symbol the ORDER actually carries -- the chain row's

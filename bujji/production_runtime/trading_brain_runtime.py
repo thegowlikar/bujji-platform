@@ -101,7 +101,15 @@ STAGE_POSITION_OPENED = "POSITION_OPENED"
 # right now?), never a trading decision about whether THIS trade is
 # good. Any other RuntimeState refuses the cycle before touching the
 # Strategy Engine at all.
-_ENTRY_ACCEPTING_STATES = (RuntimeState.ENTRY_ENABLED, RuntimeState.POSITION_ACTIVE, RuntimeState.MANAGING)
+# RETIRED (M4). This was the SECOND entry gate: it accepted entry cycles in
+# ENTRY_ENABLED / POSITION_ACTIVE / MANAGING while
+# `entry_control.can_enter_trade` decided the same question from
+# TradingSessionState. Two gates on one decision, able to disagree, neither
+# durable. Kept as a name only so the retirement is visible in the diff and in
+# blame; nothing reads it, and tests/test_single_lifecycle_owner.py refuses any
+# new reader.
+_ENTRY_ACCEPTING_STATES__RETIRED_M4 = (
+    RuntimeState.ENTRY_ENABLED, RuntimeState.POSITION_ACTIVE, RuntimeState.MANAGING)
 
 
 class RuntimeNotAcceptingEntriesError(Exception):
@@ -229,10 +237,24 @@ class TradingBrainRuntime:
         root = self._root
         machine = root.runtime_state_machine
 
-        if machine.state not in _ENTRY_ACCEPTING_STATES:
+        # M4: THE SECOND ENTRY GATE IS RETIRED.
+        #
+        # This checked RuntimeState while `entry_control.can_enter_trade`
+        # checked TradingSessionState -- two gates on one decision, able to
+        # disagree, neither durable. Entry is now gated once, by the single
+        # lifecycle owner, which derives from the journal and reconciles
+        # against broker truth. UNKNOWN there blocks; this gate could not
+        # express UNKNOWN at all.
+        #
+        # The connectivity check that remains is a PROCESS precondition, not a
+        # lifecycle decision: a runtime that never reached LIVE has no feed,
+        # and an entry attempted then is refused for that reason alone.
+        if machine.state in (RuntimeState.INITIALIZING, RuntimeState.ERROR):
             raise RuntimeNotAcceptingEntriesError(
-                f"runtime is in {machine.state.value!r}, not accepting entry cycles "
-                f"(requires one of {[s.value for s in _ENTRY_ACCEPTING_STATES]})"
+                f"runtime is in {machine.state.value!r} -- the process has no "
+                f"live market connection, so no entry can be constructed. This "
+                f"is a connectivity precondition; session lifecycle is decided "
+                f"by bujji.production_runtime.session_lifecycle."
             )
 
         # -- Strategy Engine (owns StrikeLeg/TradeConstructionAssessment) --
@@ -464,7 +486,7 @@ class TradingBrainRuntime:
         else:
             from bujji.msi_trade_construction.engine import _premium_for
             from bujji.production_runtime.leg_readiness import (
-                LegQuote, evaluate_leg_readiness,
+                ReadinessQuote, evaluate_leg_readiness,
             )
 
             class _LegRef:
@@ -494,7 +516,7 @@ class TradingBrainRuntime:
                 if not symbol:
                     continue
                 premium, _basis = _premium_for(row)
-                quotes[symbol] = LegQuote(premium=premium,
+                quotes[symbol] = ReadinessQuote(premium=premium,
                                           bid=getattr(row, "bid", None),
                                           ask=getattr(row, "ask", None))
 
@@ -624,7 +646,19 @@ class TradingBrainRuntime:
         ))
 
         if all_filled:
-            machine.transition(RuntimeState.POSITION_ACTIVE, reason=f"entry filled for {proposal.assessment_id}")
+            # M4: RuntimeState NO LONGER TRANSITIONS TO POSITION_ACTIVE.
+            #
+            # Two machines owned this state, from different call sites, with no
+            # defined relationship between them -- and neither was journaled,
+            # so neither survived a restart. TradingSessionState is now the
+            # single owner: the governor journals POSITION_ACTIVE as a durable
+            # SESSION_TRANSITION at `_record_entry_filled`, and every consumer
+            # derives from that plus broker truth.
+            #
+            # The runtime machine keeps only what it is genuinely for --
+            # connectivity and market phase. Those are PROCESS facts: after a
+            # crash you really are connecting again, and they must not be
+            # reconstructed from history.
             root.event_bus.publish_nowait(Event(
                 type=EventType.POSITION_OPENED,
                 payload={"stage": STAGE_POSITION_OPENED, "assessment_id": proposal.assessment_id,

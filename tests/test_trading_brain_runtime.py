@@ -157,7 +157,19 @@ def test_market_close_sequence_transitions_to_complete(tmp_path):
 
 
 def test_entry_refused_outside_entry_accepting_states(tmp_path, chain, spot):
-    root, journal = make_root(tmp_path, initial_state=RuntimeState.PREMARKET)
+    """M4: this now tests a CONNECTIVITY precondition, not a lifecycle gate.
+
+    It previously asserted the second entry gate -- RuntimeState's
+    `_ENTRY_ACCEPTING_STATES` -- which decided the same question as
+    `entry_control.can_enter_trade` from a different machine, could disagree
+    with it, and could not express UNKNOWN. That gate is retired.
+
+    What remains, and what this asserts, is narrower and genuinely about the
+    process: a runtime that never reached LIVE has no market connection, so no
+    entry can be constructed. PREMARKET is no longer refused -- it is a market
+    phase, not a lifecycle state -- so the refusing case is INITIALIZING.
+    """
+    root, journal = make_root(tmp_path, initial_state=RuntimeState.INITIALIZING)
     seed = _seed_position_group(journal)
     runtime = TradingBrainRuntime(root)
     with pytest.raises(RuntimeNotAcceptingEntriesError):
@@ -180,7 +192,18 @@ def test_entry_path_healthy_fills_and_transitions_to_position_active(tmp_path, c
     assert result.approved_quantity > 0
     assert len(result.order_results) == len(result.proposal.legs)
     assert all(r.is_filled for r in result.order_results)
-    assert root.runtime_state_machine.state == RuntimeState.POSITION_ACTIVE
+    # M4 CONTRACT CHANGE (2026-08-23), not a weakened assertion.
+    #
+    # RuntimeState NO LONGER owns POSITION_ACTIVE. Two machines transitioned
+    # to it from different call sites with no defined relationship, and
+    # neither was journaled, so neither survived a restart. TradingSessionState
+    # is the single owner; the governor journals POSITION_ACTIVE as a durable
+    # SESSION_TRANSITION and every consumer derives from that plus broker
+    # truth. RuntimeState keeps only connectivity and market phase, which are
+    # PROCESS facts that must not be reconstructed after a crash.
+    #
+    # Sole ownership is asserted in tests/test_single_lifecycle_owner.py.
+    assert root.runtime_state_machine.state == RuntimeState.ENTRY_ENABLED
 
 
 def test_empty_book_first_trade_of_session_now_fills(tmp_path, chain, spot):

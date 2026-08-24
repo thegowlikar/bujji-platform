@@ -27,7 +27,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import datetime
-from typing import Callable, Optional
+from typing import Callable, Optional, Tuple
 
 from bujji.trading_brain.risk_governor.market_regime_adapter import (
     TREND_SIDEWAYS, TREND_TRENDING_DOWN, TREND_TRENDING_UP, TREND_UNKNOWN,
@@ -62,6 +62,11 @@ class StrategySelectionResult:
     reasoning: str
     confidence: str                     # "HIGH" | "NONE" -- deterministic, from data completeness only, never a fabricated probability
     evaluated_at: datetime
+    # Every declared shape with the reason it was or was not available for
+    # this regime. Defaulted so that every existing construction site --
+    # including SessionGovernor rebuilding a locked decision -- stays valid;
+    # an empty tuple therefore means "not evaluated", never "none eligible".
+    candidates: Tuple["StrategyCandidate", ...] = ()
 
 
 # Deterministic mapping table -- the ENTIRE decision surface of this
@@ -153,6 +158,249 @@ DEFINED_RISK_TWIN = {
 }
 
 
+
+
+# ---------------------------------------------------------------------------
+# DECLARATIVE STRATEGY RULES (Priority A, 2026-08-23)
+# ---------------------------------------------------------------------------
+# WHY THIS IS NOT A NEW REGISTRY. Two strategy registries already exist in
+# this repository:
+#   bujji/trading_brain/strategy_selector/registry.py  -- 11 StrategyDefinitions
+#   bujji/msi_strategy_selector/engine.py              -- its own family model
+# A reachability closure from the real trading entrypoint
+# (bujji_options_os_runner.py) proves NEITHER is reachable from the trade
+# DECISION: trading_brain.strategy_selector.registry is not on the import
+# closure at all, and msi_strategy_selector is reached only by observation
+# paths (intelligence_cycle_recorder, live_shadow_validation) that record what
+# a selector WOULD say and never place anything. The one authority deciding
+# what Bujji sells is select_strategy() in THIS module.
+#
+# So the fix for "selection is a conditional table returning a bare string" is
+# NOT a third registry -- that would be the duplicate the architecture
+# forbids. It is to make THIS authority declarative: every family Bujji may
+# sell declares its own eligibility, refusal conditions, required data
+# capabilities, risk shape and downstream obligations here, and the decision
+# is checked against those declarations rather than merely described by them.
+#
+# THE TABLE BELOW DOES NOT DECIDE ANYTHING YET, AND THAT IS DELIBERATE.
+# The branch bodies of select_strategy() are unchanged and still produce the
+# outcome; the rules produce an INDEPENDENT candidate record for the same
+# inputs. tests/test_strategy_rules_match_decision.py asserts the two agree on
+# every reachable regime pair in both risk modes. If a later edit changes one
+# and not the other, that test fails -- which is the entire point. Rewriting
+# the branches to be DRIVEN by the table is a behaviour-preserving refactor
+# that can only be proven safe once the equivalence test exists, so it is a
+# later commit, not this one.
+
+CANDIDATE_ELIGIBLE = "ELIGIBLE"
+CANDIDATE_REJECTED = "REJECTED"
+
+# Reason codes. Every refusal Bujji can make about a shape has exactly one
+# code, so "why was nothing traded today?" is answerable from the record
+# rather than by reading prose.
+REASON_REGIME_UNKNOWN = "REGIME_UNKNOWN"
+REASON_VOL_EXPANSION = "VOL_EXPANSION_VETO"
+REASON_TREND_MISMATCH = "TREND_NOT_ELIGIBLE"
+REASON_VOL_MISMATCH = "VOL_NOT_ELIGIBLE"
+REASON_NAKED_IN_DEFINED_RISK = "NAKED_SHAPE_SUPPRESSED_BY_DEFINED_RISK_MODE"
+REASON_DEFINED_RISK_TWIN_ONLY = "REACHABLE_ONLY_AS_DEFINED_RISK_TWIN"
+REASON_CAPABILITY_MISSING = "REQUIRED_DATA_CAPABILITY_UNPROVEN"
+REASON_ELIGIBLE = "ELIGIBLE"
+
+# Generic data capabilities. Deliberately NOT FYERS field names and NOT
+# thresholds -- no live payload has been measured yet (Gate 1, Monday). They
+# name what a decision NEEDS, so that when Monday proves which of them the
+# feed can actually satisfy, the mapping is a config change and not a rewrite.
+# CAP_LAST_PRICE is required by every shape because a premium seller that
+# cannot price its own legs cannot value, stop or exit them.
+CAP_LAST_PRICE = "QUOTE_LAST_PRICE"
+CAP_TWO_SIDED = "QUOTE_TWO_SIDED_MARKET"
+CAP_OPEN_INTEREST = "QUOTE_OPEN_INTEREST"
+
+
+@dataclass(frozen=True)
+class StrategyRule:
+    """One declaration per shape Bujji may sell. Pure metadata: no branch in
+    this class body, no threshold, no broker call."""
+    family: str
+    shape: str
+    eligible_trends: Tuple[str, ...]
+    eligible_volatilities: Tuple[str, ...]
+    # Conditions refusing the shape regardless of the eligibility above.
+    vetoing_volatilities: Tuple[str, ...]
+    structurally_defined_risk: bool
+    hedged: bool
+    # Required capabilities are ASPIRATIONAL until Gate 1. They are enforced
+    # only when a capability policy is supplied -- see _evaluate_candidates.
+    # Unconfigured means unenforced, never "satisfied": an empty policy does
+    # not assert the feed is capable of anything.
+    required_capabilities: Tuple[str, ...]
+    # Downstream obligations this shape imposes. Declared here so the
+    # obligation is visible at selection time; each is ENFORCED by its own
+    # named owner, recorded so a reader can go and check that it runs.
+    requires_margin_check_by: str
+    requires_lot_size_check_by: str
+    exit_policy_owner: str
+    eod_behaviour: str
+    # Set only on a shape reachable when defined_risk_only substitutes it.
+    twin_of: Optional[str] = None
+
+
+_COMMON_CAPS = (CAP_LAST_PRICE,)
+_MARGIN_OWNER = "bujji.trading_brain.risk_governor.capital_safety_governor"
+_LOT_OWNER = "bujji.instruments.lot_size_for"
+_EXIT_OWNER = "bujji.production_runtime.exit_lifecycle"
+_EOD = "mandatory flatten at the configured market-close cutoff; no overnight exposure"
+
+STRATEGY_RULES: Tuple[StrategyRule, ...] = (
+    StrategyRule(
+        family=FAMILY_SHORT_STRADDLE, shape="short straddle (ATM both legs)",
+        eligible_trends=(TREND_SIDEWAYS,), eligible_volatilities=(VOL_HIGH,),
+        vetoing_volatilities=(VOL_EXPANSION,),
+        structurally_defined_risk=False, hedged=False,
+        required_capabilities=_COMMON_CAPS,
+        requires_margin_check_by=_MARGIN_OWNER, requires_lot_size_check_by=_LOT_OWNER,
+        exit_policy_owner=_EXIT_OWNER, eod_behaviour=_EOD,
+    ),
+    StrategyRule(
+        family=FAMILY_SHORT_STRANGLE, shape="short strangle (delta-targeted both legs)",
+        eligible_trends=(TREND_SIDEWAYS,), eligible_volatilities=(VOL_LOW, VOL_CONTRACTION),
+        vetoing_volatilities=(VOL_EXPANSION,),
+        structurally_defined_risk=False, hedged=False,
+        required_capabilities=_COMMON_CAPS,
+        requires_margin_check_by=_MARGIN_OWNER, requires_lot_size_check_by=_LOT_OWNER,
+        exit_policy_owner=_EXIT_OWNER, eod_behaviour=_EOD,
+    ),
+    StrategyRule(
+        family=FAMILY_BULL_PUT_SPREAD, shape="bull put spread (sell put, buy lower put)",
+        eligible_trends=(TREND_TRENDING_UP,),
+        eligible_volatilities=(VOL_HIGH, VOL_LOW, VOL_CONTRACTION),
+        vetoing_volatilities=(VOL_EXPANSION,),
+        structurally_defined_risk=True, hedged=True,
+        required_capabilities=_COMMON_CAPS,
+        requires_margin_check_by=_MARGIN_OWNER, requires_lot_size_check_by=_LOT_OWNER,
+        exit_policy_owner=_EXIT_OWNER, eod_behaviour=_EOD,
+    ),
+    StrategyRule(
+        family=FAMILY_BEAR_CALL_SPREAD, shape="bear call spread (sell call, buy higher call)",
+        eligible_trends=(TREND_TRENDING_DOWN,),
+        eligible_volatilities=(VOL_HIGH, VOL_LOW, VOL_CONTRACTION),
+        vetoing_volatilities=(VOL_EXPANSION,),
+        structurally_defined_risk=True, hedged=True,
+        required_capabilities=_COMMON_CAPS,
+        requires_margin_check_by=_MARGIN_OWNER, requires_lot_size_check_by=_LOT_OWNER,
+        exit_policy_owner=_EXIT_OWNER, eod_behaviour=_EOD,
+    ),
+    StrategyRule(
+        family="IRON_FLY", shape="iron fly (ATM shorts plus wings)",
+        eligible_trends=(TREND_SIDEWAYS,), eligible_volatilities=(VOL_HIGH,),
+        vetoing_volatilities=(VOL_EXPANSION,),
+        structurally_defined_risk=True, hedged=True,
+        required_capabilities=_COMMON_CAPS,
+        requires_margin_check_by=_MARGIN_OWNER, requires_lot_size_check_by=_LOT_OWNER,
+        exit_policy_owner=_EXIT_OWNER, eod_behaviour=_EOD,
+        twin_of=FAMILY_SHORT_STRADDLE,
+    ),
+    StrategyRule(
+        family="IRON_CONDOR", shape="iron condor (0.20-delta shorts plus wings)",
+        eligible_trends=(TREND_SIDEWAYS,), eligible_volatilities=(VOL_LOW, VOL_CONTRACTION),
+        vetoing_volatilities=(VOL_EXPANSION,),
+        structurally_defined_risk=True, hedged=True,
+        required_capabilities=_COMMON_CAPS,
+        requires_margin_check_by=_MARGIN_OWNER, requires_lot_size_check_by=_LOT_OWNER,
+        exit_policy_owner=_EXIT_OWNER, eod_behaviour=_EOD,
+        twin_of=FAMILY_SHORT_STRANGLE,
+    ),
+)
+
+RULES_BY_FAMILY = {r.family: r for r in STRATEGY_RULES}
+
+
+@dataclass(frozen=True)
+class StrategyCandidate:
+    """Why one shape was or was not available for THIS regime. Produced for
+    every declared rule on every evaluation -- a rejected candidate is
+    evidence, not silence."""
+    family: str
+    status: str          # CANDIDATE_ELIGIBLE | CANDIDATE_REJECTED
+    reason_code: str
+    detail: str
+
+
+def _evaluate_candidates(trend_regime, volatility_regime, defined_risk_only,
+                         available_capabilities=None):
+    """Score every declared rule against one regime pair. Pure: no clock, no
+    IO, and no ordering opinion -- ranking is the caller's job, and today at
+    most one family is eligible by construction.
+
+    `available_capabilities` is None whenever no capability policy is
+    configured, which is the state until Gate 1 measures the live payload.
+    None means the requirement is NOT EVALUATED -- it does not mean satisfied,
+    and nothing here records that the feed is capable. Once a policy exists,
+    passing a set makes a missing capability a refusal."""
+    out = []
+    for rule in STRATEGY_RULES:
+        # 1. An unknown regime refuses everything, before any per-shape opinion.
+        if (trend_regime is None or volatility_regime is None
+                or trend_regime == TREND_UNKNOWN or volatility_regime == VOL_UNKNOWN):
+            out.append(StrategyCandidate(
+                rule.family, CANDIDATE_REJECTED, REASON_REGIME_UNKNOWN,
+                "regime unavailable or unrecognized; an unknown market is not a neutral one"))
+            continue
+        # 2. Per-shape veto, checked BEFORE eligibility -- a veto must not be
+        #    reachable around by an otherwise-eligible shape.
+        if volatility_regime in rule.vetoing_volatilities:
+            out.append(StrategyCandidate(
+                rule.family, CANDIDATE_REJECTED, REASON_VOL_EXPANSION,
+                f"{volatility_regime} vetoes this shape regardless of trend"))
+            continue
+        # 3. Availability under the active risk mode.
+        if defined_risk_only and not rule.structurally_defined_risk:
+            out.append(StrategyCandidate(
+                rule.family, CANDIDATE_REJECTED, REASON_NAKED_IN_DEFINED_RISK,
+                "defined-risk mode is active and this shape has no structural floor"))
+            continue
+        if not defined_risk_only and rule.twin_of is not None:
+            out.append(StrategyCandidate(
+                rule.family, CANDIDATE_REJECTED, REASON_DEFINED_RISK_TWIN_ONLY,
+                f"only reachable as the defined-risk twin of {rule.twin_of}"))
+            continue
+        # 4. Regime eligibility.
+        if trend_regime not in rule.eligible_trends:
+            out.append(StrategyCandidate(
+                rule.family, CANDIDATE_REJECTED, REASON_TREND_MISMATCH,
+                f"declared for {list(rule.eligible_trends)}, not {trend_regime}"))
+            continue
+        if volatility_regime not in rule.eligible_volatilities:
+            out.append(StrategyCandidate(
+                rule.family, CANDIDATE_REJECTED, REASON_VOL_MISMATCH,
+                f"declared for {list(rule.eligible_volatilities)}, not {volatility_regime}"))
+            continue
+        # 5. Capability policy -- unconfigured means unevaluated, not passed.
+        if available_capabilities is not None:
+            missing = [c for c in rule.required_capabilities
+                       if c not in available_capabilities]
+            if missing:
+                out.append(StrategyCandidate(
+                    rule.family, CANDIDATE_REJECTED, REASON_CAPABILITY_MISSING,
+                    f"required data capabilities not proven available: {missing}"))
+                continue
+        out.append(StrategyCandidate(
+            rule.family, CANDIDATE_ELIGIBLE, REASON_ELIGIBLE,
+            f"{rule.shape}: eligible for ({trend_regime}, {volatility_regime})"))
+    return tuple(out)
+
+
+def eligible_families(trend_regime, volatility_regime, *, defined_risk_only=False,
+                      available_capabilities=None):
+    """The families the DECLARATIONS say are available for this regime. The
+    equivalence test compares this against what select_strategy() actually
+    returns; nothing in the runtime decides from it yet."""
+    return tuple(c.family for c in _evaluate_candidates(
+        trend_regime, volatility_regime, defined_risk_only, available_capabilities)
+        if c.status == CANDIDATE_ELIGIBLE)
+
+
 def select_strategy(trend_regime: Optional[str], volatility_regime: Optional[str],
                     clock: Clock, *, defined_risk_only: bool = False) -> StrategySelectionResult:
     """`defined_risk_only` substitutes each naked sideways shape for its
@@ -161,6 +409,7 @@ def select_strategy(trend_regime: Optional[str], volatility_regime: Optional[str
     anything other than a literal `shadow_mode: true` selects defined-risk
     only, so a missing key, a typo or a real-money switch all land safe."""
     now = clock()
+    candidates = _evaluate_candidates(trend_regime, volatility_regime, defined_risk_only)
 
     # 1. NO OPINION -> NO TRADE. Unchanged: an absent or unrecognised regime
     #    is not a neutral market, it is an unknown one.
@@ -170,7 +419,7 @@ def select_strategy(trend_regime: Optional[str], volatility_regime: Optional[str
             selected_strategy=None, trend_regime=trend_regime or "MISSING",
             volatility_regime=volatility_regime or "MISSING",
             reasoning="Market regime unavailable or unrecognized -- fail closed, no trade today.",
-            confidence="NONE", evaluated_at=now,
+            confidence="NONE", evaluated_at=now, candidates=candidates,
         )
 
     # 2. VOLATILITY EXPANSION VETOES EVERYTHING. Checked BEFORE direction:
@@ -183,7 +432,7 @@ def select_strategy(trend_regime: Optional[str], volatility_regime: Optional[str
             reasoning="Volatility expanding -- premium-selling risk/reward is unfavorable while vol "
                       "is still rising; wait for stabilization rather than sell into expansion. "
                       "Applies in every regime, including a trending one.",
-            confidence="NONE", evaluated_at=now,
+            confidence="NONE", evaluated_at=now, candidates=candidates,
         )
 
     # 3. SIDEWAYS -- the most common state, and the one premium selling is for.
@@ -194,7 +443,7 @@ def select_strategy(trend_regime: Optional[str], volatility_regime: Optional[str
                 selected_strategy=None, trend_regime=trend_regime, volatility_regime=volatility_regime,
                 reasoning=f"Range-bound market with unmapped volatility regime "
                           f"({volatility_regime}) -- fail closed rather than guess a shape.",
-                confidence="NONE", evaluated_at=now,
+                confidence="NONE", evaluated_at=now, candidates=candidates,
             )
         shape = "short straddle (ATM both legs)" if family == FAMILY_SHORT_STRADDLE \
             else "short strangle (delta-targeted both legs)"
@@ -212,7 +461,7 @@ def select_strategy(trend_regime: Optional[str], volatility_regime: Optional[str
                           f"substituted for {family}, same short strikes with protective wings, "
                           f"because loss on a naked shape is bounded only by a control that runs "
                           f"every 300s and a 5-minute bar can exceed the stop.",
-                confidence="HIGH", evaluated_at=now,
+                confidence="HIGH", evaluated_at=now, candidates=candidates,
             )
 
         return StrategySelectionResult(
@@ -220,7 +469,7 @@ def select_strategy(trend_regime: Optional[str], volatility_regime: Optional[str
             reasoning=f"Range-bound market ({trend_regime}) with {volatility_regime} volatility -- "
                       f"{shape}: {rationale}. NAKED short legs: loss is not bounded by the shape, "
                       f"only by the exit policy and the risk gates.",
-            confidence="HIGH", evaluated_at=now,
+            confidence="HIGH", evaluated_at=now, candidates=candidates,
         )
 
     # 4. TRENDING -- sell against the trend's own direction, with protection.
@@ -232,7 +481,7 @@ def select_strategy(trend_regime: Optional[str], volatility_regime: Optional[str
                       f"bull put spread: sell the put and buy a lower put, collecting a credit that "
                       f"profits if price rises, stalls, or falls less than the short strike. "
                       f"Defined risk: max loss capped by the long leg.",
-            confidence="HIGH", evaluated_at=now,
+            confidence="HIGH", evaluated_at=now, candidates=candidates,
         )
 
     if trend_regime == TREND_TRENDING_DOWN:
@@ -243,7 +492,7 @@ def select_strategy(trend_regime: Optional[str], volatility_regime: Optional[str
                       f"bear call spread: sell the call and buy a higher call, collecting a credit "
                       f"that profits if price falls, stalls, or rises less than the short strike. "
                       f"Defined risk: max loss capped by the long leg.",
-            confidence="HIGH", evaluated_at=now,
+            confidence="HIGH", evaluated_at=now, candidates=candidates,
         )
 
     # 5. ANYTHING ELSE -> NO TRADE. Unchanged.
@@ -251,5 +500,5 @@ def select_strategy(trend_regime: Optional[str], volatility_regime: Optional[str
         selected_strategy=None, trend_regime=trend_regime, volatility_regime=volatility_regime,
         reasoning=f"Regime combination ({trend_regime}, {volatility_regime}) has no mapped selling "
                   f"strategy in this table -- fail closed rather than guess.",
-        confidence="NONE", evaluated_at=now,
+        confidence="NONE", evaluated_at=now, candidates=candidates,
     )

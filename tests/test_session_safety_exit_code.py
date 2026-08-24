@@ -66,6 +66,14 @@ REAL_UNSAFE_SESSION = {
 }
 
 CLEAN_SESSION = {
+    # M2 INTEGRATION (2026-08-22). "Clean" now includes evidence the session
+    # READ BACK, not evidence it reported about itself. `faithful` below is the
+    # writer's own drop count; `verified` is a reader's verdict after
+    # re-deriving the content hash and checking it against the manifest, and
+    # `replay` is the post-session audit proving the recorded inputs reproduce.
+    # A session that cannot produce these is not unsafe -- it is UNCERTIFIED,
+    # which is a distinct exit code.
+    "prior_tick_journals": {"inspected": True, "unsealed": [], "corrupt": []},
     "canonical_position_id": "POS-clean",
     "entry_filled": True,
     "final_positions_status": "FLAT",
@@ -73,6 +81,21 @@ CLEAN_SESSION = {
     "closure_reason": "SESSION_COMPLETE",
     "canonical_close_outcome": "ACCEPTED",
     "closure_truths_agree": True,
+    # EVIDENCE IS PART OF BEING CLEAN (M2). A session that opened a position
+    # and cannot produce a sealed, faithful tick journal cannot account for the
+    # market it acted on -- so it is no longer "clean" however well it closed.
+    #
+    # This fixture predates journaling and was INCOMPLETE rather than wrong: a
+    # position closed FLAT with full evidence is still safe, which is what the
+    # tests below assert. The test that the same shape WITHOUT a journal is
+    # UNSAFE lives next to the rule, in
+    # test_m2_tick_journal_is_evidence.py::test_an_open_position_with_no_journal_at_all_is_unsafe,
+    # and `test_a_clean_close_without_evidence_is_not_clean` below pins it here
+    # too so this fixture cannot be quietly completed into meaninglessness.
+    "tick_journal": {
+        "verified": {"outcome": "VERIFIED", "state": "FAITHFUL"},
+        "replay": {"reproduced": True},"sealed": True, "faithful": True,
+                     "dropped": 0, "offered": 1200, "written": 1200},
 }
 
 
@@ -96,6 +119,16 @@ class TestTheVerdict:
 
     def test_a_clean_close_is_safe(self):
         assert evaluate_session_safety(CLEAN_SESSION).safe is True
+
+    def test_a_clean_close_without_evidence_is_not_clean(self):
+        """M2. Closing the book well is not the same as being able to explain
+        what you did. Strip the journal from an otherwise perfect session and
+        it must stop being safe -- otherwise completing the fixture above would
+        have quietly disabled the rule for every test in this class."""
+        summary = {k: v for k, v in CLEAN_SESSION.items() if k != "tick_journal"}
+        verdict = evaluate_session_safety(summary)
+        assert verdict.safe is False
+        assert any("tick journal" in r for r in verdict.reasons)
 
     @pytest.mark.parametrize("status", ["OPEN", "UNKNOWN", None])
     def test_only_FLAT_proves_the_book_is_closed(self, status):
@@ -180,7 +213,18 @@ class TestTheExitPathIsWired:
         assert code == mod.EXIT_OK
 
     def test_a_no_trade_session_still_exits_zero(self, monkeypatch, tmp_path):
-        mod, code = self._run_with_summary(monkeypatch, tmp_path, {"entry_filled": False})
+        mod, code = self._run_with_summary(monkeypatch, tmp_path, {
+            "entry_filled": False,
+            # A real no-trade session still inspects prior journals at
+            # startup; only a session whose startup did not complete lacks
+            # this, and that is worth flagging.
+            "prior_tick_journals": {"inspected": True, "unsealed": [], "corrupt": []},
+            # A real session always records this, stating `expected: False`
+            # when the configuration has no feed. An ABSENT key means the
+            # session never said, which is not certifiable.
+            "tick_journal": {"expected": False,
+                             "detail": "no tick feed in this configuration"},
+        })
         assert code == mod.EXIT_OK
 
     def test_the_unsafe_code_is_distinct_from_the_crash_codes(self):
@@ -189,3 +233,90 @@ class TestTheExitPathIsWired:
             mod.EXIT_OK, mod.EXIT_CONFIG_ERROR, mod.EXIT_RUNTIME_ERROR), (
             "an unsafe session is not a crash and must be distinguishable in "
             "the journal from one")
+
+
+class TestPendingEvidenceIsNotSuccess:
+    """M2 INTEGRATION. A session that cannot prove what it saw is not a
+    successful session -- but it is not the same claim as "something is
+    wrong", and an operator must be able to tell them apart from the exit
+    code alone."""
+
+    def test_a_session_that_never_inspected_prior_journals_is_not_certified(
+            self, monkeypatch, tmp_path):
+        mod, code = TestTheExitPathIsWired._run_with_summary(monkeypatch, tmp_path, {"entry_filled": False})
+        assert code == mod.EXIT_PENDING_EVIDENCE
+        assert code != mod.EXIT_OK, "an uncertified session must not report success"
+        assert code != mod.EXIT_UNSAFE_SESSION, (
+            "nothing is known to be wrong -- conflating this with UNSAFE tells "
+            "the operator the wrong thing")
+
+    def test_an_unverified_tick_journal_is_not_certified(self, monkeypatch, tmp_path):
+        mod, code = TestTheExitPathIsWired._run_with_summary(monkeypatch, tmp_path, {
+            "entry_filled": False,
+            "prior_tick_journals": {"inspected": True, "unsealed": [], "corrupt": []},
+            "tick_journal": {"sealed": True, "faithful": True},
+        })
+        assert code == mod.EXIT_PENDING_EVIDENCE, (
+            "`faithful` is the writer's own count; without a reader's verdict "
+            "the session is not certified")
+
+    def test_a_journal_that_fails_verification_is_UNSAFE_not_merely_pending(
+            self, monkeypatch, tmp_path):
+        """The writer's counters and the file on disk disagree. That is not
+        missing evidence -- it is evidence that is wrong."""
+        mod, code = TestTheExitPathIsWired._run_with_summary(monkeypatch, tmp_path, {
+            "entry_filled": False,
+            "prior_tick_journals": {"inspected": True, "unsealed": [], "corrupt": []},
+            "tick_journal": {"sealed": True, "faithful": True,
+                             "verified": {"outcome": "NOT_FAITHFUL",
+                                          "state": "CORRUPT", "detail": "hash mismatch"},
+                             "replay": {"reproduced": True}},
+        })
+        assert code == mod.EXIT_UNSAFE_SESSION
+
+    def test_a_corrupt_prior_journal_is_UNSAFE(self, monkeypatch, tmp_path):
+        mod, code = TestTheExitPathIsWired._run_with_summary(monkeypatch, tmp_path, {
+            "entry_filled": False,
+            "prior_tick_journals": {"inspected": True, "unsealed": [],
+                                    "corrupt": [{"path": "/x/y.jsonl"}]},
+            "tick_journal": {"sealed": True, "faithful": True,
+                             "verified": {"outcome": "VERIFIED", "state": "FAITHFUL"},
+                             "replay": {"reproduced": True}},
+        })
+        assert code == mod.EXIT_UNSAFE_SESSION
+
+    def test_a_replay_mismatch_is_UNSAFE(self, monkeypatch, tmp_path):
+        mod, code = TestTheExitPathIsWired._run_with_summary(monkeypatch, tmp_path, {
+            "entry_filled": False,
+            "prior_tick_journals": {"inspected": True, "unsealed": [], "corrupt": []},
+            "tick_journal": {"sealed": True, "faithful": True,
+                             "verified": {"outcome": "VERIFIED", "state": "FAITHFUL"},
+                             "replay": {"reproduced": False, "detail": "streams differ"}},
+        })
+        assert code == mod.EXIT_UNSAFE_SESSION
+
+    def test_the_pending_code_is_distinct_from_every_other_outcome(self):
+        mod = _runner_module()
+        assert mod.EXIT_PENDING_EVIDENCE not in (
+            mod.EXIT_OK, mod.EXIT_CONFIG_ERROR, mod.EXIT_RUNTIME_ERROR,
+            mod.EXIT_UNSAFE_SESSION)
+
+
+
+def test_a_declared_absent_journal_still_certifies():
+    """A replay or store-backed session records no ticks and none were
+    expected. Declaring that is certifiable; staying silent is not."""
+    from bujji.production_runtime.session_safety_verdict import evaluate_session_safety
+
+    declared = evaluate_session_safety({
+        "entry_filled": False,
+        "prior_tick_journals": {"inspected": True, "unsealed": [], "corrupt": []},
+        "tick_journal": {"expected": False, "detail": "no feed"},
+    })
+    silent = evaluate_session_safety({
+        "entry_filled": False,
+        "prior_tick_journals": {"inspected": True, "unsealed": [], "corrupt": []},
+    })
+    assert declared.certified
+    assert not silent.certified, (
+        "silence and a declared absence must not mean the same thing")

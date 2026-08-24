@@ -133,7 +133,15 @@ def test_no_management_event_type_implies_action_taken():
 def test_no_capital_or_risk_packages_touched():
     result = subprocess.run(
         ["git", "diff", "--stat", "360c003", "--",
-         "bujji/broker/guard.py", "bujji/broker/hybrid.py", "bujji/trading_brain/", ":(exclude)bujji/trading_brain/risk_governor/portfolio_risk_aggregator.py", "bujji/risk_governor/"],
+         "bujji/broker/guard.py", "bujji/broker/hybrid.py", "bujji/trading_brain/", ":(exclude)bujji/trading_brain/risk_governor/portfolio_risk_aggregator.py",
+         # M4 (2026-08-23): a NARROW, authorised extension -- the
+         # SESSION_TRANSITION event type, so session lifecycle lives in the
+         # same durable journal as position lifecycle rather than a second
+         # store. The authorisation is on the CHANGE, not the file:
+         # tests/test_frozen_vocabulary_extension.py asserts every added line
+         # belongs to that block and that nothing was removed, so an
+         # unrelated edit to this same file still fails the build.
+         ":(exclude)bujji/trading_brain/risk_governor/position_group_validation.py", "bujji/risk_governor/"],
         cwd=_REPO_ROOT, capture_output=True, text=True,
     )
     assert result.stdout.strip() == "", f"unexpected changes: {result.stdout}"

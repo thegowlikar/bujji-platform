@@ -259,7 +259,7 @@ def test_run_missing_bhavcopy_path_exits_1(tmp_path):
     assert exit_code == EXIT_CONFIG_ERROR
 
 
-def test_run_valid_session_exits_0(tmp_path):
+def test_a_session_that_held_risk_while_blind_exits_unsafe(tmp_path):
     config_path = tmp_path / "options_os_shadow.yaml"
     import yaml
     config = base_config(tmp_path, trend="SIDEWAYS", volatility="LOW_VOL")
@@ -268,7 +268,12 @@ def test_run_valid_session_exits_0(tmp_path):
     # without this the test contends with a live trading session and
     # fails on the guard rather than on the behaviour under test.
     exit_code = run(["--config", str(config_path), "--as-of-date", DAY, "--lock-path", str(tmp_path / "test.lock")])
-    assert exit_code == EXIT_OK
+    # EXIT_UNSAFE_SESSION (3), not EXIT_OK. The session opened a position and
+    # ran every management cycle blind, because no tick source is configured
+    # here. Certifying that would report a blind session and a sighted one as
+    # the same outcome.
+    assert exit_code == 3, (
+        "a session that held open risk with no price visibility was certified")
 
 
 def test_runner_failure_does_not_create_a_second_entry_attempt(tmp_path, monkeypatch):

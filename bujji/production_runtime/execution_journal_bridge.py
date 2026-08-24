@@ -412,18 +412,30 @@ def contain_partial_entry(
 # --------------------------------------------------------------------------- #
 
 def all_group_ids(journal_db_path: str) -> List[str]:
-    """Every position_group_id the journal has ever seen. Read-only; the
-    journal class itself deliberately exposes only per-group reads, and
-    startup recovery is the one caller that must enumerate."""
+    """Every POSITION group id the journal has ever seen.
+
+    Read-only; the journal class itself deliberately exposes only per-group
+    reads, and startup recovery is the one caller that must enumerate.
+
+    SESSION-SCOPED IDENTITIES ARE EXCLUDED BY EXPLICIT CONTRACT (M4). This is
+    the enumeration BOTH startup recovery and EOD closure walk, and a session
+    row reaching either would be reconstructed as a position group that does
+    not exist -- recovery would look for legs it never had, and closure would
+    try to flatten it. The exclusion is stated here rather than left to the
+    fold's incidental treatment of an unknown event type.
+    """
+    from bujji.production_runtime.position_group_scope import is_session_scoped
+
     try:
         conn = sqlite3.connect(journal_db_path)
         try:
-            return [r[0] for r in conn.execute(
+            rows = [r[0] for r in conn.execute(
                 "SELECT DISTINCT position_group_id FROM position_group_events")]
         finally:
             conn.close()
     except sqlite3.Error:
         return []
+    return [g for g in rows if not is_session_scoped(g)]
 
 
 def unresolved_group_ids(journal: PositionGroupJournal, journal_db_path: str) -> List[str]:

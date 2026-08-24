@@ -44,6 +44,24 @@ from datetime import date
 from typing import Dict, Iterable, List, Optional, Sequence, Tuple
 
 # Roles, in the order they are resolved from the real expiry list.
+# CAPTURE WIDE, SELECT NARROW -- and both numbers live here, in the authority.
+#
+# The tiers below are CAPTURE bands: how much of the book to subscribe and keep
+# evidence for. They are drawn on OPEN INTEREST and are deliberately wider than
+# trading alone justifies (FRONT +/-1500 covers 98.6% volume / 91.8% OI).
+#
+# The SELECTION band is a different question: how far from ATM a strategy may
+# actually CHOOSE a strike. Deriving it from the capture tier would silently
+# widen trading exposure every time the capture band widened for evidence
+# reasons -- two unrelated concerns moving together. It is stated separately,
+# and the invariant SELECTION <= CAPTURE(FRONT) is ENFORCED at build time
+# rather than assumed.
+#
+# 1000 points is today's effective width (`strike_count: 20` on a 50-point
+# grid), carried over deliberately so introducing this concept changes no
+# trading exposure. Changing the number IS a trading decision.
+DEFAULT_SELECTION_BAND_POINTS = 1000
+
 ROLE_FRONT = "FRONT"
 ROLE_SECOND = "SECOND"
 ROLE_MONTHLY = "MONTHLY"
@@ -95,6 +113,9 @@ class CaptureUniverse:
     collapsed_roles: Tuple[str, ...]         # roles that shared an expiry
     expiries_available: int
     expiries_excluded: int
+    # How far from ATM a strategy may SELECT, in index points. Distinct from
+    # the capture tiers, and never wider than the FRONT tier.
+    selection_band_points: int = DEFAULT_SELECTION_BAND_POINTS
     notes: Tuple[str, ...] = field(default_factory=tuple)
 
     @property
@@ -113,6 +134,40 @@ class CaptureUniverse:
             out[f"role:{role}"] = sum(1 for i in self.instruments if i.role == role)
         out["total"] = len(self.instruments)
         return out
+
+
+def selection_strikes_each_side(universe: "CaptureUniverse", step: int = 50) -> int:
+    """How wide a chain request must be to cover this universe's SELECTION band.
+
+    THIS is the number a chain request uses -- never the capture width. The
+    chain is what strike selection ranges over, so it must cover exactly what a
+    strategy is permitted to choose from and no more. Requesting the capture
+    width instead would offer the selector contracts nobody authorised it to
+    trade, and would widen exposure every time the capture band widened for
+    evidence reasons.
+    """
+    return max(1, int(round(universe.selection_band_points / max(1, step))))
+
+
+def strikes_each_side(universe: "CaptureUniverse", role: str = ROLE_FRONT,
+                      step: int = 50) -> int:
+    """How many strikes each side of ATM this universe CAPTURES for `role`.
+
+    Derived from the real instruments the universe selected, not from the tier
+    band in points, so a tier that could not be fully populated reports what
+    actually exists. Used for the capture/selection containment invariant --
+    not for sizing a chain request; see `selection_strikes_each_side`.
+    """
+    strikes = sorted({
+        i.strike for i in universe.instruments
+        if i.role == role and i.strike is not None
+    })
+    if not strikes:
+        raise UniverseConstructionError(
+            f"universe has no instruments for role {role!r} -- cannot report a "
+            f"capture width for contracts it never selected")
+    atm = float(universe.atm_strike)
+    return max(1, int(round(max(abs(x - atm) for x in strikes) / max(1, step))))
 
 
 def atm_strike(spot: float, step: int = 50) -> int:
@@ -279,6 +334,7 @@ def build_capture_universe(
     futures_symbol: Optional[str] = None,
     include_vix: bool = True,
     spot_symbol: str = NIFTY_SPOT_SYMBOL,
+    selection_band_points: int = DEFAULT_SELECTION_BAND_POINTS,
 ) -> CaptureUniverse:
     """The exact instrument set to capture today.
 
@@ -334,8 +390,22 @@ def build_capture_universe(
             "refusing to capture a chain with no strikes."
         )
 
+    # SELECTION <= CAPTURE(FRONT), ENFORCED. A selection band wider than what
+    # was captured would let a strategy choose a strike that was never
+    # subscribed -- so its freshness could never be proven and stage 1 would
+    # refuse the session every cycle, for a reason nobody could see. Refusing
+    # HERE names the cause instead.
+    front_band = (tiers or DEFAULT_TIERS).get(ROLE_FRONT)
+    if front_band is not None and selection_band_points > front_band:
+        raise UniverseConstructionError(
+            f"selection band {selection_band_points} points exceeds the FRONT "
+            f"capture tier {front_band} -- a strategy could select a contract "
+            f"that was never subscribed, and its freshness could never be proven"
+        )
+
     return CaptureUniverse(
         as_of_date=as_of.isoformat(), spot=spot, atm_strike=atm,
+        selection_band_points=selection_band_points,
         instruments=tuple(instruments), roles_resolved={r: e.isoformat() for r, e in roles.items()},
         collapsed_roles=plan.collapsed_roles, expiries_available=len(all_expiries),
         expiries_excluded=len(all_expiries) - len(plan.band_by_expiry),

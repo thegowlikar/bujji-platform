@@ -29,6 +29,8 @@ sys.path.insert(0, str(REPO_ROOT))
 
 from bujji.core.enums import OrderStatus
 from bujji.core.models import OrderResult
+from bujji.broker_truth import STATE_CONFIRMED_FLAT, STATE_UNKNOWN
+from bujji.production_runtime.position_reality_registry import PositionGroupReality
 from bujji.production_runtime.trade_lifecycle_executor import (
     STATUS_EXECUTED, STATUS_PARTIAL, STATUS_REJECTED, STATUS_UNKNOWN,
     TradeLifecycleExecutor)
@@ -79,7 +81,7 @@ class TestClosureRequiresBrokerTruth:
     condition that makes this dangerous."""
 
     @staticmethod
-    def _executor(place_result, monkeypatch):
+    def _executor(place_result, monkeypatch, truth_state=STATE_CONFIRMED_FLAT):
         import asyncio
 
         closed = []
@@ -93,11 +95,20 @@ class TestClosureRequiresBrokerTruth:
                 return object()
 
             async def get_group_reality(self, pg):
-                # The broker reports NO open leg -- the exact reading that
-                # would tempt a premature closure while an exit is unsettled.
-                class _R:
-                    is_open = False
-                return _R()
+                # No open leg for this group -- the exact reading that would
+                # tempt a premature closure while an exit is unsettled.
+                #
+                # This is a REAL PositionGroupReality, not a stub with a
+                # hardcoded bool. The old stub set `is_open = False` and could
+                # not express the difference between "the broker answered and
+                # holds none of these legs" and "the broker could not be read"
+                # -- which is the whole distinction under test.
+                return PositionGroupReality(
+                    position_group_id=pg, strategy_family="STRANGLE",
+                    symbols=("NSE:CE",), initial_risk=1000.0,
+                    entry_timestamp="2026-08-21T09:20:00", truth_state=truth_state,
+                    open_symbols=(),
+                )
 
         class _Lifecycle:
             def mark_closed(self, pg):
@@ -130,6 +141,25 @@ class TestClosureRequiresBrokerTruth:
             "PG-1", "REDUCE", 75, lambda: __import__("datetime").datetime(2026, 8, 21)))
         assert result.status == STATUS_EXECUTED
         assert closed == ["PG-1"]
+
+    def test_a_filled_exit_does_not_mark_closed_when_the_account_is_unreadable(
+            self, monkeypatch):
+        """M3. The exit itself reported FILLED, so the guard above lets the
+        closure decision through -- and then the broker could not be read.
+
+        Before M3 this closed the group: `is_open` was False for an
+        unreadable account exactly as it was for a confirmed-flat one. A
+        filled exit report is the ORDER's state, not the account's; the
+        position stays under management until something confirms it gone.
+        """
+        exe, closed, asyncio = self._executor(
+            OrderResult("X", OrderStatus.FILLED, filled_quantity=75, average_price=1.0),
+            monkeypatch, truth_state=STATE_UNKNOWN)
+        result = asyncio.run(exe._execute_reduce(
+            "PG-1", "REDUCE", 75, lambda: __import__("datetime").datetime(2026, 8, 21)))
+        assert result.status == STATUS_EXECUTED
+        assert closed == [], (
+            "a group was marked CLOSED on an account that could not be read")
 
 
 class TestTelemetryMatchesReality:

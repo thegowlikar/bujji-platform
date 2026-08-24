@@ -195,7 +195,13 @@ class PositionLifecycleRuntime:
 
         position_snapshot = build_position_risk_snapshot(
             position_group_id, strategy_type, entry_value, current_value, total_quantity,
-            "OPEN" if reality.is_open else "CLOSED", reality.initial_risk, reality.initial_risk,
+            # M3: `may_still_be_open`, not `is_open`. These differ only when
+            # the broker could not be read -- and there, labelling a position
+            # CLOSED feeds recommend_risk_action() a snapshot of a position
+            # that needs no management, on exactly the pass where management
+            # is most likely to be needed.
+            "OPEN" if reality.may_still_be_open else "CLOSED",
+            reality.initial_risk, reality.initial_risk,
             None, clock,
         )
         recommendation = recommend_risk_action(

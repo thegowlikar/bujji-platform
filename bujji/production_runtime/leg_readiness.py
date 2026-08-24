@@ -25,6 +25,13 @@ systematically the least-validated part of it, and it is also submitted LAST
 (engine.py:389-392 emits SHORT, SHORT, WING, WING). This gate is where that
 asymmetry is caught.
 
+ONE NAME, ONE OWNER. These types were first written as `LegQuote` and
+`LegState`, which collided with `execution_reality.models.LegQuote` and
+`risk_governor.position_group_fold.LegState` -- both older, both reachable,
+both meaning something different. Two definitions of a name is how two parts of
+a system come to disagree about what is true, so the newcomers moved. See the
+ownership table in ARCHITECTURE.md.
+
 PURE. No I/O, no clock, no broker, no feed. Handed the legs, their tick ages
 and their quotes, it returns a verdict -- so every branch is testable without a
 market.
@@ -48,7 +55,7 @@ LEG_READY = "READY"
 
 
 @dataclass(frozen=True)
-class LegQuote:
+class ReadinessQuote:
     """What the book says about one contract. Every field Optional on purpose:
     absent is a real, distinct answer from zero."""
 
@@ -83,7 +90,7 @@ def _positive(value) -> bool:
 
 
 @dataclass(frozen=True)
-class LegState:
+class ReadinessLegState:
     symbol: Optional[str]
     role: str
     state: str
@@ -101,7 +108,7 @@ class LegState:
 class LegReadiness:
     state: str
     permits_entry: bool
-    legs: Tuple[LegState, ...]
+    legs: Tuple[ReadinessLegState, ...]
     reasons: Tuple[str, ...]
 
     def as_dict(self) -> Dict[str, object]:
@@ -120,7 +127,7 @@ def evaluate_leg_readiness(
     legs: Sequence,
     *,
     tick_ages: Dict[str, Optional[float]],
-    quotes: Dict[str, LegQuote],
+    quotes: Dict[str, ReadinessQuote],
     max_age_seconds: float,
 ) -> LegReadiness:
     """Grade the exact legs about to be ordered. Never raises.
@@ -128,7 +135,7 @@ def evaluate_leg_readiness(
     `legs`      -- objects carrying `symbol` and `role`. A None symbol means
                    the leg could not be resolved to a broker contract.
     `tick_ages` -- symbol -> seconds since its newest tick, None for never.
-    `quotes`    -- symbol -> LegQuote. A missing entry is NO_QUOTE, not empty.
+    `quotes`    -- symbol -> ReadinessQuote. A missing entry is NO_QUOTE, not empty.
     """
     if not legs:
         return LegReadiness(
@@ -143,43 +150,43 @@ def evaluate_leg_readiness(
         role = str(getattr(leg, "role", "") or "UNKNOWN_ROLE")
 
         if not symbol:
-            states.append(LegState(None, role, LEG_UNRESOLVED, None,
+            states.append(ReadinessLegState(None, role, LEG_UNRESOLVED, None,
                                    "no broker symbol -- cannot be priced or ordered"))
             continue
 
         age = tick_ages.get(symbol)
         if age is None:
-            states.append(LegState(symbol, role, LEG_SILENT, None,
+            states.append(ReadinessLegState(symbol, role, LEG_SILENT, None,
                                    "subscribed and never heard from -- silence is not a price"))
             continue
         try:
             age_f = float(age)
         except (TypeError, ValueError):
-            states.append(LegState(symbol, role, LEG_SILENT, None,
+            states.append(ReadinessLegState(symbol, role, LEG_SILENT, None,
                                    "tick age unreadable, which is not evidence of freshness"))
             continue
         if age_f > float(max_age_seconds):
-            states.append(LegState(symbol, role, LEG_STALE, age_f,
+            states.append(ReadinessLegState(symbol, role, LEG_STALE, age_f,
                                    f"newest tick is {age_f:.0f}s old, limit {max_age_seconds:.0f}s"))
             continue
 
         quote = quotes.get(symbol)
         if quote is None:
-            states.append(LegState(symbol, role, LEG_NO_QUOTE, age_f,
+            states.append(ReadinessLegState(symbol, role, LEG_NO_QUOTE, age_f,
                                    "ticking, but the book carries no row for it"))
             continue
         missing = quote.missing_fields()
         if missing:
-            states.append(LegState(symbol, role, LEG_INCOMPLETE, age_f,
+            states.append(ReadinessLegState(symbol, role, LEG_INCOMPLETE, age_f,
                                    f"missing {', '.join(missing)} -- an order needs a two-sided "
                                    f"book, not only a last-traded price"))
             continue
         if quote.crossed():
-            states.append(LegState(symbol, role, LEG_INCOMPLETE, age_f,
+            states.append(ReadinessLegState(symbol, role, LEG_INCOMPLETE, age_f,
                                    f"crossed book: ask {quote.ask} below bid {quote.bid}"))
             continue
 
-        states.append(LegState(symbol, role, LEG_READY, age_f, "fresh and complete"))
+        states.append(ReadinessLegState(symbol, role, LEG_READY, age_f, "fresh and complete"))
 
     failed = [s for s in states if s.state != LEG_READY]
     for state in failed:

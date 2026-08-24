@@ -37,6 +37,10 @@ from bujji.production_runtime.trade_lifecycle_executor import (
 CLK = lambda: dt.datetime(2026, 8, 21, 14, 0)
 
 
+from bujji.broker_truth import STATE_CONFIRMED_FLAT, STATE_CONFIRMED_OPEN
+from bujji.production_runtime.position_reality_registry import PositionGroupReality
+
+
 def _pos(symbol, qty):
     return {"symbol": symbol, "qty": qty, "avg_price": 120.0, "side": "SELL"}
 
@@ -53,11 +57,18 @@ class _Registry:
         return object()
 
     async def get_group_reality(self, pg):
-        outer = self
-
-        class _R:
-            is_open = outer._open_after
-        return _R()
+        # A REAL PositionGroupReality. `_open_after` says what the broker
+        # reports AFTER the exit; the broker is always assumed to have
+        # ANSWERED here, which is what makes the closure tests meaningful --
+        # an unreadable account is covered in test_exit_broker_truth.
+        held = ("NSE:CE",) if self._open_after else ()
+        return PositionGroupReality(
+            position_group_id=pg, strategy_family="STRANGLE",
+            symbols=("NSE:CE",), initial_risk=1000.0,
+            entry_timestamp="2026-08-21T09:20:00",
+            truth_state=STATE_CONFIRMED_OPEN if held else STATE_CONFIRMED_FLAT,
+            open_symbols=held,
+        )
 
 
 class _Lifecycle:

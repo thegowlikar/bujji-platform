@@ -1,3 +1,13 @@
+> **DEPRECATED — superseded by `ARCHITECTURE.md` at the repository root.**
+>
+> This file described the VWAP Premium Straddle Seller generation and declared
+> itself authoritative. It is retained for historical reference and is no
+> longer maintained. Two architecture documents each claiming authority is the
+> condition the root file exists to end.
+>
+> For the current safety contract, ownership of truth, state machine and
+> acceptance criteria, read `ARCHITECTURE.md`.
+
 # BUJJI — Architecture Reference (VWAP Premium Straddle Seller)
 
 This is the authoritative, current-strategy module reference. Several older

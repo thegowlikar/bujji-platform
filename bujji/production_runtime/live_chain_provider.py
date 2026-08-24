@@ -83,12 +83,31 @@ class LiveChainProvider(MarketDataProvider):
     DEFAULT_REFRESH_AFTER_SECONDS = 30.0
     DEFAULT_MAX_AGE_SECONDS = 120.0
 
-    def __init__(self, broker, underlying: str = "NIFTY", strike_count: int = 20,
+    def __init__(self, broker, underlying: str = "NIFTY", *,
+                 universe_source,
                  logger=None, refresh_after_seconds: float | None = None,
                  max_age_seconds: float | None = None, clock=None, expiry_resolver=None) -> None:
+        """`universe_source` is REQUIRED and has NO DEFAULT.
+
+        It is a callable returning the session's `CaptureUniverse`, or None if
+        one has not been built yet. Every dimension of the chain request --
+        how many strikes, which expiry, which contracts are admissible --
+        derives from it.
+
+        WHY NO COMPATIBILITY DEFAULT. `strike_count: int = 20` used to sit
+        here, and that constant WAS the eligible selection band: it decided,
+        independently of anything that was subscribed, which contracts the
+        strategy could range over. A default would let a caller silently keep
+        that behaviour, which is the arrangement this milestone exists to end.
+        A caller that cannot supply a universe must fail, not fall back.
+        """
         self._broker = broker
         self._underlying = underlying
-        self._strike_count = strike_count
+        if universe_source is None:
+            raise ValueError(
+                "LiveChainProvider requires a universe_source -- the canonical "
+                "universe decides the chain request, and there is no default")
+        self._universe_source = universe_source
         self._refresh_after = float(
             self.DEFAULT_REFRESH_AFTER_SECONDS if refresh_after_seconds is None
             else refresh_after_seconds)
@@ -206,11 +225,54 @@ class LiveChainProvider(MarketDataProvider):
 
         self._chain, self._spot, self._fetched_at = chain, spot, self._clock()
 
+    def _resolve_universe(self):
+        """The canonical universe, or a refusal. Never a fallback.
+
+        Resolved at FETCH time rather than construction time because the
+        universe is centred on spot, which is not known when this provider is
+        built. The alternative -- deriving spot from the chain, and the chain
+        from the universe -- is circular; spot comes from the broker's own spot
+        endpoint instead.
+        """
+        try:
+            universe = self._universe_source()
+        except Exception as exc:  # noqa: BLE001 -- a source that raises has not produced one
+            raise MarketDataUnavailableError(
+                f"the canonical universe could not be resolved "
+                f"({type(exc).__name__}: {exc}) -- refusing to request a chain "
+                f"whose width and contents nothing authoritative defines") from exc
+        if universe is None:
+            raise MarketDataUnavailableError(
+                "no canonical universe has been built -- refusing to request a "
+                "chain. Its width, its expiry and which contracts are admissible "
+                "all derive from the universe; without one the request would be "
+                "a guess.")
+        return universe
+
     def _fetch(self, as_of_date: str):
         """One raw call -> (chain, spot). Raises rather than returning partial."""
+        from bujji.capture_universe.builder import selection_strikes_each_side
+
+        universe = self._resolve_universe()
+        try:
+            # THE SELECTION BAND, NOT THE CAPTURE WIDTH. The chain is what
+            # strike selection ranges over, so it must cover exactly what a
+            # strategy is permitted to choose from. Sizing it to the capture
+            # tier instead would offer the selector contracts nobody authorised
+            # it to trade, and would widen exposure every time the capture band
+            # widened for evidence reasons.
+            strike_count = selection_strikes_each_side(universe)
+        except Exception as exc:  # noqa: BLE001
+            raise MarketDataUnavailableError(
+                f"the universe cannot say how wide its selection band is "
+                f"({type(exc).__name__}: {exc}) -- refusing to guess a width") from exc
+        self._logger.info(
+            "CHAIN REQUEST -- %d strikes each side, derived from the universe's "
+            "SELECTION band (%d points, atm %s). Not a configured constant.",
+            strike_count, universe.selection_band_points, universe.atm_strike)
         try:
             raw = asyncio.run(
-                self._broker.get_option_chain_raw(self._underlying, strike_count=self._strike_count))
+                self._broker.get_option_chain_raw(self._underlying, strike_count=strike_count))
         except Exception as exc:  # noqa: BLE001 -- surface as a data failure, not a raw traceback.
             raise MarketDataUnavailableError(
                 f"live option chain request failed for {self._underlying!r}: {exc}") from exc
@@ -219,7 +281,7 @@ class LiveChainProvider(MarketDataProvider):
                 f"live option chain returned no data for {self._underlying!r} -- refusing to "
                 "trade on an absent book."
             )
-        chain, spot = self._build(raw, as_of_date)
+        chain, spot = self._build(raw, as_of_date, admissible=set(universe.symbols))
         if not chain:
             raise MarketDataUnavailableError(
                 f"live option chain produced zero usable rows for {self._underlying!r}"
@@ -230,7 +292,7 @@ class LiveChainProvider(MarketDataProvider):
             )
         return tuple(chain), spot
 
-    def _build(self, raw: dict, as_of_date: str):
+    def _build(self, raw: dict, as_of_date: str, admissible=None):
         from bujji.options_observation import taxonomy as opt_taxonomy
         from bujji.options_observation.engine import build_option_observation
 
@@ -265,6 +327,7 @@ class LiveChainProvider(MarketDataProvider):
         chain = []
         dropped_no_symbol = []
         dropped_unknown_symbol = []
+        dropped_not_in_universe = []
         for row in rows:
             option_type = row.get("option_type")
             strike = row.get("strike_price")
@@ -307,6 +370,18 @@ class LiveChainProvider(MarketDataProvider):
                     dropped_unknown_symbol.append(row_symbol)
                     continue
                 row_expiry = resolved
+            # THE UNIVERSE DECIDES WHAT IS SELECTABLE. A contract the universe
+            # never chose was never subscribed, so its freshness can never be
+            # proven -- offering it to strike selection would create a leg that
+            # stage 1 must then refuse, every cycle, for a reason no one could
+            # see. Dropped and COUNTED, never silently.
+            #
+            # This is also what makes `band` a subset of `universe` BY
+            # CONSTRUCTION rather than by a later check: the band is derived
+            # from this chain, and this chain contains only universe contracts.
+            if admissible is not None and row_symbol not in admissible:
+                dropped_not_in_universe.append(row_symbol)
+                continue
             chain.append(build_option_observation(
                 underlying=self._underlying,
                 instrument_symbol=row_symbol,
@@ -328,6 +403,18 @@ class LiveChainProvider(MarketDataProvider):
                 symbol_provenance=opt_taxonomy.SYMBOL_PROVENANCE_BROKER_AUTHORITATIVE,
                 bid=_positive(row.get("bid")), ask=_positive(row.get("ask")),
             ))
+        if dropped_not_in_universe:
+            # LOUD. A broker offering contracts the universe did not select
+            # means the two disagree about what exists -- a stale universe, a
+            # different ATM, or a different expiry. The book is still usable
+            # (the survivors are all universe contracts), but the disagreement
+            # is a fact an operator must be able to read afterwards.
+            self._logger.critical(
+                "option chain: dropped %d row(s) the canonical universe does not "
+                "contain -- %s%s. The broker and the universe disagree about "
+                "which contracts exist; the survivors are universe contracts only.",
+                len(dropped_not_in_universe), sorted(dropped_not_in_universe)[:10],
+                " (+more)" if len(dropped_not_in_universe) > 10 else "")
         if dropped_no_symbol:
             # Loud, and specific about WHICH strikes: a caller that later
             # cannot resolve one of these needs to know the row existed and

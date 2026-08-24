@@ -42,6 +42,7 @@ from bujji.trading_brain.risk_governor.position_lifecycle_intelligence import (
 )
 from bujji.production_runtime.position_lifecycle_runtime import LifecycleEvaluationResult, PositionLifecycleRuntime
 from bujji.production_runtime.position_reality_registry import PositionRealityRegistry
+from bujji.production_runtime import exit_lifecycle as _exit_lifecycle
 from bujji.production_runtime.trade_lifecycle_executor import (
     ACTION_MANDATORY_EXIT, LifecycleExecutionResult, TradeLifecycleExecutor,
 )
@@ -84,6 +85,15 @@ class TradingSessionGovernor:
         # see OptionsOSRunner._startup, which fails closed.
         self._defined_risk_only = defined_risk_only
         self._state_tracker = SessionTradingStateTracker(publish_fn=self._publish_state_change)
+        # M4: the tracker is now a CACHE. The durable authority is the
+        # SESSION_TRANSITION stream in the position group journal, and state
+        # is derived from it plus broker truth. These are injected rather than
+        # constructed so a session that has no journal still runs -- it simply
+        # cannot certify itself, which the safety verdict reports.
+        self._lifecycle_journal = None
+        self._lifecycle_session_id = None
+        self._lifecycle_clock = None
+        self._lifecycle_logger = None
         self._strategy_lock = StrategyLock()
         self._position_group_id: Optional[str] = None
 
@@ -96,16 +106,77 @@ class TradingSessionGovernor:
         return self._strategy_lock
 
     def begin_market_analysis(self) -> None:
-        self._state_tracker.transition(TradingSessionState.ANALYSING_MARKET, reason="session_start")
+        self._transition(TradingSessionState.ANALYSING_MARKET, "session_start")
 
-    def select_and_lock_strategy(self, trend_regime: Optional[str], volatility_regime: Optional[str]) -> StrategySelectionResult:
+
+    def bind_lifecycle_journal(self, journal, session_id, clock, logger=None) -> None:
+        """Give the governor the durable authority for its own transitions.
+
+        Called once by the runner at startup. Until it is called, transitions
+        still move the in-memory cache -- so an unbound governor behaves as it
+        always did -- but nothing is journaled and the session cannot be
+        reconstructed after a restart. `_transition` records that fact rather
+        than failing silently.
+        """
+        self._lifecycle_journal = journal
+        self._lifecycle_session_id = session_id
+        self._lifecycle_clock = clock
+        self._lifecycle_logger = logger
+
+    def _transition(self, target, reason: str, evidence_ref: str = "") -> None:
+        """THE single transition path. Journal first, then move the cache.
+
+        JOURNAL FIRST, DELIBERATELY. If the append fails the cache does not
+        move, so the in-memory state can never claim something the durable
+        record does not. The opposite order would leave a process believing a
+        transition that a restart could not see.
+        """
+        prior = self._state_tracker.state
+        if target == prior:
+            return
+        journal = self._lifecycle_journal
+        if journal is not None:
+            from bujji.production_runtime.session_lifecycle import record_transition
+
+            record_transition(
+                journal, self._lifecycle_session_id, prior, target,
+                cause=reason, evidence_ref=evidence_ref or reason,
+                clock=self._lifecycle_clock, logger=self._lifecycle_logger)
+        else:
+            self._unjournaled_transitions = getattr(
+                self, "_unjournaled_transitions", 0) + 1
+        self._state_tracker.transition(target, reason=reason)
+
+    def lifecycle_unjournaled_count(self) -> int:
+        """Transitions that moved the cache without reaching the journal.
+        Non-zero means this session cannot be reconstructed."""
+        return getattr(self, "_unjournaled_transitions", 0)
+
+    def select_and_lock_strategy(self, trend_regime: Optional[str], volatility_regime: Optional[str],
+                                 *, analytical_snapshot_ref: Optional[str] = None) -> StrategySelectionResult:
         """Component 2 + 3: select (deterministic lookup, existing
         regime vocabulary only) then lock (one-time, immutable)."""
         result = select_strategy(trend_regime, volatility_regime, self._clock,
                                  defined_risk_only=self._defined_risk_only)
         self._publish("STRATEGY_SELECTION_EVALUATED", {
             "trend_regime": result.trend_regime, "volatility_regime": result.volatility_regime,
+            # Identity of the market assessment these regime labels came from.
+            # None whenever the regime was supplied by a provider that derives
+            # from no thesis (a human override, a replay) -- recorded as None
+            # rather than omitted, so "no analytical evidence" is stated
+            # rather than looking like a field nobody wrote.
+            "analytical_snapshot_ref": analytical_snapshot_ref,
             "selected_strategy": result.selected_strategy, "reasoning": result.reasoning, "confidence": result.confidence,
+            # EVERY shape considered, with the reason it was or was not
+            # available -- not just the winner. Without this the journal can
+            # say what Bujji traded but never why it declined the alternatives,
+            # which is the half of the record an operator actually needs on a
+            # no-trade day.
+            "candidates": [
+                {"family": c.family, "status": c.status,
+                 "reason_code": c.reason_code, "detail": c.detail}
+                for c in result.candidates
+            ],
         })
         # ALREADY LOCKED IS THE RETRY CASE, NOT AN ERROR.
         #
@@ -172,7 +243,7 @@ class TradingSessionGovernor:
                 reasoning=result.reasoning, confidence=result.confidence,
             )
             self._strategy_lock.lock(decision)
-            self._state_tracker.transition(TradingSessionState.STRATEGY_LOCKED, reason=f"locked:{result.selected_strategy}")
+            self._transition(TradingSessionState.STRATEGY_LOCKED, f"locked:{result.selected_strategy}")
         return result
 
     def mark_position_deployed(self, reason: str) -> None:
@@ -197,7 +268,7 @@ class TradingSessionGovernor:
         declining one entry costs a missed trade, while stacking a second
         position on a live naked leg is unbounded.
         """
-        self._state_tracker.transition(TradingSessionState.POSITION_ACTIVE, reason=reason)
+        self._transition(TradingSessionState.POSITION_ACTIVE, reason)
 
     def attempt_entry(self, **entry_kwargs) -> Tuple[Optional[TradingBrainCycleResult], EntryControlDecision]:
         """Component 4. `strategy_family` in entry_kwargs, if any, is
@@ -213,7 +284,7 @@ class TradingSessionGovernor:
         cycle_result = self._trading_brain_runtime.process_entry_cycle(**entry_kwargs)
         if cycle_result.filled:
             self._position_group_id = cycle_result.proposal.assessment_id
-            self._state_tracker.transition(TradingSessionState.POSITION_ACTIVE, reason="entry_filled")
+            self._transition(TradingSessionState.POSITION_ACTIVE, "entry_filled")
         return cycle_result, decision
 
     async def evaluate_and_enforce_exit(
@@ -241,7 +312,7 @@ class TradingSessionGovernor:
         if self._position_group_id is None:
             raise RuntimeError("evaluate_and_enforce_exit() called before any position was entered")
         if self._state_tracker.state == TradingSessionState.POSITION_ACTIVE:
-            self._state_tracker.transition(TradingSessionState.MANAGING, reason="lifecycle_evaluation")
+            self._transition(TradingSessionState.MANAGING, "lifecycle_evaluation")
 
         evaluation = await self._lifecycle_runtime.evaluate_group(
             self._position_group_id, valuation, strategy_type, capital_status, portfolio_status,
@@ -295,6 +366,12 @@ class TradingSessionGovernor:
                     forced_evaluation, self._clock,
                     reduce_quantity=full_quantity, reference_prices=reference_prices,
                     quantity_by_symbol=quantity_by_symbol,
+                    # WHY this exit happened, carried into the journal. A
+                    # forced exit IS the emergency brake; anything else is the
+                    # strategy's own decision. The distinction is recorded
+                    # rather than inferred later from timestamps.
+                    cause=(_exit_lifecycle.CAUSE_EMERGENCY if force_exit_reason
+                           else _exit_lifecycle.CAUSE_STRATEGY),
                 )
                 # EXITED ONLY ON A CONFIRMED EXIT. This transitioned on the
                 # mere RETURN of execute(), whether the orders filled, were
@@ -304,8 +381,8 @@ class TradingSessionGovernor:
                 from bujji.production_runtime.trade_lifecycle_executor import STATUS_EXECUTED
 
                 if getattr(forced_execution, "status", None) == STATUS_EXECUTED:
-                    self._state_tracker.transition(
-                        TradingSessionState.EXITED, reason=f"exit_confirmed:{_trigger}")
+                    self._transition(
+                        TradingSessionState.EXITED, f"exit_confirmed:{_trigger}")
                 else:
                     # Deliberately left in MANAGING: the position is still
                     # live as far as anything can prove, and end_session()'s
@@ -340,7 +417,7 @@ class TradingSessionGovernor:
             TradingSessionState.POSITION_ACTIVE, TradingSessionState.MANAGING,
         )
         reason = "session_end_with_unresolved_position" if unresolved else "session_end"
-        self._state_tracker.transition(TradingSessionState.SESSION_COMPLETE, reason=reason)
+        self._transition(TradingSessionState.SESSION_COMPLETE, reason)
 
     def _publish(self, stage: str, extra: dict) -> None:
         if self._event_bus is None:

@@ -15,6 +15,7 @@ from typing import Optional
 from ..core.clock import now_ist
 from ..core.enums import Direction, OptionType, OrderStatus, Side
 from ..core.models import Candle, OptionContract, OrderRequest, OrderResult
+from ..options_observation import taxonomy as opt_taxonomy
 from .base import Broker
 from .errors import AuthenticationError
 from .simulation.charges import ChargesCalculator, ChargesConfig
@@ -124,9 +125,19 @@ class PaperBroker(Broker):
         # resulting evidence describes a book that could never have existed.
         enforce_margin: bool = False,
         event_bus: Optional[object] = None,
+        # The expiry this simulator is standing in for, as an ISO date.
+        #
+        # OPTIONAL AND UNSET BY DEFAULT, because a simulator genuinely does
+        # not know which expiry is listed -- that answer is in the instrument
+        # master, a network download a simulator must not make. When it is
+        # unset, resolve_atm_contract says so in the identity it returns
+        # rather than inventing a date. Supply it to simulate a specific
+        # expiry; nothing here will ever guess one.
+        simulated_expiry: Optional[str] = None,
     ) -> None:
         self._rng = random.Random(seed)
         self._spot = base_spot
+        self._simulated_expiry = simulated_expiry
         self._orders: dict[str, OrderResult] = {}
         self._positions: dict[str, dict] = {}
         self._premium: dict[str, float] = {}
@@ -453,12 +464,55 @@ class PaperBroker(Broker):
     async def resolve_atm_contract(
         self, underlying, spot, direction, strike_interval, lot_size
     ) -> OptionContract:
+        """A SIMULATED contract identity. Deliberately not a venue symbol.
+
+        WHAT THIS USED TO DO, AND WHY IT WAS WRONG (fixed 2026-08-22).
+
+            symbol = f"{underlying}{strike}{opt.value}"      # "NIFTY24500CE"
+            return OptionContract(..., "WEEKLY", lot_size)
+
+        Two separate defects, one shape:
+
+        1. NO EXPIRY. A strike alone is not a contract. Every ledger this
+           broker owns -- positions, premium, realized PnL, blocked margin,
+           quotes, depth, volatility -- keys on the symbol string alone, and
+           the position record carries no expiry field. Two contracts
+           differing only in expiry therefore MERGE: a short near leg and a
+           long far leg at the same strike net to zero and this broker
+           reports NO POSITION AT ALL, with the realized PnL of the closing
+           trade attributed to the wrong contract (sign flip included).
+           Not reachable today -- the chain is filtered to a single expiry
+           before any strategy sees it -- but it is a trap left armed.
+
+        2. VENUE-SHAPED, AND NOT A VENUE SYMBOL. A real FYERS symbol is
+           "NSE:NIFTY26AUG24500CE" (monthly) or "NSE:NIFTY2690124500CE"
+           (weekly). "NIFTY24500CE" has no exchange prefix and no expiry, so
+           it can never equal one -- while looking enough like one that a
+           reader, a quote-book lookup, or a reconciliation compares them and
+           silently matches nothing. Measured live on 2026-08-20, a built
+           string returned margin=None where the real symbol returned
+           98,915.87.
+
+        WHAT IT DOES NOW. It returns the ABSENT sentinel this codebase
+        already owns -- `UNRESOLVED|NIFTY|2026-08-27|24500|CE`. Pipe-
+        delimited, because no exchange vocabulary in use here contains a
+        "|", so it can never be confused with or matched against a tradable
+        identity. It carries the expiry, so two expiries cannot collide.
+        And `option_symbol_resolver` already refuses ABSENT provenance
+        permanently, so if one of these ever reached a real order path it
+        would be refused loudly instead of failing silently -- which is the
+        actual repair.
+
+        This broker is a SIMULATOR. It cannot know which contracts are
+        listed, and it does not pretend to.
+        """
         self._check_auth()
         strike = self.atm_strike(spot, strike_interval)
         opt = self.option_type_for(direction)
-        symbol = f"{underlying}{strike}{opt.value}"
+        expiry = self._simulated_expiry or opt_taxonomy.UNRESOLVED_EXPIRY
+        symbol = opt_taxonomy.unresolved_symbol(underlying, expiry, strike, opt.value)
         self._premium.setdefault(symbol, 120.0)
-        return OptionContract(symbol, underlying, strike, opt, "WEEKLY", lot_size)
+        return OptionContract(symbol, underlying, strike, opt, expiry, lot_size)
 
     async def get_ltp(self, contract: OptionContract) -> float:
         self._check_auth()

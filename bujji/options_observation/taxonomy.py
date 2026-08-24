@@ -76,6 +76,27 @@ SYMBOL_PROVENANCE_SOURCE_AUTHORITATIVE = "SOURCE_AUTHORITATIVE"
 
 # The builder manufactured the string from expiry/strike/type. Recorded
 # so it can be refused; never produced by any path in this codebase.
+#
+# That last clause was FALSE from the day it was written.
+# PaperBroker.resolve_atm_contract manufactured f"{underlying}{strike}{type}"
+# -- a venue-SHAPED string with no expiry and no exchange prefix -- and
+# ReplayBroker did the same. Both now emit the ABSENT sentinel below instead
+# (2026-08-22).
+#
+# IT IS STILL FALSE, AND SAYING SO IS THE POINT.
+# `trading_brain.risk_governor.msi_entry_bridge._leg_to_core_contract` builds
+# f"{underlying}{leg.expiry}{int(leg.strike)}{leg.option_type}" -- which is
+# "NIFTY2026-08-2524500CE", the exact string option_symbol_resolver's own
+# module docstring records as returning verified=False, total_margin=None on
+# 2026-08-20. That module is REACHABLE and declared in ARCHITECTURE.md.
+# Nothing calls it on the production entry path today, and two ratchet tests
+# assert the runner never does -- but the builder is still there.
+#
+# And note the deeper gap this comment cannot close on its own: nothing in
+# this codebase TAGS a manufactured string as SYNTHETIC. A provenance that is
+# never assigned cannot refuse anything. The refusal works today only because
+# chain rows carry real provenance and manufactured strings never enter that
+# path at all.
 SYMBOL_PROVENANCE_SYNTHETIC = "SYNTHETIC"
 
 # No symbol was available. The identity field still carries the
@@ -99,6 +120,17 @@ ALL_SYMBOL_PROVENANCES = (
 # written after this comment.
 UNRESOLVED_SYMBOL_PREFIX = "UNRESOLVED|"
 
+# The expiry counterpart. A simulator asked to "resolve the ATM contract"
+# genuinely does not know which expiry is listed -- that answer lives in the
+# instrument master, which is a network download this codebase deliberately
+# does not make from a simulator. Stamping a plausible date would be
+# fabrication; stamping "WEEKLY" (what PaperBroker did until 2026-08-22)
+# asserts a contract class the simulator never established either.
+#
+# Hyphen-delimited, NOT pipe-delimited, so it occupies exactly one field of
+# an unresolved_symbol() identity rather than splitting into two.
+UNRESOLVED_EXPIRY = "UNRESOLVED-EXPIRY"
+
 
 def unresolved_symbol(underlying: str, expiry: str, strike, option_type: str) -> str:
     """The deterministic non-tradable identity for a row whose source
@@ -109,6 +141,16 @@ def unresolved_symbol(underlying: str, expiry: str, strike, option_type: str) ->
     keep working for rows that simply have no symbol.
     """
     return f"{UNRESOLVED_SYMBOL_PREFIX}{underlying}|{expiry}|{strike}|{option_type}"
+
+
+def is_unresolved_symbol(symbol: str) -> bool:
+    """True for an identity produced by `unresolved_symbol()`.
+
+    Exists so the sentinel can be CHECKED rather than merely produced. A
+    sentinel with no predicate is a convention, and a convention is what the
+    next reader is free to not know about.
+    """
+    return bool(symbol) and str(symbol).startswith(UNRESOLVED_SYMBOL_PREFIX)
 
 # ---------------------------------------------------------------------------
 # OptionsObservationField -- the closed set of raw option fields this

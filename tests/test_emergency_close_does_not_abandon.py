@@ -101,8 +101,14 @@ def _make_runner(mod, *, close_outcome):
     runner._config = {"position_management": {"max_consecutive_blind_cycles": 3},
                       "capital_snapshot": {"daily_loss_limit": 25000.0}}
     runner._reconcile_broker_positions = lambda _label: None
-    # No tick prices -> blind cycle -> the blind brake fires, exactly as live.
-    runner._current_leg_prices = lambda _as_of: ({}, False)
+    # No usable prices -> the price path is INVALID -> the blind brake fires,
+    # exactly as live. Stubbing the typed method rather than the deprecated
+    # float adapter: the adapter is derived from this, so stubbing the adapter
+    # would no longer be reached.
+    import bujji_options_os_runner as _R
+    runner._current_leg_quotes = lambda _as_of: _R.LegPriceView(
+        valid=False, reason=_R.PRICE_REASON_QUALITY_REFUSED,
+        detail="no live quote for any leg")
 
     calls = {"n": 0}
 

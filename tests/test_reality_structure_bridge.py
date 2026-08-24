@@ -156,14 +156,15 @@ def test_structure_as_of_provenance_names_the_bridge():
         assert "reality_structure_bridge" in market.provenance
 
 
-def test_structure_as_of_real_2020_03_23_produces_a_coherent_assessment():
+def test_structure_as_of_real_2020_03_23_produces_a_coherent_assessment(require_populated_sqlite):
     """Real-data validation against the VPS's actual Historical Reality
     corpus, mirroring this project's standing discipline. Skips
     gracefully if the real store isn't present (e.g. CI without the
     production data directory)."""
     real_db = _REPO_ROOT / "data" / "historical_reality" / "normalized" / "historical_observations.db"
-    if not real_db.exists():
-        return
+    require_populated_sqlite(real_db, "historical_observations",
+                             "real-data validation against the Historical "
+                             "Reality corpus")
     store = HistoricalObservationStore(str(real_db))
     price, market = structure_as_of(
         "NSE:NIFTY50-INDEX", "2020-03-23T15:25:00+05:30", historical_store=store,
@@ -174,7 +175,7 @@ def test_structure_as_of_real_2020_03_23_produces_a_coherent_assessment():
     assert price.confidence in ("HIGH", "MODERATE", "LOW")
 
 
-def test_structure_as_of_real_2018_10_26_produces_a_coherent_assessment():
+def test_structure_as_of_real_2018_10_26_produces_a_coherent_assessment(require_populated_sqlite):
     """Second real-data validation date, per this phase's own
     instruction -- a different market character (a choppy, two-way
     breakdown-then-partial-recovery session, the October 2018
@@ -182,8 +183,9 @@ def test_structure_as_of_real_2018_10_26_produces_a_coherent_assessment():
     confirm lookback_bars=75 doesn't only look sane on one regime.
     Skips gracefully if the real store isn't present."""
     real_db = _REPO_ROOT / "data" / "historical_reality" / "normalized" / "historical_observations.db"
-    if not real_db.exists():
-        return
+    require_populated_sqlite(real_db, "historical_observations",
+                             "real-data validation against the Historical "
+                             "Reality corpus")
     store = HistoricalObservationStore(str(real_db))
 
     price_open, market_open = structure_as_of(

@@ -117,17 +117,30 @@ class TestChainSourceSelection:
 
 
 class TestBlindCyclesAreLoud:
-    """A blind cycle revalues against entry prices. It must be impossible
-    to mistake for a real observation."""
+    """A blind cycle produces NO prices at all, and says why.
 
-    def test_blind_cycle_warns_and_is_counted(self, tmp_path, caplog):
+    THIS CLASS PREVIOUSLY ASSERTED THE DEFECT. It read:
+
+        assert prices == {"X": 100.0}   # honest fallback, entry prices
+
+    That fallback was not honest. Those entry prices flowed into
+    `revalue_all()`, became `leg.current_price`, and were handed to the
+    session governor as `reference_prices` for a forced exit -- so an exit
+    could be priced at entry, realising ~zero P&L however far the market had
+    moved, with every stop and target comparing the position against itself.
+    Removed in 21742eb; these tests now assert the replacement.
+    """
+
+    def test_blind_cycle_yields_no_prices_and_a_typed_reason(self, tmp_path, caplog):
         r = _runner(tmp_path, "B-1")
         r._entry_prices = {"X": 100.0}
         r._contracts_by_symbol = {}          # no contracts -> provider path cannot price
         with caplog.at_level(logging.WARNING):
-            prices, from_ticks = r._current_leg_prices("2026-05-25T10:00:00+05:30")
-        assert from_ticks is False
-        assert prices == {"X": 100.0}        # honest fallback, entry prices
+            view = r._current_leg_quotes("2026-05-25T10:00:00+05:30")
+        assert view.valid is False
+        assert view.priced_from_ticks is False
+        assert view.prices == {}, "entry prices reappeared as market prices"
+        assert view.reason, "the refusal carries no typed reason"
 
     def test_blind_cycles_do_not_bank_a_valuation(self, tmp_path):
         """THE critical property: a blind cycle's 0.0 unrealized P&L means
@@ -185,10 +198,19 @@ class TestManagementLoopIsBounded:
 
     def test_loop_is_capped_by_max_cycles(self, tmp_path):
         """The cap, not the wall-clock, is the final authority on
-        termination -- a mis-set clock must never spin forever."""
+        termination -- a mis-set clock must never spin forever.
+
+        THE BROKER MUST REPORT THE POSITION AS OPEN. Setting `_entry_prices`
+        alone is not a position: the loop's real terminator is
+        `_broker_reports_flat()`, and a broker holding nothing proves flat on
+        the first pass and ends monitoring legitimately. Without this stub the
+        test measured that termination rule rather than the cap, and asserted
+        the cap was broken when it was not.
+        """
         r = _runner(tmp_path, "L-2", mgmt={"cycle_interval_seconds": 0, "max_cycles": 3,
                                             "monitor_until": "23:59:59"})
         r._entry_prices = {"X": 100.0}
+        r._broker_reports_flat = lambda: (False, "test: broker still holds the legs")
         calls = []
         r._run_one_management_pass = lambda label: calls.append(label)
         r._position_management()
@@ -196,15 +218,22 @@ class TestManagementLoopIsBounded:
         assert r._governor_result_summary["management_cycles"] == 3
 
     def test_loop_stops_early_when_the_position_closes(self, tmp_path):
+        """The broker proving flat ends monitoring; local state does not."""
         r = _runner(tmp_path, "L-3", mgmt={"cycle_interval_seconds": 0, "max_cycles": 50,
                                             "monitor_until": "23:59:59"})
         r._entry_prices = {"X": 100.0}
+        held = {"open": True}
+        r._broker_reports_flat = lambda: (
+            (False, "test: still open") if held["open"] else (True, "test: flat"))
         calls = []
 
         def close_after_two(label):
             calls.append(label)
             if len(calls) == 2:
-                r._entry_prices = {}         # position closed by the exit path
+                # The BROKER now proves flat -- the only thing that may end
+                # monitoring. Clearing local state alone must not, and the
+                # loop's own comment says so.
+                held["open"] = False
         r._run_one_management_pass = close_after_two
         r._position_management()
         assert len(calls) == 2
