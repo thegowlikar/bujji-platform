@@ -1,0 +1,281 @@
+<title>Gate 1 Measurement Runbook</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Barlow+Semi+Condensed:wght@500;600;700&family=Source+Sans+3:ital,wght@0,400;0,600;1,400&family=JetBrains+Mono:wght@400;600&display=swap">
+<style>
+  :root{
+    --ground:#eef1f4; --surface:#ffffff; --surface-2:#f7f9fb;
+    --ink:#16212c; --muted:#5c6b7a; --line:#d4dbe2;
+    --accent:#1d5c8f; --accent-soft:#e4edf5;
+    --stop:#a32b2b; --stop-soft:#f7e8e8;
+    --go:#2d6a4f; --go-soft:#e6f0ea;
+    --amber:#8a5a12; --amber-soft:#faf0dd;
+    --rail:#c3cdd7;
+    --mono:"JetBrains Mono",ui-monospace,SFMono-Regular,Menlo,monospace;
+    --disp:"Barlow Semi Condensed",system-ui,sans-serif;
+    --body:"Source Sans 3",system-ui,-apple-system,sans-serif;
+  }
+  @media (prefers-color-scheme:dark){
+    :root:not([data-theme="light"]){
+      --ground:#11171d; --surface:#1a222a; --surface-2:#151d24;
+      --ink:#e3ebf2; --muted:#94a3b1; --line:#2c3742;
+      --accent:#6fb3e0; --accent-soft:#1b2c3a;
+      --stop:#e08b8b; --stop-soft:#33201f;
+      --go:#7fc0a0; --go-soft:#1a2b23;
+      --amber:#d9ad63; --amber-soft:#302719;
+      --rail:#39454f;
+    }
+  }
+  :root[data-theme="dark"]{
+    --ground:#11171d; --surface:#1a222a; --surface-2:#151d24;
+    --ink:#e3ebf2; --muted:#94a3b1; --line:#2c3742;
+    --accent:#6fb3e0; --accent-soft:#1b2c3a;
+    --stop:#e08b8b; --stop-soft:#33201f;
+    --go:#7fc0a0; --go-soft:#1a2b23;
+    --amber:#d9ad63; --amber-soft:#302719;
+    --rail:#39454f;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--ground);color:var(--ink);font-family:var(--body);
+       font-size:16px;line-height:1.55;-webkit-font-smoothing:antialiased}
+  .wrap{max-width:930px;margin:0 auto;padding:40px 22px 72px}
+  header{border-bottom:2px solid var(--ink);padding-bottom:18px}
+  .eyebrow{font-family:var(--disp);font-weight:600;font-size:13px;letter-spacing:.13em;
+           text-transform:uppercase;color:var(--accent);margin:0 0 6px}
+  h1{font-family:var(--disp);font-weight:700;font-size:clamp(34px,6vw,52px);line-height:1.02;
+     margin:0 0 10px;text-wrap:balance;letter-spacing:-.01em}
+  .sub{margin:0;color:var(--muted);font-size:17px;max-width:64ch}
+  h2{font-family:var(--disp);font-weight:700;font-size:26px;margin:44px 0 4px;text-wrap:balance}
+  .note{color:var(--muted);font-size:15px;margin:0 0 18px;max-width:70ch}
+  .rev{background:var(--amber-soft);border:1px solid var(--line);border-left:4px solid var(--amber);
+       border-radius:5px;padding:16px 18px;margin:24px 0 0}
+  .rev h3{font-family:var(--disp);font-size:19px;margin:0 0 8px;color:var(--amber)}
+  .rev ul,.prepared ul{margin:0;padding-left:19px}
+  .rev li,.prepared li{margin:4px 0}
+  .prepared{background:var(--go-soft);border:1px solid var(--line);border-left:4px solid var(--go);
+            border-radius:5px;padding:16px 18px;margin:16px 0 0}
+  .prepared h3{font-family:var(--disp);font-size:19px;margin:0 0 8px;color:var(--go)}
+  .steps{margin:22px 0 0;padding:0;list-style:none;position:relative}
+  .steps::before{content:"";position:absolute;left:78px;top:10px;bottom:10px;width:2px;background:var(--rail)}
+  .step{position:relative;display:grid;grid-template-columns:78px 1fr;gap:0 24px;margin-bottom:26px}
+  .clock{font-family:var(--mono);font-weight:600;font-size:14px;color:var(--accent);
+         text-align:right;padding-top:15px;position:relative;z-index:1}
+  .clock small{display:block;font-weight:400;color:var(--muted);font-size:11.5px;letter-spacing:.04em}
+  .step::after{content:"";position:absolute;left:73px;top:20px;width:12px;height:12px;border-radius:50%;
+               background:var(--surface);border:2.5px solid var(--accent);z-index:2}
+  .step.stop::after{border-color:var(--stop)}
+  .card{background:var(--surface);border:1px solid var(--line);border-radius:6px;padding:16px 18px}
+  .card h3{font-family:var(--disp);font-size:20px;font-weight:600;margin:0 0 6px}
+  .who{display:inline-block;font-family:var(--disp);font-size:11.5px;font-weight:600;letter-spacing:.1em;
+       text-transform:uppercase;padding:2px 8px;border-radius:3px;background:var(--accent-soft);
+       color:var(--accent);margin-bottom:9px}
+  .who.you{background:var(--stop-soft);color:var(--stop)}
+  .card p{margin:0 0 10px}.card p:last-child{margin-bottom:0}
+  pre{background:var(--surface-2);border:1px solid var(--line);border-radius:4px;padding:11px 13px;
+      overflow-x:auto;margin:10px 0;font-family:var(--mono);font-size:13px;line-height:1.5}
+  code{font-family:var(--mono);font-size:.9em;background:var(--surface-2);padding:1px 4px;
+       border-radius:3px;border:1px solid var(--line)}
+  pre code{background:none;border:none;padding:0}
+  .good,.warn{padding:9px 13px;margin:10px 0 0;font-size:14.5px;border-radius:0 4px 4px 0}
+  .good{border-left:3px solid var(--go);background:var(--go-soft)}
+  .warn{border-left:3px solid var(--stop);background:var(--stop-soft)}
+  .good b,.warn b{font-family:var(--disp);letter-spacing:.04em;text-transform:uppercase;
+                  font-size:12px;display:block;margin-bottom:2px}
+  .good b{color:var(--go)} .warn b{color:var(--stop)}
+  .fail{background:var(--surface);border:1px solid var(--stop);border-top:4px solid var(--stop);
+        border-radius:5px;padding:20px 22px;margin:14px 0}
+  .fail h3{font-family:var(--disp);font-size:21px;margin:0 0 4px;color:var(--stop)}
+  .fail ol{margin:12px 0 0;padding-left:20px}.fail li{margin:6px 0}
+  .split{display:grid;grid-template-columns:1fr 1fr;gap:16px;margin:16px 0}
+  .pane{background:var(--surface);border:1px solid var(--line);border-radius:6px;padding:16px 18px}
+  .pane.is{border-top:4px solid var(--go)} .pane.isnt{border-top:4px solid var(--stop)}
+  .pane h4{font-family:var(--disp);font-size:17px;margin:0 0 8px;letter-spacing:.02em}
+  .pane.is h4{color:var(--go)} .pane.isnt h4{color:var(--stop)}
+  .pane ul{margin:0;padding-left:18px;font-size:14.5px}.pane li{margin:5px 0}
+  table{width:100%;border-collapse:collapse;margin:14px 0;font-size:14.5px}
+  th,td{text-align:left;padding:8px 10px;border-bottom:1px solid var(--line);vertical-align:top}
+  th{font-family:var(--disp);font-size:12.5px;letter-spacing:.08em;text-transform:uppercase;
+     color:var(--muted);font-weight:600}
+  td.n{font-family:var(--mono);font-variant-numeric:tabular-nums;white-space:nowrap}
+  .tablewrap{overflow-x:auto}
+  footer{margin-top:52px;padding-top:18px;border-top:1px solid var(--line);color:var(--muted);font-size:14px}
+  @media (max-width:700px){.split{grid-template-columns:1fr}}
+  @media (max-width:640px){
+    .steps::before{left:7px}.step{grid-template-columns:1fr;gap:0}.step::after{left:2px;top:6px}
+    .clock{text-align:left;padding:0 0 6px 26px}.clock small{display:inline;margin-left:8px}
+  }
+</style>
+
+<div class="wrap">
+<header>
+  <p class="eyebrow">Revision 4 &middot; Tuesday 25 August 2026 &middot; NSE session</p>
+  <h1>Gate 1 Measurement Runbook</h1>
+  <p class="sub">A no-trade, full-universe market-data measurement. One question: can the FYERS websocket and this harness receive and durably preserve full-mode raw callbacks across Bujji&rsquo;s authoritative universe?</p>
+</header>
+
+<div class="rev">
+  <h3>What changed in revision 3 &mdash; capture correctness</h3>
+  <ul>
+    <li><b>The corpus now stores an immutable snapshot.</b> Records were queued as a reference to the SDK's own dictionary and serialised later on the writer thread &mdash; so what reached the file was not provably what arrived. The record is frozen to a string inside the callback, before the SDK can reuse the object. A test mutates the dict immediately after the callback returns and proves the stored value is the arrived value.</li>
+    <li><b>Dual clocks.</b> Wall clock for correlating with logs and exchange timestamps; <em>monotonic</em> for every duration. A wall-clock step used to land in the interarrival distribution as a gap that never happened &mdash; the control shows a simulated NTP step produces a &minus;3599&thinsp;s gap on wall clock and exactly 1.0&thinsp;s on monotonic.</li>
+    <li><b>Offline replay exists.</b> Previously the corpus was written and never read back except to count parseable lines. <code>gate1_replay.py</code> verifies hash, manifest, accounting and sequence contiguity <em>before</em> analysing, replays in sequence order, and refuses to certify a corrupt, incomplete or unsealed artifact. It runs as part of every session, and a refusal fails Gate 1.</li>
+    <li><b>Order-book fields are analysed.</b> Bid/ask, sizes, OI, volume and exchange timestamps are now interpreted rather than merely stored. A field the SDK never sends is reported <code>NOT_DELIVERED_BY_SDK</code> &mdash; never as zero, which would read as absent market activity.</li>
+    <li><b>Accounting includes in-flight records.</b> <code>offered == written + rejected + dropped + in_flight</code>. Omitting in-flight made a benign mid-run state indistinguishable from silent loss. At close the strict form must hold.</li>
+    <li><b>Snapshot failures are their own category</b> &mdash; counted as rejected, reason preserved, and fatal to Gate 1. Never silently omitted, which would leave an unexplained sequence hole.</li>
+  </ul>
+</div>
+
+<div class="prepared">
+  <h3>Verified on the host &mdash; Sunday 23 Aug, 15:10 IST</h3>
+  <ul>
+    <li><b>bujji-options-os-trading</b> &mdash; the only unit with a real order-placement call site. Timer disabled; a <code>ConditionPathExists</code> gate blocks execution even if started by hand. Proved by starting it: <code>ConditionResult=no</code>, <code>ExecMainPID=0</code>.</li>
+    <li><b>bujji-certify-ws-option</b> &mdash; inhibited the same way, so no concurrent websocket runs on the same app identity.</li>
+    <li>Live checkout <code>/opt/bujji/app</code> at <code>2e0509a</code>, clean. The harness and builder run from <code>/opt/bujji/gate1-run/</code>; the universe is built from the architecture worktree <code>/opt/bujji/work-m4</code>.</li>
+  </ul>
+</div>
+
+<h2>Harness feed evidence &mdash; not Bujji runtime evidence</h2>
+<p class="note">The single most important thing to carry out of Tuesday. These are different measurements, and this run performs only the first.</p>
+<div class="split">
+  <div class="pane is">
+    <h4>What a PASS establishes</h4>
+    <ul>
+      <li>This host, this token identity, this SDK-boundary harness and this measured universe sustained <b>one bounded session</b>.</li>
+      <li>The FYERS websocket delivered full-mode callbacks, and every one the harness received was frozen at arrival and stored.</li>
+      <li>A verified corpus: hash, manifest, accounting and sequence contiguity all checked by offline replay before any figure is quoted.</li>
+    </ul>
+  </div>
+  <div class="pane isnt">
+    <h4>What a PASS does not establish</h4>
+    <ul>
+      <li>That the <b>raw exchange wire frame</b> was captured. The SDK decodes the binary feed before this process sees anything; what it dropped or renamed is not recoverable and is not claimed.</li>
+      <li>That FYERS delivered every exchange tick. There are no broker sequence numbers, so a tick FYERS never sent is undetectable.</li>
+      <li>That the unchanged Bujji runner receives these ticks.</li>
+      <li>That <code>FyersTickFeed</code> receives them &mdash; it keeps <code>symbol</code>+<code>ltp</code> and discards the other full-mode fields. That is exactly why this harness binds the SDK directly.</li>
+      <li>That Bujji&rsquo;s tick journal durably records them.</li>
+      <li>Any runtime strategy safety property.</li>
+      <li>Permission to trade, deploy, merge, push, or enable entry.</li>
+    </ul>
+  </div>
+</div>
+
+<h2>The procedure</h2>
+<p class="note">Times are IST. Steps marked <span class="who you" style="margin:0">operator only</span> are yours &mdash; I do not enter, alter, print, or copy credential values. Every command below is redaction-safe: none echoes a token, and none can enable trading.</p>
+
+<ol class="steps">
+
+  <li class="step stop">
+    <div class="clock">08:45<small>T&minus;30</small></div>
+    <div class="card">
+      <span class="who you">Operator only</span>
+      <h3>Refresh the FYERS token &mdash; Tuesday morning, not Monday</h3>
+      <p>The token live now <b>expires 2026-08-25 at 06:00 IST</b> &mdash; before the 08:45 IST pre-open fire, not merely before the bell. Monday&rsquo;s refresh cannot serve Tuesday&rsquo;s session; FYERS tokens are daily.</p>
+      <p>Use your own approved process. The canonical destination is <code>/opt/bujji/.env</code>.</p>
+      <div class="warn"><b>Verified, not assumed</b>The preflight decodes only the <code>exp</code> claim locally &mdash; no network call, no value read &mdash; and checks it against <code>GATE1_MEASUREMENT_DATE</code>, not against &ldquo;today&rdquo;. It currently fails on this exact point, which is correct.</div>
+    </div>
+  </li>
+
+  <li class="step">
+    <div class="clock">09:05<small>T&minus;10</small></div>
+    <div class="card">
+      <span class="who">Safety re-check</span>
+      <h3>Re-verify no-trade isolation, immediately before the run</h3>
+      <p>Monday&rsquo;s verification is not Tuesday&rsquo;s state: a reboot, a <code>daemon-reload</code>, or a package update can restore a unit.</p>
+      <pre><code>cd /opt/bujji/gate1-run
+export GATE1_SESSION_ID=GATE1_20260825
+export GATE1_MEASUREMENT_DATE=2026-08-25
+set -a; . /opt/bujji/.env; set +a      # sources; echoes nothing
+/opt/bujji/.venv/bin/python gate1_preflight.py</code></pre>
+      <div class="good"><b>What good looks like</b>Exit&nbsp;0, <code>PRE-FLIGHT: CLEAR TO MEASURE</code>. Every safety line <code>OK</code>, including <i>sentinel absent</i> &mdash; if a sentinel file exists the gate is satisfied and therefore inert.</div>
+      <div class="warn"><b>A failed safety preflight means do not measure</b>Not &ldquo;investigate while running&rdquo;. If something re-enabled an entry-capable unit, understand it before anything else starts.</div>
+    </div>
+  </li>
+
+  <li class="step">
+    <div class="clock">09:16<small>after open</small></div>
+    <div class="card">
+      <span class="who">Authoritative universe</span>
+      <h3>Build through the canonical builder, from the real master</h3>
+      <p>After open, so the band centres on a <b>real observed spot</b>. Read the live <code>NSE:NIFTY50-INDEX</code> level, then pass it with its provenance &mdash; both are recorded in the manifest.</p>
+      <pre><code>cd /opt/bujji/gate1-run
+/opt/bujji/.venv/bin/python gate1_build_universe.py \
+  --spot &lt;OBSERVED_SPOT&gt; \
+  --spot-source "NSE:NIFTY50-INDEX LTP 09:16:xx IST" \
+  --session-id "$GATE1_SESSION_ID" \
+  --code-root /opt/bujji/work-m4 \
+  --out /opt/bujji/gate1</code></pre>
+      <p>Writes <code>/opt/bujji/gate1/&lt;session-id&gt;/universe.json</code> and <code>universe_manifest.json</code>, both atomically. The manifest records exact symbols, expiry roles, master version&thinsp;/&thinsp;mtime&thinsp;/&thinsp;sha256, spot used and its source, construction parameters, and the universe hash.</p>
+      <div class="good"><b>What good looks like</b>Roles resolved (<code>FRONT</code>&thinsp;/&thinsp;<code>SECOND</code>&thinsp;/&thinsp;<code>MONTHLY</code>) against real expiries, an ATM within ~50 points of the level you read, and a <b>measured</b> symbol count. Do not compare it to any expected number.</div>
+      <div class="warn"><b>Then re-run the preflight</b>It verifies the universe was built today, by the canonical builder, from the architecture worktree, with a non-placeholder spot source, and that <code>universe.json</code> still matches its manifest hash.</div>
+    </div>
+  </li>
+
+  <li class="step">
+    <div class="clock">09:20<small>&rarr; 15:30</small></div>
+    <div class="card">
+      <span class="who">Measure</span>
+      <h3>Run the bounded full-mode harness</h3>
+      <p>Full mode, depth off, against the universe artifact <b>unchanged</b>. Under <code>tmux</code> so an SSH drop does not kill it.</p>
+      <pre><code>tmux new -s gate1
+cd /opt/bujji/gate1-run
+set -a; . /opt/bujji/.env; set +a
+/opt/bujji/.venv/bin/python gate1_measure_v5.py \
+  --mode full \
+  --universe /opt/bujji/gate1/$GATE1_SESSION_ID/universe.json \
+  --out /opt/bujji/gate1/$GATE1_SESSION_ID \
+  --phase-seconds 300 \
+  --sustained-minutes 300 \
+  --reconnect-test</code></pre>
+      <p>Ramp rungs are derived from the measured universe length. Depth stays off &mdash; <code>--depth</code> additionally requires a second explicit flag and is out of scope here. Hard limits: 8&nbsp;h wall time, 20&nbsp;GB corpus, 2&nbsp;GB free-space floor, 500,000 queue capacity. Any breach stops safely and is reported. Detach with <code>Ctrl-b d</code>.</p>
+      <div class="good"><b>What good looks like</b>Ramp completes to the measured N, per-minute buckets keep arriving, queue depth stays well below capacity, and the reconnect phase reports <code>full_restoration: true</code> with a non-zero <code>producers_before_reconnect</code>.</div>
+    </div>
+  </li>
+
+  <li class="step stop">
+    <div class="clock">15:35<small>post-close</small></div>
+    <div class="card">
+      <span class="who">Verdict</span>
+      <h3>Read the graded result and the seal</h3>
+      <pre><code>cd /opt/bujji/gate1/$GATE1_SESSION_ID
+jq '.gate1_verdict'   gate1_results.json
+jq '.manifest'        gate1_manifest.json
+jq '.validation'      gate1_results.json   # accounting identity</code></pre>
+      <div class="good"><b>What good looks like</b><code>"verdict": "PASS"</code>, empty <code>failures</code>, <code>unaccounted: 0</code>, a populated <code>artifact_seal</code>, and silence reported under <code>inactive_coverage_reported_separately</code> rather than in any loss figure.</div>
+    </div>
+  </li>
+</ol>
+
+<h2>Gate 1 fails on any one of these</h2>
+<div class="fail">
+  <h3>Seven failure conditions, graded automatically</h3>
+  <p class="note" style="margin:6px 0 0">Any single one is a FAIL. They do not trade off, and a strong result elsewhere does not offset one.</p>
+  <ol>
+    <li><b>Ingestion loss</b> &mdash; the feed delivered a message the corpus does not hold.</li>
+    <li><b>Queue drop</b> &mdash; the bounded queue discarded anything.</li>
+    <li><b>Write failure</b> &mdash; a message was accepted but not written (<code>rejected &gt; 0</code>), or raw lines on disk do not match the write count.</li>
+    <li><b>Corruption</b> &mdash; the corpus fails offline re-parse.</li>
+    <li><b>Unsealed artifact</b> &mdash; no seal was written, so nothing can be checked.</li>
+    <li><b>Partial reconnect restoration</b> &mdash; a symbol producing callbacks before the forced reconnect did not produce them after. A vacuous baseline also fails.</li>
+    <li><b>Incomplete accounting</b> &mdash; <code>offered == written + rejected + dropped</code> does not hold. An unaccounted message is indistinguishable from silent loss.</li>
+  </ol>
+</div>
+
+<h2>Silence is coverage. Acks are not data.</h2>
+<p class="note">A far contract nobody traded produced no callback, so there was no callback to lose. Counting silence as ingestion loss would fail a healthy feed on a quiet morning. Separately: a subscription acknowledgement answers a question about a <em>subscription</em> &mdash; it is never evidence that market data is currently flowing.</p>
+<div class="tablewrap">
+<table>
+  <tr><th>Classification</th><th>Evidence</th><th>Counts as</th></tr>
+  <tr><td class="n">SUBSCRIPTION_FAILURE</td><td>The venue refused the subscription.</td><td><b style="color:var(--stop)">Gate 1 failure</b></td></tr>
+  <tr><td class="n">NO_UPDATE</td><td>Subscription acknowledged; no callback observed.</td><td>Coverage &mdash; never loss</td></tr>
+  <tr><td class="n">LOW_LIQUIDITY</td><td>Very few callbacks over a long window.</td><td>Coverage</td></tr>
+  <tr><td class="n">UNKNOWN</td><td>No acknowledgement evidence either way.</td><td>Coverage, flagged</td></tr>
+</table>
+</div>
+
+<h2>Restoring trading is a separate, deliberate act</h2>
+<p class="note">No command in this runbook can enable it. Restoration requires deleting <code>/etc/systemd/system/bujji-options-os-trading.service.d/gate1-no-trade.conf</code>, then <code>systemctl daemon-reload</code> and re-enabling the timer. Creating the sentinel file is not a restore path &mdash; it would leave a gate in place that is permanently satisfied and therefore inert, which is worse than no gate because it reads as protection.</p>
+
+<footer>
+  Revision 4, prepared 23 Aug 2026, re-dated 24 Aug 2026 for the 2026-08-25 session. Universe: <code>gate1_build_universe.py</code> via <code>bujji.capture_universe.builder</code> from <code>/opt/bujji/work-m4</code>. Harness: <code>gate1_measure_v5.py</code> from <code>/opt/bujji/gate1-run/</code>. The live checkout is not modified by any step. Do not run the measurement until this revision has passed review.
+</footer>
+</div>

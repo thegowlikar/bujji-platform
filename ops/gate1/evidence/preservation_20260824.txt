@@ -1,0 +1,51 @@
+GATE 1 ARTIFACT PRESERVATION -- 2026-08-24
+captured_at_ist: 2026-08-24 17:49:14 IST
+method: read-only. No artifact was modified, moved, or chmod-ed.
+
+=== 20260824_034719 ===
+64df20795e9231e7bd3bda7eb90ed04654fe818555dd846da4c4ac15f892cf02  mode=644 size=348 mtime=2026-08-24_17:38:44  20260824_034719/fyersDataSocket.log
+fbf106fbf18151f80b6cdb86413e8200d1595f992400ed3d95f571acfa8a9f13  mode=644 size=226239062 mtime=2026-08-24_16:02:14  20260824_034719/raw_full.jsonl
+b235c36d3f1a1a19d3406196204265047eeb4fa4f05bc87f55127b693278fa9f  mode=644 size=167532447 mtime=2026-08-24_14:56:07  20260824_034719/raw_lite.jsonl
+
+=== GATE1_20260824_POSTOPEN ===
+c9f82a70f20e4ef7ef99eba4276c2b83f49f1f855fb0a6f7e0537ad61f579b89  mode=644 size=2656 mtime=2026-08-24_17:47:56  GATE1_20260824_POSTOPEN/measure.log
+87f3be5a8b84988a6278471a6d2f29633432eab522e52c46993d5a4710843ded  mode=644 size=155 mtime=2026-08-24_17:30:26  GATE1_20260824_POSTOPEN/postopen_watch.log
+300d7b9f25cbe44e7e6c2288931b37c3257d1b814d2d8405158d4013e833916a  mode=644 size=47101 mtime=2026-08-24_09:16:36  GATE1_20260824_POSTOPEN/universe.json
+7cdbe31d099fe39b31b1d3c5cd014042396e52ad60d75eb5d738368e56f55631  mode=644 size=2147 mtime=2026-08-24_09:16:36  GATE1_20260824_POSTOPEN/universe_manifest.json
+
+=== GATE1_20260824 ===
+8610f85d9251a351661849637cd9173065292cd6260e786fddac15cd0c2d0ef6  mode=644 size=1575 mtime=2026-08-24_08:45:02  GATE1_20260824/gate1_run_summary.json
+0ea1ba98a799d9855b688e091ea63657f2c5a6fefd612125b4c908252195f113  mode=644 size=3086 mtime=2026-08-24_09:23:21  GATE1_20260824/preflight_last_FAILED_0845.json
+7720c7de5f84e39ff15ef7c8abbec581ecf58b9e7283513f426b1a3db6ced9bf  mode=644 size=2742 mtime=2026-08-24_08:45:01  GATE1_20260824/preflight_output.txt
+
+
+=== INTEGRITY, verified independently of the harness ===
+universe pair        : manifest sha256 == actual (PAIR INTACT)
+raw_lite.jsonl       : seq 1..990702, unique 990702, missing 0
+raw_full.jsonl       : seq 1..419775, unique 419775, missing 0
+
+seq is assigned under a lock in the SDK callback BEFORE offer(), so a dropped
+(queue-full) or rejected (write-failure) record still consumes a sequence
+number and leaves a hole. Zero holes therefore proves, from the files alone:
+  offered == written, dropped == 0, rejected == 0
+for both corpora. This recovers the drop/reject half of the accounting
+identity that sealing would have produced.
+
+It does NOT prove FYERS delivered every exchange tick. That is never claimable.
+
+=== CLASSIFICATION of postopen_watch.log ===
+GATE1_20260824_POSTOPEN/postopen_watch.log (155 B, 17:30:26) is OUT-OF-BAND
+OPERATIONAL METADATA, never corpus evidence. It records the first watcher
+reaching its obsolete 17:30 backstop. Replay, accounting, sealing and verdict
+logic must ignore it explicitly rather than silently absorbing it.
+
+=== WHY NO results.json ===
+The run was terminated by operator decision at 17:47 rather than waiting for
+the 20:26:21 phase end. measure_v5 has no signal handler, no finally, no
+atexit, so sealing did not run: no offline re-parse, no accounting file, no
+automatic verdict. Two SIGINTs were required -- the first unwound main() at
+time.sleep(), the process then hung on a non-daemon thread inside the FYERS
+SDK reconnect path.
+
+Zero bytes were lost: file offset == on-disk size at kill time, and the last
+line of both corpora parses as valid JSON.
