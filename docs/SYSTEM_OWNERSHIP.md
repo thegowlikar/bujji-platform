@@ -57,21 +57,29 @@ is not mistaken for an oversight.
 
 ## Legacy ORB-VWAP ownership
 
+**Five files in this table are ALSO reachable from enabled Options OS
+entrypoints and must not be deleted during ORB-VWAP cleanup.** They are marked
+**(SHARED)** below and listed again in the shared-infrastructure table, with
+their measured per-entrypoint reachability. Ownership is not the same as
+harmlessness: this table describes which generation *designed* a file, and a
+reader treating it as a delete-list would break the trading runner.
+
 | Concern | Files |
 |---|---|
 | Entrypoint | `bujji/app.py` |
 | Systemd unit | `bujji-orb-vwap-legacy.service` (disabled by default) |
 | Deployment template | `deploy/bujji-orb-vwap-legacy.service`, `deploy/README.md` (renamed from `deploy/bujji.service` — the original template documented `cp deploy/bujji.service /etc/systemd/system/bujji.service` + `systemctl enable --now bujji.service`, which would have recreated the exact ambiguous, auto-starting unit name; found and fixed during the pre-commit operational safety check) |
-| Configuration | `config/config.yaml`, `bujji/core/config.py::AppConfig` |
+| Configuration | `config/config.yaml`, `bujji/core/config.py::AppConfig` **(SHARED)** |
 | State handling | `bujji/core/orchestrator.py`, `bujji/core/session_state.py` |
-| Strategy logic | `bujji/signal/engine.py`, `bujji/signal/indicators.py`, `bujji/core/thesis.py` |
-| Execution logic | `bujji/execution/engine.py` |
+| Strategy logic | `bujji/signal/engine.py`, `bujji/signal/indicators.py` |
+| Thesis vocabulary | `bujji/core/thesis.py` **(SHARED)** |
+| Execution logic | `bujji/execution/engine.py` **(SHARED)** |
 | Position tracking | `bujji/trade/manager.py` |
 | Capital layer | `bujji/capital/engine.py`, `bujji/capital/policy.py` |
 | Journal | `bujji/journal/journal.py` (`TradeJournal`) |
 | Tick/health | `bujji/tick/engine.py`, `bujji/tick/health.py` |
 | Dashboard | `bujji/dashboard/server.py` |
-| Broker glue | `bujji/broker/factory.py`, `bujji/broker/fyers_ws.py` |
+| Broker glue | `bujji/broker/factory.py`, `bujji/broker/fyers_ws.py` **(SHARED)** |
 | Tests | 31 files under `tests/` referencing ORB/VWAP (e.g. `test_vwap.py`, `test_trade_manager.py`, `test_signal_engine.py`) |
 
 ## Market Intelligence ownership (added 2026-08-24)
@@ -141,6 +149,12 @@ separately-scoped phase removes it — see `docs/BUJJI_OS_V1_INTERFACE_MAP.md`
 Both systems import these directly. Verified: deleting or relocating any of
 these breaks Bujji Options OS immediately.
 
+Measured 2026-08-24 by computing a separate closure per declared entrypoint,
+not by reading intent. `tests/test_ownership_contract.py` asserts every file
+marked **(SHARED)** is genuinely reachable and that no unmarked legacy-table
+file is — so this table fails the build rather than drifting.
+
+
 | File | What's shared | Proof |
 |---|---|---|
 | `bujji/broker/paper.py` (`PaperBroker`) | Sole execution broker for both systems | ORB-VWAP: `broker/factory.py` constructs it. Options OS: constructed directly throughout `production_runtime/` and every F.1–F.5 test. |
@@ -148,6 +162,12 @@ these breaks Bujji Options OS immediately.
 | `bujji/core/event_bus.py` (`EventBus`, `Event`, `EventType`) | The event bus and its 7-member `EventType` enum | 9+ files under `production_runtime/` import it directly (`trade_lifecycle_executor.py`, `trading_brain_runtime.py`, `session_governor.py`, etc.); ORB-VWAP's `bujji/app.py` imports it directly too. Options OS's "zero new EventType members" discipline throughout this project was reusing THIS legacy enum, not a fresh one. |
 | `bujji/core/enums.py` (`Side`, `OptionType`, `OrderStatus`) | Broker-facing vocabulary both systems trade options with | Imported throughout both systems' order/contract code. |
 | `bujji/core/models.py` — **specifically** `OptionContract`, `OrderRequest`, `OrderResult` | Order/contract data shapes | Confirmed imports from Options OS: `trade_lifecycle_executor.py`, `trading_brain_runtime.py`, `lifecycle_order_builder.py`, `msi_entry_bridge.py`, `margin_calibration_runner.py`, `broker_margin_reality_adapter.py` (7 call sites). |
+
+| `bujji/core/config.py` | `AppConfig`, read at startup | Reachable from **5** enabled entrypoints: options_os_runner, daily_intelligence, phase20_13_live, futures_depth_poller, token_preflight |
+| `bujji/core/thesis.py` | Thesis vocabulary | Reachable from the same **5** enabled entrypoints |
+| `bujji/execution/engine.py` | Execution path | Reachable from `bujji_options_os_runner` — the unit that trades |
+| `bujji/broker/factory.py` | Broker construction | Reachable from `bujji_options_os_runner` |
+| `bujji/broker/fyers_ws.py` | Websocket transport | Reachable from `bujji_options_os_runner` |
 
 **Important nuance on `core/models.py`**: this single file also contains
 ORB-VWAP-only classes (`Signal`, `OpeningRange`, `Position`, `TradeIntention`)

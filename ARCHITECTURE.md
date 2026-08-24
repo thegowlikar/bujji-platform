@@ -129,12 +129,12 @@ are deliberately absent from the table above.
 
 ## 3. Runtime reachability, and what "test-only" means
 
-`tools/reachability.py` computes, from the eight entry points systemd actually
+`tools/reachability.py` computes, from the seven entry points systemd actually
 starts, which modules production can reach. Current measurement:
 
 ```
-python files            1914
-  test modules           581
+python files            1915
+  test modules           582
   production modules    1333
 
 REACHABLE                487   (36.5% of production)
