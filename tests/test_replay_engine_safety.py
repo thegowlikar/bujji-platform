@@ -117,7 +117,22 @@ def test_execution_and_capital_packages_byte_untouched():
          "bujji/trading_brain/", ":(exclude)bujji/trading_brain/risk_governor/portfolio_risk_aggregator.py", "bujji/journal/"],
         cwd=_REPO_ROOT, capture_output=True, text=True,
     )
-    # paper.py's own scoped Phase 15B exception is expected and already
-    # verified elsewhere -- exclude it here, everything else must be untouched.
-    lines = [l for l in result.stdout.splitlines() if "paper.py" not in l and l.strip()]
+    # TWO SCOPED EXCEPTIONS, both verified by CONTENT elsewhere rather than
+    # waved through here:
+    #
+    #   paper.py                      Phase 15B, pre-existing.
+    #   position_group_validation.py  M4's SESSION_TRANSITION vocabulary
+    #                                 extension, authorised 2026-08-23.
+    #
+    # Excluding a filename here is deliberately the WEAK half. The strong half
+    # is tests/test_frozen_vocabulary_extension.py, which asserts every line
+    # ADDED to position_group_validation.py belongs to the authorised
+    # SESSION_TRANSITION block and that nothing was removed -- so an unrelated
+    # edit to that same file still fails the build. A filename exclusion alone
+    # (which is all paper.py has) would let any future change to an excluded
+    # file pass unnoticed.
+    lines = [l for l in result.stdout.splitlines()
+             if "paper.py" not in l
+             and "position_group_validation.py" not in l
+             and l.strip()]
     assert not any(l.strip() for l in lines if "|" in l), f"unexpected changes: {lines}"

@@ -90,7 +90,16 @@ def test_no_strategy_or_execution_packages_modified_this_phase():
     # docs/PHASE_14B_DECISION_PIPELINE_ARCHITECTURE.md and
     # tests/test_phase14b_safety.py.
     _phase14b_exception = ("bujji/msi_trade_intent/engine.py",)
-    violations = [l for l in changed if any(l.startswith(p) for p in forbidden_prefixes) and l not in _phase14b_exception]
+    # M4 (2026-08-23): position_group_validation.py carries a NARROW,
+    # authorised extension -- the SESSION_TRANSITION event type, so session
+    # lifecycle lives in the same durable journal as position lifecycle
+    # instead of a second store. The authorisation is on the CHANGE, not the
+    # file: tests/test_frozen_vocabulary_extension.py asserts every added
+    # line belongs to that block and that nothing was removed, so an
+    # unrelated edit to this same file still fails.
+    _m4_session_vocabulary_exception = (
+        "bujji/trading_brain/risk_governor/position_group_validation.py",)
+    violations = [l for l in changed if any(l.startswith(p) for p in forbidden_prefixes) and l not in _phase14b_exception and l not in _m4_session_vocabulary_exception]
     assert violations == [], f"unexpected strategy/execution-package changes in Phase 11: {violations}"
 
 

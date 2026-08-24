@@ -84,7 +84,15 @@ class TestTheDefaultIsBlocked:
 
         src = (REPO_ROOT / "bujji_options_os_runner.py").read_text()
         tree = ast.parse(src)
-        init = next(n for n in ast.walk(tree)
+        # SCOPED TO THE RUNNER CLASS. An unscoped walk finds whichever
+        # `__init__` is declared first in the module, which is not necessarily
+        # the runner's -- the file now defines helper classes above it. One
+        # parse, one class, one method: the test asserts what it means rather
+        # than what the file ordering happens to make true.
+        runner_cls = next(n for n in ast.walk(tree)
+                          if isinstance(n, ast.ClassDef)
+                          and n.name == "OptionsOSRunner")
+        init = next(n for n in runner_cls.body
                     if isinstance(n, ast.FunctionDef) and n.name == "__init__")
         assigned = None
         for node in ast.walk(init):

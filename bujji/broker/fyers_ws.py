@@ -131,7 +131,7 @@ class FyersTickFeed:
 
     def __init__(self, app_id: str, access_token: str, logger: logging.Logger,
                  log_path: str = "logs", litemode: bool = True,
-                 journal=None) -> None:
+                 journal=None, session_id: Optional[str] = None) -> None:
         self._app_id = app_id
         self._access_token = access_token
         self._log = logger
@@ -158,6 +158,7 @@ class FyersTickFeed:
         self._generation = 0
         self._current_handle: Optional[_ConnectionHandle] = None
         self._pending_symbols: set[str] = set()
+        self._session_id = session_id
         self._started = False
         self._stopped = False
         self._connected = False
@@ -167,6 +168,9 @@ class FyersTickFeed:
         # connection identity. -------------------------------------------
         self._lock = threading.Lock()
         self._ltp: dict[str, float] = {}
+        # THE TYPED STORE. Same callback, same lock, richer representation.
+        self._quotes: dict = {}
+        self._acked: set = set()
         self._last_tick_at: dict[str, float] = {}
         self._last_error: Optional[str] = None
 
@@ -361,15 +365,54 @@ class FyersTickFeed:
             if self._journal is not None:
                 self._journal.offer(msg)
 
+            # TYPED PROJECTION, after the journal and before any early return
+            # that would discard the callback.
+            #
+            # The float store below is retained ON PURPOSE for now: its
+            # consumers have not migrated yet, and removing an authority
+            # before its readers move is how a migration becomes an outage.
+            # Both are written from the SAME callback, so they cannot
+            # disagree; the float one is scheduled for retirement once
+            # tests/test_quote_path_is_authoritative.py can prove no enabled
+            # consumer reads it.
             symbol, ltp = msg.get("symbol"), msg.get("ltp")
-            if symbol is None or ltp is None:
-                return  # Connection/subscription ack, not a price tick.
+            if symbol is None:
+                return  # Connection-level frame: journaled above, nothing to project.
+
+            recv_wall = time.time()
+            recv_mono = time.monotonic()
+            try:
+                quote = _project_quote(
+                    msg, source=_SOURCE_TICK, recv_wall=recv_wall,
+                    recv_mono=recv_mono, session_id=self._session_id)
+            except Exception as exc:  # noqa: BLE001 -- projection must never kill the feed
+                self._log.warning(
+                    "tick_projection_failed symbol=%s error=%s", symbol,
+                    type(exc).__name__)
+                quote = None
+
+            if ltp is None:
+                # A subscription acknowledgement. It is EVIDENCE -- it is in
+                # the journal above, and the quote (all fields UNAVAILABLE) is
+                # kept so a reader can distinguish "acked and silent" from
+                # "never acked". It is NOT a price, so the float store and the
+                # freshness clock are deliberately left untouched.
+                if quote is not None:
+                    with self._lifecycle_lock:
+                        if self._stopped or handle is not self._current_handle:
+                            return
+                        with self._lock:
+                            self._acked.add(symbol)
+                return
+
             with self._lifecycle_lock:
                 if self._stopped or handle is not self._current_handle:
                     return  # Stale or stopped: the tick is dropped, not recorded.
                 with self._lock:  # Fixed nested order: _lifecycle_lock outer, _lock inner. Never reversed.
                     self._ltp[symbol] = float(ltp)
                     self._last_tick_at[symbol] = time.time()
+                    if quote is not None:
+                        self._quotes[symbol] = quote
 
         def on_error(msg) -> None:
             with self._lifecycle_lock:
@@ -480,6 +523,29 @@ class FyersTickFeed:
     # ------------------------------------------------------------------ #
     # Read-only accessors (safe to call from the asyncio event loop)
     # ------------------------------------------------------------------ #
+    def latest_quote(self, symbol: str):
+        """The typed quote, or None if this symbol has never produced one.
+
+        None means NEVER OBSERVED. It is not an empty quote and not a zero --
+        a caller that cannot tell those apart will eventually price something
+        off a symbol the feed never delivered.
+        """
+        with self._lock:
+            return self._quotes.get(symbol)
+
+    def all_quotes(self) -> dict:
+        with self._lock:
+            return dict(self._quotes)
+
+    def acknowledged(self, symbol: str) -> bool:
+        """Did the venue acknowledge this subscription?
+
+        An ack is evidence the request was ACCEPTED. It is never evidence that
+        market data is flowing, and no freshness decision may rest on it.
+        """
+        with self._lock:
+            return symbol in self._acked
+
     def latest(self, symbol: str) -> Optional[float]:
         with self._lock:
             return self._ltp.get(symbol)
@@ -502,6 +568,13 @@ class FyersTickFeed:
     @property
     def last_error(self) -> Optional[str]:
         return self._last_error
+
+
+# THE ONE PROJECTION. Imported, never reimplemented here: a second copy of
+# the SDK key mapping would be a second place for Monday's measured evidence
+# to have to be applied, and one of them would drift.
+from bujji.market_perception.quote import (  # noqa: E402
+    SOURCE_TICK as _SOURCE_TICK, project as _project_quote)
 
 
 class TickSilenceWatchdog:

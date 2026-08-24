@@ -13,8 +13,8 @@ a positive control rather than by review, and each changing the headline figure:
 Three of those inflated the "orphaned" side, which is the direction that
 flatters any claim built on this output. Until it has FIXTURE-BASED tests
 covering absolute imports, package-relative imports at every level, `__init__`
-anchoring, namespace/package ambiguity, and all eight real systemd entry
-points, treat its numbers as INDICATIVE.
+anchoring, namespace/package ambiguity, and the real systemd entry points,
+treat its numbers as INDICATIVE.
 
 It is sound enough to answer "is this specific module reachable?" -- a question
 whose answer can be confirmed by grep in seconds, and which the quarantine
@@ -23,8 +23,9 @@ and no safety argument should rest on its percentages.
 
 WHY THIS IS A COMMITTED TOOL AND NOT A ONE-OFF SCRIPT.
 
-Measured 2026-08-22: of 1,261 production modules, 243 are reachable from the
-eight entry points systemd actually runs. 748 of the remainder are imported
+Measured 2026-08-22: of 1,261 production modules, 243 were reachable from the
+entry points then listed. That list was WRONG -- see ENTRY_POINTS below, which
+is now derived from the enabled unit files themselves. 748 of the remainder are imported
 ONLY by tests. That ratio is the single most useful fact about this repository,
 because it explains how a green suite has repeatedly coexisted with a broken
 runtime -- most of what the suite exercises is not what runs.
@@ -62,16 +63,52 @@ from typing import Dict, Iterable, Set
 # The eight units systemd actually starts. Kept as literals, in one place, so a
 # new unit that is never added here shows up as a shrinking reachable set
 # rather than as silence.
+# CORRECTED 2026-08-22 against the real unit files. The previous list was
+# wrong in BOTH directions, and the docstring above it claimed these were "the
+# entry points systemd actually runs", which made the error invisible.
+#
+# It declared `bujji.app` as bujji-shadow-decision-campaign.service. That
+# service runs scripts/run_phase20_13_live_entrypoint.py. `bujji.app` is the
+# DEPRECATED ORB-VWAP bot -- unit bujji-orb-vwap-legacy.service, disabled, no
+# timer, zero journal entries. It declared `run_live_shadow`, which no unit
+# references at all. And it declared
+# `scripts.run_paper_intelligence_campaign`, whose timer is disabled.
+#
+# The cost was not cosmetic. `bujji.core.orchestrator` is reachable ONLY from
+# `bujji.app`, so it appeared in ARCHITECTURE.md's "known reachable violations
+# -- these DO define what production trades" table while nothing ran it.
+# Meanwhile everything the shadow campaign really reaches -- including
+# `bujji.broker.option_market_data` -- was classified unreachable. Measured:
+# 550 modules from the declared list, 520 from the real units.
+#
+# DERIVED FROM, and re-checkable with:
+#   systemctl list-unit-files --type=timer --state=enabled
+#   systemctl show -p Unit --value <timer>
+#   systemctl cat <service> | grep ExecStart
+#
+# Three enabled units run scripts OUTSIDE this repository
+# (/opt/bujji/certify_ws_option.py, token_capture.py, promote_from_inbox.py),
+# so they are not modules in this import graph and cannot appear here.
 ENTRY_POINTS = (
-    "bujji_options_os_runner",                  # bujji-options-os-trading.service
-    "run_daily_intelligence_session",           # bujji-daily-intelligence.service
-    "bujji.app",                                # bujji-shadow-decision-campaign.service
-    "run_live_shadow",
-    "scripts.run_paper_intelligence_campaign",
-    "scripts.refresh_price_levels",             # bujji-price-levels.service
-    "scripts.run_futures_depth_poller",         # bujji-futures-depth-poller.service
-    "scripts.backup_observation_stores",        # bujji-backup.service
+    "bujji_options_os_runner",                  # bujji-options-os-trading.timer  (TRADES)
+    "run_daily_intelligence_session",           # bujji-daily-intelligence.timer
+    "scripts.run_phase20_13_live_entrypoint",   # bujji-shadow-decision-campaign.timer
+    "scripts.refresh_price_levels",             # bujji-price-levels.timer
+    "scripts.run_futures_depth_poller",         # bujji-futures-depth-poller.timer
+    "scripts.backup_observation_stores",        # bujji-backup.timer
+    "scripts.preflight_fyers_token",            # bujji-token-preflight.timer
 )
+
+# Units that exist but are NOT enabled, with the module each would reach. A
+# module reachable only from here is NOT production-reachable, and no safety
+# claim may rest on it. Enabling any of these must be a deliberate act that
+# updates ENTRY_POINTS above -- which is what the contract test enforces.
+QUARANTINED_ENTRY_POINTS = {
+    "bujji.app": "bujji-orb-vwap-legacy.service (disabled, no timer, never ran)",
+    "run_live_shadow": "no systemd unit references it",
+    "scripts.run_paper_intelligence_campaign":
+        "bujji-paper-intelligence-campaign.timer (disabled)",
+}
 
 _SKIP_DIRS = {".git", "__pycache__", "node_modules", ".venv", "venv"}
 

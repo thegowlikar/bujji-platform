@@ -51,7 +51,7 @@ class _Governor:
     def __init__(self):
         self.locked = 0
 
-    def select_and_lock_strategy(self, trend, vol):
+    def select_and_lock_strategy(self, trend, vol, **_evidence):
         self.locked += 1
         return _Selection()
 

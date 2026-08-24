@@ -94,7 +94,14 @@ def _build_current_record(snapshot, builder, premium_state):
     return record, new_premium_state
 
 
-def test_restart_equivalence_at_real_boundary_produces_identical_thesis_evaluation():
+def test_restart_equivalence_at_real_boundary_produces_identical_thesis_evaluation(
+        require_existing_path):
+    # GUARD ON THE DATA. This replays a REAL recorded shadow session, and that
+    # session directory is not version-controlled. Without the guard the test
+    # failed with FileNotFoundError -- reporting a broken behaviour when the
+    # truth was an absent recording.
+    require_existing_path(f"{SESSION_DIR}/market_snapshots.jsonl",
+                          "restart-equivalence replay of a real shadow session")
     market_snapshots = [json.loads(l) for l in open(f"{SESSION_DIR}/market_snapshots.jsonl")]
     boundary = 87  # mid-session, matches the boundary already used in Phase 15D/15E real-data validation.
     evaluate_at = 100  # a later real cycle to evaluate the thesis against.

@@ -1,11 +1,50 @@
 import logging
+import shutil
 from datetime import datetime, time
+from pathlib import Path
 
 import pytest
 
 from bujji.core.clock import IST
 from bujji.core.config import AppConfig
 from bujji.core.models import Candle
+
+REPO_ROOT = Path(__file__).resolve().parent.parent
+_MASTER_FIXTURE = REPO_ROOT / "tests/fixtures/instrument_master/fyers_fo_NSE.csv"
+_MASTER_RUNTIME = REPO_ROOT / "data/instrument_master/fyers_fo_NSE.csv"
+
+
+@pytest.fixture(scope="session", autouse=True)
+def _instrument_master_available():
+    """Make the suite reproducible on a clean checkout.
+
+    THE PROBLEM THIS SOLVES. `instrument_master_directory` defaults to the
+    CWD-relative "data/instrument_master", `data/` is gitignored, and the file
+    is downloaded from the exchange at runtime. So on any fresh worktree the
+    master is simply absent, and every test that resolves a lot size, an
+    expiry or a strike fails -- not because the behaviour is wrong but because
+    the input does not exist. On this branch that was 210 failure lines and
+    several whole-module collection errors, which is worse than a failure: a
+    collection error HIDES every test in the module rather than reporting it.
+
+    A suite that cannot run cannot support a safety claim, and every A/B
+    comparison taken against it was measuring a partially-executed suite.
+
+    WHAT THIS DOES NOT DO. It does not weaken the refusal. `lot_size_for()`
+    still raises when the master cannot answer -- that refusal is a safety
+    behaviour ("refusing to size orders off a guess") and is exercised by its
+    own tests against an empty directory. This only guarantees the INPUT
+    exists, so the tests measure the behaviour instead of the environment.
+
+    The fixture is real exchange rows, committed and deterministic: NIFTY
+    futures plus the strikes nearest 24000 across the four nearest expiries.
+    It is NOT a substitute for the live master and is never used in
+    production -- nothing outside tests/ references it.
+    """
+    if _MASTER_RUNTIME.exists() or not _MASTER_FIXTURE.exists():
+        return
+    _MASTER_RUNTIME.parent.mkdir(parents=True, exist_ok=True)
+    shutil.copyfile(_MASTER_FIXTURE, _MASTER_RUNTIME)
 
 
 @pytest.fixture
@@ -30,3 +69,51 @@ def c(hh, mm, o, h, low, cl, vol=1000) -> Candle:
     # Tz-aware IST, matching what real/paper brokers now produce in production
     # (D2) — keeps naive-vs-aware datetime arithmetic consistent everywhere.
     return Candle(datetime(2026, 7, 5, hh, mm, tzinfo=IST), o, h, low, cl, vol)
+
+@pytest.fixture
+def require_populated_sqlite():
+    return _require_populated_sqlite
+
+
+def _require_populated_sqlite(db_path, table: str, what: str):
+    """Skip -- explicitly -- unless a real corpus is present.
+
+    GUARD ON THE DATA, NOT THE FILE. Several tests guarded on
+    `path.exists()`, which a schema-only database satisfies: the file is
+    there, the table is there, and it holds zero rows. The test then ran and
+    failed on an assertion, reporting a broken behaviour when the truth was a
+    missing corpus.
+
+    A bare `return` is not the answer either -- that reports as PASSED, which
+    is the same dishonesty pointed the other way. `pytest.skip` says the true
+    thing: this test did not run, and here is exactly what it needed.
+    """
+    import sqlite3
+
+    from pathlib import Path as _P
+    path = _P(db_path)
+    if not path.exists():
+        pytest.skip(f"{what}: {path} is absent")
+    try:
+        conn = sqlite3.connect(f"file:{path}?mode=ro", uri=True)
+        rows = conn.execute(f"select count(*) from {table}").fetchone()[0]
+    except Exception as exc:  # noqa: BLE001
+        pytest.skip(f"{what}: {path} is unreadable ({type(exc).__name__})")
+    if not rows:
+        pytest.skip(f"{what}: {path} holds the schema but 0 rows in {table!r} "
+                    f"-- a schema-only database is not the corpus")
+    return path
+
+
+@pytest.fixture
+def require_existing_path():
+    return _require_existing_path
+
+
+def _require_existing_path(path, what: str):
+    """Skip unless an un-versioned data path this test needs is present."""
+    from pathlib import Path as _P
+    p = _P(path)
+    if not p.exists():
+        pytest.skip(f"{what}: {p} is absent (not version-controlled)")
+    return p

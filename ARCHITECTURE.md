@@ -77,7 +77,7 @@ is true.
 | Leg quote (readiness) | `ReadinessQuote` | `bujji.production_runtime.leg_readiness` | OWNED |
 | Leg state (readiness) | `ReadinessLegState` | `bujji.production_runtime.leg_readiness` | OWNED |
 | Decision trace | `DecisionTrace` | `bujji.core.decision_trace` | CONTESTED |
-| Session store | `SessionStore` | `bujji.shadow_observatory.session_store` | CONTESTED |
+| Session store | `SessionStore` | `bujji.shadow_observatory.session_store` | OWNED |
 
 ### Contested entries and the milestone that resolves each
 
@@ -85,7 +85,7 @@ is true.
 | --- | --- | --- |
 | `SpotSnapshot`, `VixSnapshot`, `MarketSnapshot` | `bujji.market_reality_snapshot.models`, `bujji.broker.simulation.market_snapshot` | **M1** — one market model family; the perception family is the one on the entry path. |
 | `OrderRequest` | `bujji.trading_brain.order_construction.models` | **M3** — resolved with the broker-truth boundary, which is what consumes it. |
-| `DecisionTrace`, `SessionStore` | `bujji.trading_brain.risk_governor.risk_governor_pipeline`, `bujji.core.session_state` | **M6** — resolved with the session evidence package. |
+| `DecisionTrace` | `bujji.trading_brain.risk_governor.risk_governor_pipeline` | **M6** — resolved with the session evidence package. |
 
 **Resolved.** `LegQuote` and `LegState` were introduced by the market-data
 campaign and collided with `execution_reality.models` and
@@ -133,14 +133,14 @@ are deliberately absent from the table above.
 starts, which modules production can reach. Current measurement:
 
 ```
-python files            1832
-  test modules           555
-  production modules    1277
+python files            1870
+  test modules           579
+  production modules    1291
 
-REACHABLE                551   (43.1% of production)
-orphaned                 726
-  test-only              512
-  unreferenced           214
+REACHABLE                487   (37.7% of production)
+orphaned                 804
+  test-only              603
+  unreferenced           201
 ```
 
 **`test-only` is a classification, not a verdict.** It means exactly one thing:
@@ -195,10 +195,50 @@ silently.
 | Module | Patterns | Status |
 | --- | --- | --- |
 | `bujji.market_timeseries.subscription` | fixed-strike-count, broker-symbol-built | QUARANTINED |
+| `bujji.core.orchestrator` | fixed-strike-count | QUARANTINED — legacy stack |
+| `run_live_shadow` | fixed-strike-count | QUARANTINED — no unit runs it |
 | `bujji.trading_brain.nifty_contract_builder.engine` | independent-atm | QUARANTINED |
 | `scripts.certify_fyers_optionchain_reality_access` | fixed-strike-count | QUARANTINED |
 | `scripts.gate1.build_universe` | independent-atm | QUARANTINED |
 | `scripts.verify_fo_access` | fixed-strike-count | QUARANTINED |
+
+### The legacy stack — retired, and held retired
+
+`bujji.app` is the **deprecated ORB-VWAP ATM Seller**, superseded by Bujji
+Options OS. Its unit is `bujji-orb-vwap-legacy.service`: **disabled, no timer,
+zero journal entries.** `run_live_shadow` is referenced by no unit at all.
+`scripts.run_paper_intelligence_campaign`'s timer is disabled.
+
+Everything reachable only from those three is therefore **not production
+code**, and no safety claim may rest on it:
+
+| Module | What it duplicates | Status |
+| --- | --- | --- |
+| `bujji.core.orchestrator` | its own session FSM, `reconcile()`, recovery path | RETIRED — unreachable |
+| `bujji.core.session_state` | `SessionStore`, `trades_taken` | RETIRED — unreachable |
+| `bujji.replay.broker` | a Broker implementation | RETIRED — unreachable |
+| `bujji.shadow_lifecycle.orchestrator` | contract construction | RETIRED — unreachable |
+
+**This was not visible until 2026-08-22**, because `tools/reachability.py`
+declared `bujji.app` as the shadow-decision-campaign's entry point. That
+service runs `scripts/run_phase20_13_live_entrypoint.py`. So the whole legacy
+stack was counted as production, `bujji.core.orchestrator` sat in the table
+below as a violation that "defines what production trades", and the modules the
+shadow campaign really reaches were counted as unreachable. Correcting the list
+moved reachability from 43.1% to **37.6%** — the earlier figure overstated
+production reach by roughly 70 modules.
+
+**THE RATCHET, and it runs in two places.**
+`tests/test_reachability_entry_points.py` pins `ENTRY_POINTS` to the enabled
+unit files in both directions: a unit's module missing from the list fails, and
+a not-enabled module present in it fails. It also asserts each retired module
+above stays unreachable. So enabling a unit, or adding a production import that
+reaches the legacy stack, breaks the build until the migration is made
+deliberately and written down here.
+
+Retired is not deleted. These modules keep working for whoever runs them by
+hand; what they may not do is come back into the runtime silently, or be cited
+as evidence about the system that trades.
 
 ### Known reachable violations — declared, and shrinking
 
@@ -212,10 +252,8 @@ safe-looking direction and an entry cannot sit resolved-but-listed forever.
 
 | Module | Pattern | Clears in |
 | --- | --- | --- |
-| `bujji.core.orchestrator` | fixed-strike-count | M1 |
 | `bujji.shadow_runtime.intelligence_pipeline_adapter` | independent-atm | M1 |
 | `bujji.trading_brain.risk_governor.msi_entry_bridge` | broker-symbol-built | M1 |
-| `run_live_shadow` | fixed-strike-count | M1 |
 
 **`bujji.broker.paper` cleared in M3 (2026-08-22).** It built
 `f"{underlying}{strike}{opt.value}"` — `"NIFTY24500CE"` — with no expiry and
@@ -263,19 +301,47 @@ likely accidental edit.
 
 ## 4. Session state machine
 
-Bujji currently runs **two** session-scoped state machines, and this is a known
-defect rather than a design:
+**RESOLVED IN M4 (2026-08-23). `TradingSessionState` is the single owner of
+session and position lifecycle.**
 
-| Machine | Module | States |
-| --- | --- | --- |
-| `TradingSessionState` | `…trading_session_governor.session_trading_state` | `ANALYSING_MARKET → STRATEGY_LOCKED → POSITION_ACTIVE → MANAGING → EXITED → SESSION_COMPLETE` |
-| `RuntimeState` | `bujji.production_runtime.runtime_state_machine` | includes its own `POSITION_ACTIVE` |
+Bujji ran **two** session-scoped machines. Both transitioned to
+`POSITION_ACTIVE`, from different call sites, with no defined relationship, and
+both gated entry — `RuntimeState` through `_ENTRY_ACCEPTING_STATES`,
+`TradingSessionState` through `entry_control.can_enter_trade`. Neither was
+journaled, so neither survived a restart.
 
-Both transition to `POSITION_ACTIVE` for the same session, from different call
-sites, with no defined relationship. **M4 collapses them into one journaled
-machine.** Until then, `TradingSessionState` is the machine that gates entry
-(`entry_control.can_enter_trade` reads it) and is therefore the one to trust
-when they disagree.
+| Machine | Status after M4 |
+| --- | --- |
+| `TradingSessionState` (`…trading_session_governor.session_trading_state`) | **OWNER.** Transitions journaled; state derived from the journal reconciled against broker truth. |
+| `RuntimeState` (`bujji.production_runtime.runtime_state_machine`) | **RETIRED as lifecycle authority.** Keeps only connectivity and market phase. |
+
+**Why this owner.** Its states map onto facts the durable journal already
+holds — `MINTED`/`CONSTRUCTED` means a strategy was locked, `FILL_OBSERVED`
+means a position is active, net-zero means it exited. `RuntimeState` mixes
+connectivity (`CONNECTING`) and market phase (`PREMARKET`) with position
+lifecycle, and those are **process** facts that must not survive a restart:
+after a crash you genuinely are connecting again, and journaling that would
+mean reconstructing something that has to be re-derived fresh.
+
+**Transitions are journaled; state is derived.** Every transition is appended
+to the same `position_group_events` stream as position lifecycle, as a
+`SESSION_TRANSITION` carrying session identity, prior state, next state, cause,
+timestamp and an evidence reference — under a `SESSION:<id>` identity that
+`position_group_scope` excludes from every position-group boundary by explicit
+contract, enforced on both the read and the write side. The runner's in-memory
+tracker is a **cache**; it may not decide whether Bujji is flat, open, safe to
+enter, or finished.
+
+**Disagreement is `UNKNOWN`, and `UNKNOWN` blocks entry and makes the session
+unsafe.** The journal says what this process recorded; broker truth says what
+the account holds. When they disagree, neither is assumed correct. A missing
+history, a broken transition chain, an unreadable position history, and a
+broker `UNKNOWN` all reach the same place, for the same reason: a session that
+cannot establish what it is may not take new risk.
+
+`UNKNOWN` is deliberately **not** a member of the state enum, so no transition
+table can accept it as a target and no caller can transition into it by
+mistake.
 
 ### Entry gates, in the order they run
 
@@ -303,11 +369,230 @@ A milestone is complete when its acceptance test passes and failed before.
 | 1 | One instrument/universe model | The chain request's strike count and expiry are derived from the universe; band ⊆ universe holds for every expiry role, including on expiry day. |
 | 2 | Durable tick journal + replay | A recorded session replays to an identical decision sequence; a corrupted journal refuses rather than degrades. |
 | 3 | One broker-truth boundary | With the broker read forced to fail, no consumer concludes flat; the session refuses and says why. |
-| 4 | One journaled state machine | Killing the process mid-session and restarting reconstructs state from the journal. |
+| 4 | One journaled state machine | **MET.** Killing the process mid-session and restarting reconstructs state from the journal, reconciled against broker truth; disagreement, missing history or corruption is `UNKNOWN` and blocks entry. |
 | 5 | Event-driven protection | An adverse move between poll intervals triggers protection from the tick path; reconciliation runs with the management loop stopped. |
 | 6 | Session evidence package | Every terminal path produces a package; a session that cannot prove closure exits non-zero. |
 
 ---
+
+## 5a. The enabled-runtime lifecycle, end to end
+
+One path, named at every hop. Everything here is reached from
+`bujji_options_os_runner`, which is what systemd starts. Anything not on this
+path is not the running system, whatever its docstring says.
+
+```
+FYERS SDK callback
+  -> FyersTickFeed.on_message                    bujji.broker.fyers_ws
+       -> TickJournal.offer()                    verbatim, FIRST, before any field is read
+       -> quote.project()                        typed Quote; the ONE SDK field map
+  -> feed._quotes / feed._ltp                    both written under one lock, same callback
+  -> WebsocketTickProvider.get_quotes()          monotonic freshness, per-symbol REST fallback
+  -> OptionsOSRunner._current_leg_quotes()       gate: assess_quote_fields(["ltp"])
+       -> LegPriceView                           prices EMPTY unless valid
+  -> _run_one_management_pass()                  revalue only when valid
+       -> revalue_all() -> revalue()             current_price from gate-passed quotes
+       -> _emergency_brake()                     reached on BOTH the valid and blind paths
+       -> session_governor.evaluate_and_enforce_exit()
+            -> exit_lifecycle.plan()             exit intent journaled BEFORE placement
+            -> TradeLifecycleExecutor._execute_reduce()
+            -> settle()                          EXITED only on broker-proven flat
+  -> run_eod_closure()                           EOD + abort, same exit lifecycle
+  -> session_safety_verdict.evaluate_session_safety()
+  -> process exit code                           0 / 3 UNSAFE / 4 PENDING_EVIDENCE
+```
+
+Selection runs on a second, REST-fed path that has not been migrated:
+
+```
+MarketDataAdapter.build_snapshot()   REST; no quote_source is passed today
+  -> MarketSnapshot                  health_status, missing_fields
+  -> market_data_gate.assess_market_data()
+  -> _data_quality_permits_entry()
+```
+
+That both paths exist is a known one-authority gap, recorded in section 7.
+
+---
+
+## 5b. Authority per domain
+
+The single question this table answers is "if two parts of Bujji disagree
+about X, who is right?".
+
+| Domain | Authority | Enabled caller |
+| --- | --- | --- |
+| Exchange contracts | `bujji.broker.instrument_master` | composition root, universe builders |
+| Capture universe | `bujji.capture_universe.builder` | Gate 1 builder, runtime |
+| Raw tick evidence | `bujji.tick_journal.journal` | `FyersTickFeed`, via the runner |
+| Tick replay / integrity | `bujji.tick_journal.replay` + `manifest` | `production_runtime.tick_evidence` |
+| Typed quote | `bujji.market_perception.quote` | `FyersTickFeed`, `intraday_price_provider` |
+| Analytical snapshot | `bujji.market_perception.models` | `MarketDataAdapter` |
+| Market-data quality | `production_runtime.market_data_gate` | runner `_assess_data_quality`, `_current_leg_quotes` |
+| Price for a decision | `IntradayPriceProvider.get_quotes` | `_current_leg_quotes` |
+| Order lifecycle | `bujji.journal.position_group_journal` | execution bridge, exit lifecycle |
+| Broker position truth | `bujji.broker_truth` | position registry, EOD closure |
+| Session lifecycle | `production_runtime.session_lifecycle` | runner `_startup`, governor `_transition` |
+| Exit lifecycle | `production_runtime.exit_lifecycle` | EOD closure, lifecycle executor |
+| Orphan exposure | `production_runtime.orphan_exposure` | runner startup gate |
+| Session verdict | `production_runtime.session_safety_verdict` | `run()` exit code |
+
+---
+
+## 5c. Deployment model
+
+Three environments, and the separation is the point. Nothing promotes itself.
+
+| | Path | Runs | May trade |
+| --- | --- | --- | --- |
+| **Branch** | `/opt/bujji/work-m4` | tests only | never |
+| **Live checkout** | `/opt/bujji/app` | the enabled systemd units | paper only |
+| **Measurement** | `/opt/bujji/gate1-run` | one-shot Gate 1 unit | never; structurally incapable |
+
+Rules that hold today:
+
+- The branch is never executed by systemd. Promotion to the live checkout is a
+  deliberate, separate act that this repository does not perform.
+- The measurement harness imports the application read-only and is asserted
+  incapable of starting an order-capable session
+  (`gate1-run/prove_no_trading.py`, positive-controlled).
+- Entry-capable units are disabled AND condition-gated; the gate is an unmet
+  `ConditionPathExists`, so a manual start does not execute either.
+- `FYERS_POSITION_SCHEMA_VERIFIED` is `False` and no claim may assume otherwise.
+
+Real-money activation is not a mode that exists. It would require a separate,
+explicitly authorised configuration, and nothing in this repository creates one.
+
+---
+
+## 5d. Evidence gates
+
+A gate is a place the system refuses rather than guesses. Each names what it
+refuses on, and every one fails closed.
+
+| Gate | Refuses when | Consequence |
+| --- | --- | --- |
+| Token pre-flight | token cannot cover the session | units do not start |
+| Historical exposure | a prior day's group is unreconciled | entry blocked |
+| Orphan exposure | broker holds what no group claims | entry blocked, unsafe |
+| Prior fills | the day's strategy already deployed | entry blocked |
+| Market-data quality | snapshot health / provenance unknown | entry refused |
+| Quote field gate | required field missing, stale, or wrong provenance | price-dependent action refused |
+| Strategy lock | one strategy per day, across restarts | second entry refused |
+| Position schema | schema unverified | no real-capital claim |
+| Emergency brake | loss limit, or sustained blindness with a position | forced closure |
+| Closure settle | broker not CONFIRMED_FLAT | not EXITED |
+| Session verdict | open risk unproven flat, blind open risk, evidence gaps | exit 3 UNSAFE |
+
+An UNKNOWN answer is never converted to a safe one at any gate.
+
+---
+
+## 5e. Strategy selection: one authority, three implementations
+
+Three strategy selectors exist in this repository. Only one decides anything.
+
+| Module | Reachable from the trading entrypoint? | Role |
+|---|---|---|
+| `production_runtime/trading_session_governor/strategy_selector.py` | **yes** | **the only trade-decision authority** |
+| `trading_brain/strategy_selector/registry.py` (11 `StrategyDefinition`s) | no — not on the import closure at all | built, tested, never called |
+| `msi_strategy_selector/engine.py` | yes, but only from `intelligence_cycle_recorder` and `live_shadow_validation` | records what a selector *would* say; places nothing |
+
+Established by `tools/reachability.py` from `bujji_options_os_runner.py`, the
+module `bujji-options-os-trading.service` actually starts. The positive
+control is that the known caller (`session_governor.select_and_lock_strategy`)
+resolves; the negative is that `trading_brain.strategy_selector.registry` does
+not appear in a 487-module closure.
+
+**This is why there is no fourth registry.** The instruction to replace
+scattered conditionals with one auditable registry describes a system whose
+selection logic is spread across the runtime. Bujji's is not: it is one pure
+function of two inputs. The real defect was narrower and different — that
+function declared nothing about the shapes it chose between, recorded no
+rejected candidates, and returned a bare string. Adding a registry would have
+made three unreachable ones and left the authority untouched.
+
+### The declarative contract
+
+`STRATEGY_RULES` declares, per shape Bujji may sell: eligible trend and
+volatility regimes; vetoing conditions; whether the shape is structurally
+defined-risk and hedged; required generic data capabilities; and the named
+owner of its margin check, lot-size check, exit policy and EOD behaviour.
+
+`_evaluate_candidates()` scores **every** declared rule on every evaluation
+and returns a `StrategyCandidate` for each — status, reason code, detail — so
+a shape that was not chosen is accounted for rather than absent. These ride on
+`StrategySelectionResult.candidates` and are published to the session journal
+by `select_and_lock_strategy`.
+
+**The rules do not decide anything yet, deliberately.** `select_strategy()`'s
+branch bodies still produce the outcome; the rules produce an independent
+record for the same inputs, and
+`tests/test_strategy_rules_match_decision.py` asserts the two agree across the
+full cross product of the regime vocabulary in both risk modes. Making the
+branches *driven* by the table is a behaviour-preserving refactor that can
+only be proven safe once that equivalence test exists — so it is the next
+commit, not this one.
+
+### Capability requirements are unconfigured, not satisfied
+
+Rules declare generic capabilities (`QUOTE_LAST_PRICE`,
+`QUOTE_TWO_SIDED_MARKET`, `QUOTE_OPEN_INTEREST`) — never FYERS field names,
+never thresholds. No live payload has been measured. `available_capabilities`
+defaults to `None`, meaning **not evaluated**; it does not mean satisfied, and
+nothing in the runtime records that the feed is capable of anything. Once Gate
+1 measures which capabilities the feed genuinely supplies, supplying a policy
+set makes an unsatisfied requirement a refusal. A test asserts no rule names a
+broker-specific field.
+
+### The typed plan already exists downstream
+
+`msi_trade_construction.models.TradeConstructionAssessment` is already a fully
+typed plan: legs, expiry decision with reasoning, entry reference prices,
+expected credit/debit, risk profile, required margin (or the explicit reason
+margin is unavailable), supporting assessment IDs, an `Explanation`, a
+provenance string and a schema version. A new `TradePlan` dataclass carrying
+legs would be a second plan model.
+
+What is genuinely missing is not a type but a **binding**: nothing today joins
+the selection evidence (regime inputs, candidates, universe version,
+analytical snapshot references) to the construction assessment that resulted
+from it. That binding is the decision-evidence work, not a new model — see §7.
+
+## 5f. Paper-session acceptance, and the two gates around it
+
+A paper session is bracketed by two read-only tools. Neither can deploy,
+enable, start, place or modify anything; each prints a verdict an operator
+then acts on.
+
+**Before — `tools/paper_session_readiness.py`.** Refuses unless IDENTITY (the
+code that would run is the code that was verified), INHIBITION (nothing can
+start an order-capable session on its own), CONFIGURATION (`shadow_mode` is
+literally `true`) and EVIDENCE (the last package replays) all pass. Every
+check is PASS, FAIL or UNKNOWN, and **UNKNOWN is never PASS** — an assessment
+that ran no checks at all reports PENDING_EVIDENCE rather than READY, because
+a fail-open default in a readiness gate turns an unexamined system into an
+endorsed one.
+
+**After — `tools/decision_replay_verifier.py`.** Reports the strongest replay
+level the evidence *demonstrates*, by recomputation. Levels are strictly
+ordered, so proving eligibility replay while the analytical binding is absent
+earns level 1, not 3.
+
+Full criteria and the operator procedure: [docs/PAPER_SESSION_RUNBOOK.md](docs/PAPER_SESSION_RUNBOOK.md).
+
+**Acceptance is not profit.** A session is judged on whether it behaved
+correctly and can explain itself. A profitable session that cannot replay has
+failed; a zero-trade session that records why it declined every shape has
+passed. For a premium seller, zero trades is the common outcome.
+
+### The level-4 ceiling is structural
+
+Level 4 is unreachable today, and not because of a missing feature: the option
+chain that strikes were selected from is not part of the evidence package.
+Strikes cannot be re-derived from a book nobody wrote down. Whether a
+per-entry chain snapshot is worth its size is an operator decision about
+evidence volume, recorded here rather than patched quietly.
 
 ## 6. Deprecations
 
@@ -326,12 +611,102 @@ Recorded here so no reader has to infer it from silence.
   is journaled verbatim before any field is read, with a manifest and
   deterministic replay. Still unproven against a live feed: no tick has ever
   arrived in this configuration, so the journal has recorded nothing real.
+- ~~The runtime keeps only `symbol` + latest LTP.~~ **Resolved on the branch.**
+  A typed `Quote` carries every field the projection models, with per-field
+  provenance and monotonic freshness. The float store is retained until its
+  readers migrate; both are written from one callback under one lock.
+- ~~A blind cycle revalues against entry prices.~~ **Resolved.** An entry price
+  is execution evidence and can no longer become a market price. A blind cycle
+  produces no prices, suspends price-dependent management, records a typed
+  reason, and escalates through the existing emergency closure path.
 - **The broker boundary is not a boundary.** `self._broker` is hardcoded to
   `PaperBroker`; every `FyersBroker` is execution-neutered. The three-valued
-  UNKNOWN machinery is correct and untestable, because the read it guards
-  cannot fail. (M3)
-- **`FYERS_POSITION_SCHEMA_VERIFIED = False`** and remains false. No claim in
-  this repository may assume the FYERS position schema is verified.
+  UNKNOWN machinery is correct and largely untestable, because the read it
+  guards cannot fail.
+- **`FYERS_POSITION_SCHEMA_VERIFIED = False`** and remains false.
+- **Two market-data paths still exist, but they are now comparable.**
+  Position pricing runs on the tick path; regime derivation and strike
+  selection run on a REST-fed `MarketDataAdapter`. `quote_source` is now
+  supplied (2026-08-24), giving `live_quotes()` its first caller anywhere in
+  the repository, and `tick_rest_coverage()` records per snapshot how many
+  chain symbols the tick path held and where the prices differed.
+  **`build_snapshot` is unchanged and still REST-only** -- a test asserts it
+  does not consult the quote source.
+
+  **The startup ordering is fixed (2026-08-24).** The first regime derivation
+  used to run before the universe was subscribed, so the first snapshot of
+  every session was tick-blind by construction. Startup now orders:
+  intelligence broker -> tick source -> universe subscribed -> derivation.
+  Only the derivation call moved; the tick block still follows the regime
+  block, because its dependency was always on `self._intelligence_broker`
+  being built there, never on the regime having been derived.
+  `tools/reachability.py` aside, this is asserted structurally --
+  `tests/test_first_cycle_not_tick_blind.py` fails if the derivation drifts
+  back, if the feed is built after it, or if the broker drifts after the feed.
+
+  A startup-time subscription failure is rolled back to UNATTEMPTED rather
+  than latching, because `_ensure_universe_subscribed` returns early forever
+  once `_universe_error` is set -- correct at entry time, and a whole-session
+  entry refusal if a newly-added earlier attempt were allowed to latch.
+
+  **What still blocks the merge.** One reason now, not two: no tick has ever
+  arrived in this configuration. Making strike selection depend on the feed
+  would rest the highest-consequence input on something unmeasured. Monday
+  measures it; `tick_rest_coverage()` on the first snapshot is now capable of
+  reporting real coverage rather than a structural zero, which is what makes
+  that measurement worth reading.
+- ~~Strategy selection is conditionals, not a registry.~~ **Partly resolved,
+  and the original framing was wrong.** Selection was never scattered: it is
+  one pure function of two inputs. What it lacked was declaration and a record
+  of what it declined. `STRATEGY_RULES` now declares per shape its eligible
+  regimes, vetoes, risk structure, required generic capabilities and the named
+  owner of each downstream obligation, and every evaluation records a verdict
+  for every declared shape. **Still true:** the branch bodies, not the rules,
+  produce the outcome -- an equivalence test holds them together, but the
+  refactor to make the table authoritative has not been done.
+- **There is no typed trade plan binding selection to construction.**
+  `TradeConstructionAssessment` is already a full typed plan (legs, expiry
+  decision, risk profile, margin, explanation, provenance), so the gap is a
+  binding rather than a model: nothing joins the selection evidence to the
+  construction assessment that resulted from it. Adding a second plan type
+  carrying legs would be a duplicate, not a fix.
+- **Two strategy registries exist and neither decides anything.**
+  `trading_brain/strategy_selector/registry.py` (11 declarations) is absent
+  from the 487-module import closure entirely; `msi_strategy_selector` is
+  reached only by observation paths that record what a selector *would* say.
+  Both are live-looking code that no trade passes through.
+- **65 of 72 journals are orphaned.** Only `journal.position_group_journal`,
+  the three `tick_journal` modules and `execution_journal_bridge` are
+  reachable from the trading entrypoint. Decision evidence reaches disk by a
+  different route -- the event bus into `ShadowObservatoryRecorder` -- and the
+  22 purpose-built journals under `bujji/journal/` are almost entirely unused
+  by the runtime.
+- ~~`_current_leg_prices` is a dead second price accessor.~~ **Resolved
+  (2026-08-24).** Retired, and the P0 lock moved to the live path. Guarding
+  one named dead function was the weaker form of the guarantee: it said
+  nothing about a second accessor appearing later under a different name. The
+  lock is now stated three ways -- `_current_leg_quotes` cannot return entry
+  prices; NO method in the runner may return them as a price mapping; and
+  `LegPriceView` structurally discards prices on an invalid view, which had no
+  direct test at all despite being what the other two rest on. There is now
+  exactly one price accessor on the management path.
 - **Risk state is ephemeral.** Recomputed per cycle, never journaled; a restart
-  loses every risk decision and its inputs. (M4)
-- **No gate in this document has met a live feed.** All are structurally tested.
+  loses every risk decision and its inputs.
+- **No FYERS payload field is verified.** `PROVISIONAL_SDK_FIELD_MAP` is
+  unmeasured. A wrong key yields UNAVAILABLE, never a wrong number -- but no
+  bid/ask/OI/volume/depth logic may be written until Gate 1 measures the shape.
+- **No subscription-capacity figure is established.** Zero-gap coverage needs
+  ~1,465 concurrent subscriptions; whether the venue serves that is unknown.
+- **Decision replay is level 1, measured.** `tools/decision_replay_verifier.py`
+  run against the three real sealed packages: every eligibility check passes
+  (recorded regimes re-derive recorded selections exactly), and the awarded
+  level is still `INPUT_INTEGRITY`, because those packages carry no link from
+  a selection to the assessment it acted on. Sessions from `43fa860` carry
+  that link; no session has yet been run that does.
+- **Level 4 replay is structurally unreachable.** The option chain that
+  strikes were selected from is not part of the evidence package, so strikes
+  cannot be re-derived. Whether a per-entry chain snapshot is worth its size
+  is an operator decision, not a defect to patch quietly.
+- **No gate in this document has met a live feed.** All are structurally
+  tested. Green tests are not runtime proof, and this file makes no claim that
+  they are.

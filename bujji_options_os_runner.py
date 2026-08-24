@@ -67,6 +67,7 @@ import signal as _signal
 import sys
 import threading as _threading
 import uuid
+import time as _time
 from datetime import time as dt_time
 from pathlib import Path
 from typing import Any, Dict, Optional
@@ -84,6 +85,13 @@ EXIT_RUNTIME_ERROR = 2
 # non-zero exit as a unit failure, which is what fires OnFailure= ->
 # bujji-alert@ -> ALERTS.jsonl + the operator's phone.
 EXIT_UNSAFE_SESSION = 3
+
+# PENDING_EVIDENCE: nothing is known to be wrong, but the session could not
+# PROVE what it saw -- a verification that had to run did not reach a verdict.
+# A session that cannot produce its own evidence is not a successful session,
+# so it does not exit 0; a distinct code from UNSAFE so the operator reading
+# the alert does not have to guess which of the two they have.
+EXIT_PENDING_EVIDENCE = 4
 
 
 class ConfigurationError(Exception):
@@ -172,6 +180,50 @@ def _entry_failure_reason(cycle_result) -> str:
     if not getattr(cycle_result, "proposal", None):
         return "not constructed"
     return "constructed but not filled (no blocking reason reported)"
+
+
+# Why a cycle's prices may not be used. A typed reason, because "blind" was
+# one word covering four different operational situations.
+PRICE_REASON_OK = "OK"
+PRICE_REASON_NO_PROVIDER = "NO_PRICE_PROVIDER"
+PRICE_REASON_PROVIDER_FAILED = "PRICE_PROVIDER_FAILED"
+PRICE_REASON_QUALITY_REFUSED = "PRICE_QUALITY_REFUSED"
+
+
+class LegPriceView:
+    """This cycle's price evidence, and whether a decision may rest on it.
+
+    A PLAIN CLASS, deliberately. `@dataclass` resolves annotations through
+    `sys.modules[cls.__module__]`, which is None when this module is loaded by
+    path -- as several test modules do -- and the whole file then fails to
+    import. A dataclass here would buy nothing and cost the suite.
+
+    `prices` is EMPTY unless `valid`. There is deliberately no field holding a
+    fallback: the type itself makes "priced from something else" impossible to
+    express, which is stronger than a convention a reader has to know.
+    """
+
+    __slots__ = ("valid", "reason", "detail", "quotes", "prices",
+                 "priced_from_ticks", "quality")
+
+    def __init__(self, valid, reason, detail="", quotes=None, prices=None,
+                 priced_from_ticks=False, quality=None):
+        self.valid = bool(valid)
+        self.reason = reason
+        self.detail = detail
+        self.quotes = dict(quotes or {})
+        # Enforced, not merely documented: an invalid view carries no prices,
+        # whatever a caller passed.
+        self.prices = dict(prices or {}) if valid else {}
+        self.priced_from_ticks = bool(priced_from_ticks) and bool(valid)
+        self.quality = quality
+
+    def summary(self) -> dict:
+        return {"valid": self.valid, "reason": self.reason,
+                "detail": str(self.detail)[:300],
+                "legs_quoted": len(self.quotes),
+                "legs_priced": len(self.prices),
+                "priced_from_ticks": self.priced_from_ticks}
 
 
 def _emergency_brake(*, unrealized_pnl, realized_pnl, daily_loss_limit,
@@ -533,6 +585,7 @@ class OptionsOSRunner:
         self._recorder = None
         self._market_data_provider = None
         self._regime_provider = None
+        self._analytical_snapshot_ref = None
         self._intelligence_broker = None
         self._regime_as_of = None
         # No verdict until a cycle assesses one. The entry gate treats None
@@ -596,10 +649,16 @@ class OptionsOSRunner:
         # Real per-cycle unrealized P&L for the open position, appended
         # once per management pass -- the raw material for MFE/MAE.
         self._valuation_history: list = []
-        # Optional intraday tick source. When absent the runner falls
-        # back to entry prices and says so -- see _current_leg_prices().
+        # Optional intraday tick source. When absent, `_current_leg_quotes`
+        # returns an INVALID view carrying no prices at all -- it does not
+        # fall back to entry prices, and there is no longer a second accessor
+        # that could. (This comment described the removed P0 as current
+        # behaviour until 2026-08-24.)
         self._price_provider = None
         self._tick_feed = None  # set only by tick_source.type=websocket
+        # Evidence only: how much of the REST chain the tick path could
+        # have priced, and where they disagreed. Never a decision input.
+        self._tick_rest_coverage = None
         # UNIVERSE-FIRST SUBSCRIPTION (see _ensure_universe_subscribed).
         self._universe = None
         self._universe_requested = ()
@@ -791,6 +850,75 @@ class OptionsOSRunner:
                 "unknown in-flight orders. Inspect the position group journal and "
                 "the broker order book, then resolve or operator-correct them.")
 
+        # PRIOR TICK EVIDENCE, BEFORE ANY ENTRY.
+        #
+        # AFTER the unresolved-order refusal above: if this session is going to
+        # refuse outright over in-flight orders, there is nothing to inspect
+        # for. (It also keeps that raise adjacent to the recovery call it
+        # belongs to, which a windowed source assertion in
+        # tests/test_journaled_execution.py depends on -- the same 1200-char
+        # window this insertion pushed it out of once already.)
+        #
+        # A journal an earlier process left UNSEALED is that process's death
+        # certificate: `_shutdown()` runs from a `finally` and covers orderly
+        # termination only, so an unsealed file means SIGKILL, power loss or an
+        # OOM kill. `recover_unsealed` reports it INCOMPLETE by construction --
+        # what survived is real, but no inspection can establish it is all of
+        # it.
+        #
+        # Attached to the evidence chain before entry, so a session can never
+        # take new risk while silently carrying an unexplained prior death. A
+        # CORRUPT prior journal additionally makes THIS session unsafe: see
+        # session_safety_verdict.
+        from bujji.production_runtime.tick_evidence import inspect_prior_journals
+
+        self._prior_tick_evidence = inspect_prior_journals(
+            REPO_ROOT / "data" / "tick_journal", self._session_id, self._logger)
+        self._governor_result_summary["prior_tick_journals"] = (
+            self._prior_tick_evidence.to_dict())
+
+        # HISTORICAL UNRESOLVED EXPOSURE, AS A RECOVERY STATE.
+        #
+        # The journal can still record open exposure from an earlier trading
+        # day -- an exit that was never journaled leaves its group OPEN
+        # forever. Until now that surfaced as a margin-subsystem crash:
+        # `read_all_group_ids` has no date scope, the runner passes empty
+        # contract maps, `project_whole_book_to_margin_legs` raises on legs it
+        # cannot map, and the session reported "margin_snapshot unavailable".
+        #
+        # The refusal was right; the shape was wrong. It named nothing an
+        # operator could act on and it happened by accident. This makes it
+        # explicit, names the groups and legs, and carries the reconciliation
+        # a person has to perform -- and it runs HERE, at startup, so entry is
+        # refused before the margin path is ever reached.
+        from bujji.production_runtime.historical_exposure import (
+            inspect as _inspect_historical_exposure)
+
+        self._historical_exposure = _inspect_historical_exposure(
+            self._journal, self._as_of_date,
+            _position_truth_for(self).read(), self._logger)
+        self._governor_result_summary["historical_exposure"] = (
+            self._historical_exposure.to_dict())
+
+        # ORPHAN EXPOSURE, RECONCILED BEFORE ENTRY.
+        #
+        # A previous process may have found the broker holding a position no
+        # journal group claims, flattened it, and died before the flatten was
+        # confirmed. That record is session-scoped -- there is no position
+        # group to attach it to -- so `historical_exposure` above, which walks
+        # position groups, cannot see it. This runs beside it and asks the
+        # same question of the other scope.
+        #
+        # It reads EVERY session scope, not just this one's: an orphan is
+        # exactly the thing a prior session failed to finish.
+        from bujji.production_runtime.orphan_exposure import (
+            inspect as _inspect_orphan_exposure)
+
+        self._orphan_exposure = _inspect_orphan_exposure(
+            self._journal, _position_truth_for(self).read(), self._logger)
+        self._governor_result_summary["orphan_exposure"] = (
+            self._orphan_exposure.to_dict())
+
         # THE DAY'S ONE STRATEGY, ACROSS A RESTART.
         #
         # AFTER the unresolved-order refusal above, deliberately: if this
@@ -916,8 +1044,16 @@ class OptionsOSRunner:
         # did not -- through the SAME broker-truth placement function, so
         # there is exactly one order path for entry, exit and closure.
         self._exit_place_fn = _exit_place_fn
+        # journal + session_id: every exit this executor places is journaled
+        # BEFORE placement and reconciled against prior attempts. Without them
+        # it falls back to unjournaled placement, which is the defect M4b
+        # closes -- tests/test_executor_journals_exits.py ratchets that the
+        # production runner supplies them.
         self._executor = TradeLifecycleExecutor(self._broker, self._registry, self._lifecycle_runtime,
                                                 place_fn=_exit_place_fn,
+                                                journal=self._journal,
+                                                session_id=self._session_id,
+                                                logger=self._logger,
                                                  event_bus=self._root.event_bus)
 
         mandatory_exit_time = None
@@ -951,6 +1087,37 @@ class OptionsOSRunner:
             exit_policy_config=exit_policy_config, clock=self._clock, event_bus=self._root.event_bus,
             defined_risk_only=defined_risk_only,
         )
+
+        # M4: BIND THE DURABLE LIFECYCLE AUTHORITY.
+        #
+        # The governor's in-memory tracker is now a cache. Every transition it
+        # makes is journaled FIRST, into the same position_group_events stream
+        # that carries position lifecycle, as a SESSION_TRANSITION under a
+        # SESSION: identity. Without this binding the governor still runs, but
+        # nothing is durable and the session cannot be reconstructed after a
+        # restart -- which `lifecycle_unjournaled_count()` reports and the
+        # safety verdict refuses to certify.
+        self._governor.bind_lifecycle_journal(
+            self._journal, self._session_id, self._clock, self._logger)
+
+        # The session's own first transition, journaled like every other.
+        from bujji.production_runtime.session_lifecycle import record_transition
+        from bujji.production_runtime.trading_session_governor.session_trading_state import (
+            TradingSessionState as _TSS)
+
+        try:
+            record_transition(
+                self._journal, self._session_id, _TSS.INITIALIZING,
+                _TSS.ANALYSING_MARKET, cause="session_start",
+                evidence_ref=f"startup:{self._as_of_date}",
+                clock=self._clock, logger=self._logger)
+        except Exception as exc:  # noqa: BLE001 -- recorded, never fatal to startup
+            self._logger.critical(
+                "LIFECYCLE -- could not journal the session's first transition "
+                "(%s: %s). This session cannot be reconstructed after a restart.",
+                type(exc).__name__, exc)
+            self._governor_result_summary["lifecycle_journal_error"] = (
+                f"{type(exc).__name__}: {exc}")
 
         shadow_sessions_root = REPO_ROOT / artifacts_cfg.get("shadow_sessions_root", "shadow_sessions")
         self._store = SessionStore(shadow_sessions_root, self._session_id)
@@ -1045,6 +1212,11 @@ class OptionsOSRunner:
                 )
             self._market_data_provider = ReplayChainProvider(bhavcopy_path=bhavcopy_path, underlying=underlying)
 
+        # DEFERRED, NOT SKIPPED. The thesis derivation used to run here, inside
+        # this block. It now runs after the tick source exists and the universe
+        # is subscribed -- see the block at the end of this method. Declared
+        # before the branch so no path can reach the check with it unset.
+        derive_thesis_regime = False
         regime_cfg = providers_cfg.get("regime", {})
         regime_type = (regime_cfg.get("type") or "human_supplied").lower()
         if regime_type == "market_thesis":
@@ -1077,7 +1249,7 @@ class OptionsOSRunner:
             # LIVE. The runner is the only place that knows which broker it
             # built, so it is the only place that can say.
             self._intelligence_origin = "REPLAY"
-            self._regime_provider = self._build_market_thesis_regime_provider()
+            derive_thesis_regime = True
         elif regime_type == "market_thesis_live":
             # The LIVE equivalent needs no new facade: FyersBroker already
             # exposes the same six read-only market-data methods the
@@ -1111,7 +1283,7 @@ class OptionsOSRunner:
             ))
             import asyncio as _asyncio
             _asyncio.run(self._intelligence_broker.connect())
-            self._regime_provider = self._build_market_thesis_regime_provider()
+            derive_thesis_regime = True
         else:
             self._regime_provider = HumanSuppliedRegimeProvider(
                 trend_regime=regime_cfg.get("trend_regime"), volatility_regime=regime_cfg.get("volatility_regime"),
@@ -1231,10 +1403,18 @@ class OptionsOSRunner:
                 "TICK JOURNAL open at %s -- every payload is recorded verbatim "
                 "before any field is read from it.", self._tick_journal.path)
 
+            # ONE FEED, ONE JOURNAL, ONE PROJECTION.
+            #
+            # `journal` makes the verbatim callback durable BEFORE any field is
+            # read; `session_id` travels onto every typed quote so a decision's
+            # evidence can be tied back to the session that captured it. No
+            # second feed, no second store: the same callback produces both the
+            # journal record and the quote.
             self._tick_feed = FyersTickFeed(
                 app_id, token, self._logger,
                 log_path=str(REPO_ROOT / "logs"),
-                journal=self._tick_journal)
+                journal=self._tick_journal,
+                session_id=self._session_id)
             self._tick_feed.start()
             watchdog = TickSilenceWatchdog(
                 silence_threshold_seconds=float(tick_cfg.get("silence_threshold_seconds", 120.0)),
@@ -1280,13 +1460,79 @@ class OptionsOSRunner:
                 "construction. Test/replay use only; never a live campaign.")
         else:
             self._logger.warning(
-                "Tick source: NONE. Every management cycle will be BLIND -- positions will be "
-                "revalued against their own entry prices, so unrealized P&L is 0 by construction "
-                "and no stop-loss or profit-target can fire. Set providers.tick_source.type."
+                "Tick source: NONE. Every management cycle will be BLIND -- no price "
+                "can be obtained, so the cycle produces NO valuation, suspends "
+                "price-dependent management and escalates to the emergency brake. "
+                "Positions are NOT revalued against their entry prices; that was the "
+                "P0 removed in 21742eb, and this warning described it as current "
+                "behaviour until 2026-08-24. Set providers.tick_source.type."
             )
 
         self._session_cfg = session_cfg
 
+        # ---- THE FIRST CYCLE IS NO LONGER TICK-BLIND. ----
+        #
+        # The thesis derivation used to run inside the regime block ABOVE,
+        # before the tick source was constructed and long before the universe
+        # was subscribed -- subscription happened in the entry gate. So the
+        # first MarketSnapshot of every session was built with no tick path in
+        # existence, and `tick_rest_coverage()` could only ever report zero
+        # coverage on it. That was structural, not a timing accident: no amount
+        # of waiting would help, because nothing had subscribed.
+        #
+        # WHY THIS IS SAFE TO MOVE. The tick block above is documented as
+        # constructed "AFTER the regime block, on purpose", and that is true --
+        # but the dependency is on `self._intelligence_broker`, which is built
+        # in the regime block and STILL IS. It was never a dependency on the
+        # regime having been DERIVED. Only the derivation call moved; the
+        # broker construction did not.
+        #
+        # Ordering now: intelligence broker -> tick source -> universe
+        # subscribed -> derivation. The derivation runs a warm-up of spaced
+        # spot polls (minutes, when configured), so ticks accumulate while it
+        # warms rather than arriving after every decision was already made.
+        # `_await_market_open()` has already run by here (early in _startup),
+        # so this subscribes into an open market, not a closed one.
+        if derive_thesis_regime:
+            self._pre_subscribe_for_first_derivation()
+            self._regime_provider = self._build_market_thesis_regime_provider()
+
+    def _pre_subscribe_for_first_derivation(self) -> None:
+        """Subscribe the universe before the first snapshot, WITHOUT letting a
+        startup-time failure latch.
+
+        `_ensure_universe_subscribed` is idempotent by an early return on
+        `_universe_error` being set, which is exactly right at entry time and
+        exactly wrong here: a transient failure at startup would latch the
+        error and refuse entry for the whole session, on a path that
+        previously had no opportunity to fail at all. So a failed pre-subscribe
+        is rolled back to UNATTEMPTED and the entry gate retries it on its own
+        terms, reaching the identical behaviour this method never had.
+
+        A SUCCESSFUL pre-subscribe is deliberately left latched: that is the
+        idempotency doing its job, and the entry gate's later call becomes the
+        no-op it should be rather than a second subscription.
+        """
+        try:
+            self._ensure_universe_subscribed()
+        except Exception as exc:  # noqa: BLE001 -- see below; never fatal at startup
+            self._logger.warning(
+                "PRE-SUBSCRIBE -- universe subscription raised at startup (%s: %s). "
+                "The entry gate will attempt it again.", type(exc).__name__, exc)
+        if self._universe is None:
+            # Roll back to UNATTEMPTED so the entry gate is not answering a
+            # question this earlier, more fragile attempt already failed.
+            if self._universe_error is not None:
+                self._logger.warning(
+                    "PRE-SUBSCRIBE -- could not subscribe the universe before the "
+                    "first derivation (%s). Cleared so the entry gate retries; the "
+                    "first snapshot will be tick-blind, which is recorded rather "
+                    "than assumed.", self._universe_error)
+                self._universe_error = None
+            return
+        self._logger.info(
+            "PRE-SUBSCRIBE -- universe subscribed BEFORE the first market snapshot; "
+            "the first derivation can see tick evidence.")
 
     def _warm_up_observation_memory(self, adapter):
         """Poll real spot, gate the result for sampling stability, and
@@ -1383,8 +1629,48 @@ class OptionsOSRunner:
         # replay broker silently produced snapshots labelled live. Origin is
         # now carried from the construction site that knows the truth.
         origin = getattr(self, "_intelligence_origin", None)
+        # ONE MARKET-DATA PATH, MEASURED BEFORE IT IS MERGED.
+        #
+        # Bujji reads the market twice: this REST-fed snapshot feeds regime
+        # derivation and strike selection, and a websocket tick path feeds
+        # position pricing. `quote_source` is what would let the adapter see
+        # the tick path -- it has existed on MarketDataAdapter all along, and
+        # was never supplied, so `live_quotes()` had zero callers anywhere in
+        # the repository and the two paths could not even be compared.
+        #
+        # IT IS WIRED FOR EVIDENCE, NOT FOR DECISIONS. Nothing in the snapshot
+        # is built from it; `build_snapshot()` is unchanged. It exists so
+        # `tick_rest_coverage()` can answer the question that has to be
+        # answered before a merge is honest: of the chain REST returned, how
+        # many symbols did the tick path hold, and did they agree?
+        #
+        # LAZY ON PURPOSE. `self._tick_feed` is assigned AFTER this method
+        # first runs (the regime provider is built at setup, the tick provider
+        # some 60 lines later), and the universe is not subscribed until the
+        # entry gate. So the first derivation of a session is tick-blind by
+        # construction and this returns {}. On a continuous session's later
+        # cycles the feed exists and has been subscribed, and the same closure
+        # then reports real coverage. Reading the attribute at call time
+        # rather than binding it here is what makes both true.
+        #
+        # THE FEED, NEVER THE PROVIDER. `WebsocketTickProvider.get_quotes()`
+        # falls back to REST and labels the result REST_FALLBACK. Sourcing
+        # this from the provider would compare REST against REST and report
+        # perfect agreement -- the most misleading possible answer.
+        def _tick_quotes(symbols):
+            feed = getattr(self, "_tick_feed", None)
+            if feed is None:
+                return {}
+            try:
+                everything = feed.all_quotes()
+            except Exception:  # noqa: BLE001 -- evidence collection never ends a session
+                return {}
+            wanted = set(symbols)
+            return {sym: q for sym, q in everything.items() if sym in wanted}
+
         adapter = MarketDataAdapter(
             broker, self._clock, underlying=self._root.underlying,
+            quote_source=_tick_quotes,
             **({"source": f"fyers_{origin.lower()}"} if origin else {}))
 
         # WARM-UP + STABILITY GATE (opt-in via regime.warmup).
@@ -1420,6 +1706,16 @@ class OptionsOSRunner:
             underlying=self._root.underlying)
 
         snapshot = asyncio.run(adapter.build_snapshot())
+        # Measured beside the snapshot, never folded into it. On the first
+        # derivation this records tick_covered=0 with tick_source_wired=True,
+        # which is the honest reading: a feed was available to ask and had
+        # nothing yet, as distinct from no feed being wired at all.
+        try:
+            self._tick_rest_coverage = adapter.tick_rest_coverage(snapshot)
+            self._governor_result_summary["tick_rest_coverage"] = self._tick_rest_coverage
+        except Exception as exc:  # noqa: BLE001 -- a measurement never ends a session
+            self._logger.warning("tick/REST coverage measurement failed (%s)", exc)
+            self._tick_rest_coverage = None
         candles = asyncio.run(broker.get_recent_candles(self._root.underlying, 5, 75))
         # D-5: record_cycle RETURNS the understanding layer's own honest
         # record of this cycle's conclusions. It used to be called for its
@@ -1463,6 +1759,16 @@ class OptionsOSRunner:
             evidence_integrity=evidence_integrity,
             data_quality=self._assess_data_quality(snapshot, evidence_integrity),
         )
+        # THE BACK-REFERENCE THAT MAKES REPLAY POSSIBLE. The thesis artifact
+        # already records `regime_handed_to_selector`, so thesis -> regime is
+        # linked. The reverse was not: a selection record named a regime and
+        # nothing else, and matching it back to the thesis meant guessing by
+        # regime VALUE -- ambiguous exactly when it matters, since a session
+        # routinely records several cycles carrying the identical regime (the
+        # real 2026-08-20 package has three UNKNOWN/EXPANSION selections).
+        # Carrying the assessment_id forward makes the link an identity rather
+        # than a coincidence. Nothing decides from it; it is evidence only.
+        self._analytical_snapshot_ref = getattr(thesis, "assessment_id", None)
         return MarketThesisRegimeProvider(thesis, volatility_regime)
 
     def _assess_data_quality(self, snapshot, evidence_integrity) -> Optional[Dict[str, Any]]:
@@ -2644,6 +2950,33 @@ class OptionsOSRunner:
         # This blocks entry; it does not end the session. The process still
         # manages and closes whatever it holds, and still produces its
         # report -- the same shape the deprecated bot's DONE_FOR_DAY had.
+        # HISTORICAL EXPOSURE FIRST. An account that cannot be reconciled
+        # against its own record may not take new risk, whatever every later
+        # gate would say.
+        historical = getattr(self, "_historical_exposure", None)
+        if historical is not None and historical.blocks_entry:
+            self._logger.critical(
+                "ENTRY REFUSED -- historical unresolved exposure. %s",
+                historical.operator_instructions()
+                or f"inspection did not run ({historical.error})")
+            self._block_entry("HISTORICAL_UNRESOLVED_EXPOSURE")
+            return False
+
+        # ORPHAN EXPOSURE, beside historical exposure and for the same reason:
+        # an account that cannot be reconciled against its own record may not
+        # take new risk. The two gates cover different scopes -- position
+        # groups above, session-scoped orphan records here -- and neither
+        # substitutes for the other.
+        orphans = getattr(self, "_orphan_exposure", None)
+        if orphans is not None and orphans.blocks_entry:
+            self._logger.critical(
+                "ENTRY REFUSED -- unresolved orphan exposure. %s",
+                orphans.operator_instructions()
+                or orphans.detail
+                or f"inspection did not run ({orphans.error})")
+            self._block_entry("ORPHAN_EXPOSURE_UNRESOLVED")
+            return False
+
         prior_fills = getattr(self, "_prior_fills_today", None)
         if prior_fills:
             self._logger.critical(
@@ -2785,7 +3118,9 @@ class OptionsOSRunner:
         if not self._data_quality_permits_entry():
             return False
 
-        selection = self._governor.select_and_lock_strategy(trend_regime, volatility_regime)
+        selection = self._governor.select_and_lock_strategy(
+            trend_regime, volatility_regime,
+            analytical_snapshot_ref=getattr(self, "_analytical_snapshot_ref", None))
         self._governor_result_summary["strategy_selected"] = selection.selected_strategy
         if selection.selected_strategy is None:
             self._logger.info("No strategy for regime (trend=%s, vol=%s) -- no entry this cycle.",
@@ -3375,61 +3710,63 @@ class OptionsOSRunner:
 
         pg_id = self._governor._position_group_id
         as_of = self._clock().isoformat()
-        prices, priced_from_ticks = self._current_leg_prices(as_of)
-        if priced_from_ticks:
+        view = self._current_leg_quotes(as_of)
+        priced_from_ticks = view.priced_from_ticks
+        self._governor_result_summary["last_price_view"] = view.summary()
+
+        if view.valid:
             self._priced_from_ticks_cycles += 1
             self._consecutive_blind_cycles = 0
         else:
-            # LOUD, every time. A blind cycle is a cycle where this
-            # position was revalued against its own ENTRY prices, so
-            # unrealized P&L is 0 by construction and no stop, target or
-            # thesis-invalidation could possibly fire. Historically this
-            # degraded silently and a fully blind session was
-            # indistinguishable from a healthy one in the logs.
+            # NO SUBSTITUTION. Previously this cycle revalued the position
+            # against its own ENTRY prices, which made unrealized P&L zero by
+            # construction, made every stop and target incapable of firing,
+            # and -- through `leg.current_price` -- handed entry prices to the
+            # governor as the reference price for a forced exit.
+            #
+            # The cycle is now simply INVALID for price-dependent decisions.
+            # Nothing is valued, nothing is priced, and the blind counter
+            # advances toward the emergency brake below, which is the
+            # already-hardened escalation for exactly this state.
             self._blind_cycles += 1
-            # The blind-brake counts only cycles where a tick source EXISTS
-            # and failed to price the book -- that is the dangerous state
-            # (we expected sight and lost it). A session with NO tick source
-            # configured is blind BY DESIGN (replay dates with no captured
-            # ticks -- see _current_leg_prices' own docstring) and keeps the
-            # long-established flagged-not-terminated behaviour.
             if self._price_provider is not None:
                 self._consecutive_blind_cycles = getattr(self, "_consecutive_blind_cycles", 0) + 1
             self._logger.warning(
-                "%s -- BLIND CYCLE: revalued from ENTRY prices, not market prices. "
-                "Unrealized P&L is 0 by construction; stop-loss/profit-target CANNOT fire "
-                "this cycle. (blind=%d priced_from_ticks=%d)",
-                stage_label, self._blind_cycles, self._priced_from_ticks_cycles,
-            )
-        ts_map = {symbol: as_of for symbol in prices}
-        valuations = asyncio.run(
-            self._portfolio_engine.revalue_all(prices, self._clock, price_timestamps=ts_map)
-        )
-        valuation = valuations.get(pg_id)
-        if valuation is not None and self._canonical_position_id is not None and priced_from_ticks:
-            # Capture the excursion, pass by pass -- but ONLY for cycles
-            # priced from real market data. A blind cycle's unrealized
-            # P&L is 0 because the position was compared against its own
-            # entry price, not because the market did not move; banking
-            # that 0 would turn "we never looked" into "it never moved"
-            # and produce an MFE/MAE that reads as measured when nothing
-            # was measured. `None` from a partially-priced group is still
-            # preserved -- unknown, not flat -- and compute_mfe_mae drops it.
-            self._valuation_history.append(getattr(valuation, "total_unrealized_pnl", None))
-        if valuation is None:
-            self._logger.warning("%s -- no valuation available for %s", stage_label, pg_id)
-            return
+                "%s -- PRICE PATH INVALID (%s): %s. No valuation, no stop, no "
+                "target, no adjustment this cycle. Entry prices are NOT "
+                "substituted. (blind=%d priced_from_ticks=%d consecutive=%d)",
+                stage_label, view.reason, view.detail, self._blind_cycles,
+                self._priced_from_ticks_cycles,
+                getattr(self, "_consecutive_blind_cycles", 0))
+            self._governor_result_summary.setdefault("price_path_invalid", []).append(
+                {"at": as_of, "reason": view.reason, "detail": view.detail[:200]})
 
-        # Snapshot the group's open positions BEFORE any exit runs -- and
-        # before the BRAKE, not after it. Both the emergency route and the
-        # ordinary route need this same list to attribute their fills, and
-        # taking it below the brake meant the emergency route had no list at
-        # all and therefore captured nothing (see _execute_emergency_close).
-        # After an exit executes those positions are flat and the registry
-        # returns nothing, so reading it afterwards silently drops every real
-        # exit fill and leaves the outcome record with no P&L.
+        valuation = None
+        if view.valid:
+            ts_map = {symbol: as_of for symbol in view.prices}
+            valuations = asyncio.run(
+                self._portfolio_engine.revalue_all(view.prices, self._clock,
+                                                   price_timestamps=ts_map)
+            )
+            valuation = valuations.get(pg_id)
+            if valuation is not None and self._canonical_position_id is not None:
+                # Excursion is recorded only for cycles priced from real
+                # market data -- which is now the only kind of cycle that
+                # produces a valuation at all.
+                self._valuation_history.append(
+                    getattr(valuation, "total_unrealized_pnl", None))
+
+        # SNAPSHOT BEFORE THE BRAKE, AND ON BOTH PATHS. The emergency route
+        # needs this list to attribute its fills, and an invalid-price cycle
+        # is precisely when that route runs.
         positions_before_exit = asyncio.run(self._registry.positions_for_group(pg_id))
         symbols_before_exit = [p["symbol"] for p in positions_before_exit]
+
+        if valuation is None and view.valid:
+            # A valid price path that still yielded no valuation: the group is
+            # genuinely absent. Unchanged behaviour.
+            self._logger.warning("%s -- no valuation available for %s", stage_label, pg_id)
+            return
 
         # -- EMERGENCY BRAKE (Master Plan D-6) -- evaluated every pass,
         # BEFORE the ordinary exit policy.
@@ -3458,6 +3795,18 @@ class OptionsOSRunner:
             max_consecutive_blind_cycles=self._config.get("position_management", {}).get(
                 "max_consecutive_blind_cycles", 3),
         )
+        if brake_reason is None and valuation is None:
+            # Blind, but not yet at the brake threshold. The position stays
+            # open and UNVALUED -- deliberately. Every price-dependent
+            # decision below needs a valuation, and running them against
+            # nothing is how the substitution defect existed in the first
+            # place. The consecutive counter advances; the brake escalates.
+            self._logger.warning(
+                "%s -- price path invalid and brake not yet armed "
+                "(consecutive=%d). Position management SUSPENDED this cycle.",
+                stage_label, getattr(self, "_consecutive_blind_cycles", 0))
+            return
+
         if brake_reason is not None:
             self._logger.critical("%s -- EMERGENCY CLOSE: %s", stage_label, brake_reason)
             self._governor_result_summary["emergency_close_reason"] = brake_reason
@@ -3794,41 +4143,76 @@ class OptionsOSRunner:
             return None, answer.detail
         return answer.is_flat, answer.detail
 
-    def _current_leg_prices(self, as_of: str):
-        """Live per-leg prices for this cycle, and whether they are real
-        ticks. Returns `(prices, priced_from_ticks)`.
+    def _current_leg_quotes(self, as_of: str) -> "LegPriceView":
+        """Typed quotes for this cycle, and whether they may price a decision.
 
-        Without a price provider this returns the ENTRY prices, which is
-        the pre-tick-feed behaviour: unrealized P&L reads flat all
-        session. That fallback is deliberate and logged rather than
-        removed -- a replay date with no captured ticks genuinely has no
-        intraday evidence, and inventing some would be worse than
-        reporting flat. `priced_from_ticks` records which happened, so a
-        session's MFE/MAE can never be mistaken for measured excursion
-        when it was only ever the entry price echoed back.
+        WHAT THIS REPLACES, AND WHY IT WAS A P0.
 
-        A leg the provider cannot price is dropped rather than backfilled
-        from its entry price: `revalue()` already refuses to value a group
-        whose legs are not all priced, and a half-real valuation is worse
-        than an honestly absent one.
+        The previous version returned `dict(self._entry_prices)` on three
+        paths -- no provider, provider raised, incomplete coverage -- and a
+        boolean saying so. That boolean was consulted for excursion
+        statistics and for the blind-cycle counter, and NOWHERE ELSE. The
+        entry prices themselves flowed on into `revalue_all()`, became
+        `leg.current_price`, and were read by the session governor as
+        `reference_prices` for a forced exit -- directly under a comment
+        stating "Real current market price per leg ... never the entry
+        price". The guarantee was true only on the branch nobody checked.
+
+        The consequence was not a bad number. An exit priced at entry
+        realises approximately zero P&L however far the market has actually
+        moved, and every stop and target compares the position against
+        itself, so none of them can ever fire.
+
+        AN ENTRY PRICE IS EXECUTION EVIDENCE, NOT A MARKET PRICE. It is still
+        held on `self._entry_prices` and still used for what it legitimately
+        proves -- what we paid. It no longer leaves this method under any
+        condition, and `test_entry_price_is_never_market_price` asserts that
+        structurally.
+
+        Returns a `LegPriceView`. When `valid` is False there are no prices:
+        the caller must not value, must not price an exit, and must escalate.
         """
-        if self._price_provider is None or not self._contracts_by_symbol:
-            return dict(self._entry_prices), False
-        try:
-            ticked = self._price_provider.get_prices(self._contracts_by_symbol, as_of)
-        except Exception as exc:  # noqa: BLE001 -- market data never kills a session.
-            self._logger.exception("tick provider failed, falling back to entry prices: %s", exc)
-            return dict(self._entry_prices), False
+        from bujji.market_perception.quote import SOURCE_TICK
+        from bujji.production_runtime.market_data_gate import assess_quote_fields
 
-        priced = {sym: px for sym, px in ticked.items() if px is not None}
-        if len(priced) != len(self._entry_prices):
-            self._logger.warning(
-                "tick feed priced %d/%d legs at %s -- falling back to entry prices for this cycle "
-                "(a partially-priced group cannot be valued honestly).",
-                len(priced), len(self._entry_prices), as_of,
-            )
-            return dict(self._entry_prices), False
-        return priced, True
+        if self._price_provider is None or not self._contracts_by_symbol:
+            return LegPriceView(valid=False, reason=PRICE_REASON_NO_PROVIDER,
+                                detail="no tick provider configured for this session")
+        try:
+            quotes = self._price_provider.get_quotes(self._contracts_by_symbol, as_of)
+        except Exception as exc:  # noqa: BLE001 -- market data never kills a session.
+            self._logger.exception("tick provider failed: %s", exc)
+            return LegPriceView(valid=False, reason=PRICE_REASON_PROVIDER_FAILED,
+                                detail=f"{type(exc).__name__}: {exc}")
+
+        # EVERY leg, or none. `revalue()` already refuses a partially priced
+        # group; asking the gate for the whole set makes the refusal explicit
+        # and gives it a typed reason instead of a silent substitution.
+        required = list(self._entry_prices)
+        allowed = tuple(self._config.get("position_management", {}).get(
+            "allowed_price_sources", (SOURCE_TICK,))) if isinstance(
+                getattr(self, "_config", None), dict) else (SOURCE_TICK,)
+        verdict = assess_quote_fields(
+            quotes, ["ltp"], now_mono=_time.monotonic(),
+            max_age_seconds=float(self._config.get("position_management", {}).get(
+                "max_price_age_seconds", 90.0))
+            if isinstance(getattr(self, "_config", None), dict) else 90.0,
+            allowed_sources=allowed, required_symbols=required)
+
+        if not verdict.may_trade:
+            return LegPriceView(
+                valid=False, reason=PRICE_REASON_QUALITY_REFUSED,
+                detail="; ".join(verdict.reasons[:4]),
+                quotes=dict(quotes), quality=verdict)
+
+        # DERIVED HERE, LOCALLY, AND ONLY FROM GATE-PASSED QUOTES. This is the
+        # single place a float is taken out of a quote on the management path.
+        prices = {sym: float(quotes[sym].ltp) for sym in required}
+        return LegPriceView(valid=True, reason=PRICE_REASON_OK,
+                            detail=f"{len(prices)} leg(s) priced from "
+                                   f"{verdict.origin or 'live ticks'}",
+                            quotes=dict(quotes), prices=prices,
+                            priced_from_ticks=True, quality=verdict)
 
     def _capture_exit_fills(self, exit_symbols, result) -> None:
         """Harvest REAL per-leg exit prices from an execution that
@@ -4591,6 +4975,18 @@ class OptionsOSRunner:
         """
         journal = getattr(self, "_tick_journal", None)
         if journal is None:
+            # SAY SO, rather than leaving the key absent. A configuration with
+            # no websocket (replay, store-backed) legitimately records no
+            # ticks -- but silence and "no journal was expected" are different
+            # claims, and only the session itself can tell them apart. Leaving
+            # the key absent made the verdict infer legitimacy from silence,
+            # which a negative control caught: a session that recorded nothing
+            # at all still certified.
+            self._governor_result_summary["tick_journal"] = {
+                "expected": False,
+                "detail": "no tick feed in this configuration; no ticks were "
+                          "recorded and none were expected",
+            }
             return
         try:
             from bujji.tick_journal import JournalManifest, MANIFEST_VERSION
@@ -4630,6 +5026,30 @@ class OptionsOSRunner:
                 "TICK JOURNAL sealed -- %d records, %d dropped, complete=%s, "
                 "manifest at %s",
                 stats.written, stats.dropped, stats.complete, manifest_path)
+
+            # THE WRITER'S CLAIM IS NOT EVIDENCE. Everything above is the
+            # journal describing itself -- "I was offered N, wrote N, dropped
+            # 0". Nothing had opened the file back up. A journal truncated
+            # after its last fsync, or altered on disk, self-reports faithful.
+            #
+            # This reads it back through `read_journal`, which re-derives the
+            # content hash, checks it against the manifest, verifies the
+            # sequence has no gaps, and compares the count to what the manifest
+            # said. The verdict below reads `verified`, not `faithful`.
+            from bujji.production_runtime.tick_evidence import (
+                reproduce_recorded_ticks, verify_sealed_journal)
+
+            verified = verify_sealed_journal(journal.path, self._logger)
+            self._governor_result_summary["tick_journal"]["verified"] = verified.to_dict()
+
+            # POST-SESSION AUDIT, after all trading has ended. Reads the sealed
+            # journal back and proves the recorded input stream reproduces.
+            # Holds no broker and constructs no order: it takes a path and
+            # returns a report, so it cannot trigger or repeat an order.
+            reproduced, replay_report = reproduce_recorded_ticks(
+                journal.path, self._logger)
+            replay_report["reproduced"] = reproduced
+            self._governor_result_summary["tick_journal"]["replay"] = replay_report
         except Exception as exc:  # noqa: BLE001 -- teardown must not mask the session result
             self._logger.critical(
                 "TICK JOURNAL could not be sealed (%s: %s) -- the session's tick "
@@ -4832,6 +5252,7 @@ def _run_session(args, as_of_date: str) -> int:
         )
 
         verdict = evaluate_session_safety(summary)
+        summary["session_safety_verdict"] = verdict.as_dict()
         if not verdict.safe:
             logger.critical(
                 "SESSION ENDED UNSAFE (%d reason(s)) -- exiting %d so systemd "
@@ -4839,6 +5260,17 @@ def _run_session(args, as_of_date: str) -> int:
                 len(verdict.reasons), EXIT_UNSAFE_SESSION,
                 " | ".join(verdict.reasons))
             return EXIT_UNSAFE_SESSION
+        # SAFE IS NOT THE SAME AS CERTIFIED. Nothing went wrong, but the
+        # session could not establish its own evidence, so it must not be
+        # reported as a success.
+        if verdict.pending_evidence:
+            logger.critical(
+                "SESSION ENDED PENDING_EVIDENCE (%d reason(s)) -- nothing is known "
+                "to be wrong, but this session cannot prove what it saw, so it is "
+                "not certified. Exiting %d: %s",
+                len(verdict.pending_reasons), EXIT_PENDING_EVIDENCE,
+                " | ".join(verdict.pending_reasons))
+            return EXIT_PENDING_EVIDENCE
         return EXIT_OK
     except (ConfigurationError, MissingRegimeInputError, MarketDataUnavailableError) as exc:
         logging.getLogger("bujji-options-os-shadow").error("Configuration/input failure: %s", exc)
