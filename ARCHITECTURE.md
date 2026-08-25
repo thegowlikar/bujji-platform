@@ -133,13 +133,13 @@ are deliberately absent from the table above.
 starts, which modules production can reach. Current measurement:
 
 ```
-python files            1915
-  test modules           582
-  production modules    1333
+python files            1918
+  test modules           583
+  production modules    1335
 
 REACHABLE                487   (36.5% of production)
-orphaned                 846
-  test-only              611
+orphaned                 848
+  test-only              613
   unreferenced           235
 ```
 
@@ -731,6 +731,44 @@ source bytes changed under an unchanged manifest; a one-day in-sample result
 with 200 trials presented as a finding; an out-of-order corpus; a chain fact
 joined with no timestamp; a chain snapshot dated after the decision instant;
 and a ledger that hides failed trials.
+
+**Friction, measured on Bujji's own quotes.** `costs.py` forms a fill price
+by crossing the spread -- a taker lifts the ask and hits the bid -- and refuses
+rather than falling back to last-traded price, which is neither side of a
+market you could transact in. Run over the 246 options carrying a two-sided
+quote on 2026-08-24:
+
+| Premium bucket | n | Median breakeven | p90 |
+| --- | --- | --- | --- |
+| under Rs 10 | 70 | **42.8%** | **123.7%** |
+| Rs 10-50 | 21 | 3.4% | 5.5% |
+| Rs 50-200 | 34 | 1.1% | 1.6% |
+| over Rs 200 | 121 | 0.9% | 3.5% |
+
+A cheap option must move ~43% of its own premium before the position breaks
+even, and for the worst tenth of them the cost exceeds the premium outright.
+The itemisation shows why, and it is not the spread: on a Rs 1.50 option at
+lot 75 the spread costs Rs 3.75 while flat brokerage on two orders costs
+Rs 40 against a Rs 112 premium. **For cheap options the dominant cost is fixed
+fees, not spread** -- which the spread-focused framing in most commentary
+misses. SEBI's FY26 study reports ~88% of individual traders losing, options
+driving 92% of losses, and roughly Rs 25,000 crore paid in costs; the table
+above is that finding reproduced from this system's own data.
+
+No rate is hardcoded as truth. A `RateCard` carries an effective date and a
+`verified` flag, the shipped default is **UNVERIFIED**, and any cost computed
+from it is labelled so the evaluation contract can refuse it -- the same
+stance as `FYERS_POSITION_SCHEMA_VERIFIED`.
+
+**Volatility.** `volatility.py` implements realized variance at 5-minute
+sampling, Barndorff-Nielsen & Shephard bipower variation to separate jumps
+from diffusion, and Corsi's HAR-RV forecaster, whose published comparisons put
+it ahead of GARCH(1,1) by roughly 35-40% on forecast error because it consumes
+high-frequency data rather than squeezing daily returns. It is validated by
+recovering known coefficients from a synthetic HAR process (0.335/0.337/0.212
+against a true 0.35/0.30/0.25 over 877 rows) and **refuses to fit on Bujji's
+one session** -- 1 observation against 82 required. Realized variance never
+bridges a gap: a missing price is not a return.
 
 **No research output in this package authorizes paper trading or live trading.**
 
