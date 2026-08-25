@@ -6,6 +6,7 @@ its subscribed set on reconnect and emits nothing until somebody subscribes
 again. A fake that kept the subscriptions would make the test pass against
 the very defect it exists to catch.
 """
+import os
 import threading
 import time
 
@@ -25,9 +26,17 @@ class FyersDataSocket:
         self._reconnected = False
         self._t0 = None
         self._lock = threading.Lock()
-        # Drop the connection this many seconds after connect().
-        self.drop_after_s = float(kw.get("drop_after_s", 6.0))
-        self.reconnect_gap_s = float(kw.get("reconnect_gap_s", 1.0))
+        # Configured by environment because the code under test constructs
+        # this class itself and cannot be asked to pass test parameters.
+        #
+        #   MODE=reconnect  the connection drops and comes back, and the
+        #                   server has forgotten the subscriptions
+        #   MODE=silent     the feed simply STOPS. No on_close, no on_connect,
+        #                   socket still "up" -- a half-open connection, which
+        #                   no reconnect handler can ever notice
+        self.mode = os.environ.get("FAKE_MODE", "reconnect")
+        self.drop_after_s = float(os.environ.get("FAKE_DROP_AFTER_S", "6"))
+        self.reconnect_gap_s = float(os.environ.get("FAKE_RECONNECT_GAP_S", "1"))
 
     def connect(self):
         self._t0 = time.time()
@@ -43,9 +52,14 @@ class FyersDataSocket:
             now = time.time()
             if not dropped and now - self._t0 >= self.drop_after_s:
                 dropped = True
-                # THE DROP. Subscriptions die with the connection.
                 with self._lock:
                     self.subscribed.clear()
+                if self.mode == "silent":
+                    # NOTHING IS SIGNALLED. This is the case a reconnect
+                    # handler cannot catch, because no reconnect occurs.
+                    self.went_silent_at = now
+                    continue
+                # THE DROP. Subscriptions die with the connection.
                 if self.on_close:
                     self.on_close("connection lost (simulated)")
                 time.sleep(self.reconnect_gap_s)

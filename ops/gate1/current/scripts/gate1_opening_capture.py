@@ -150,6 +150,27 @@ def main() -> int:
     # widened by a network event, and never less.
     subs = {"intended": [], "seen": set(), "lock": threading.Lock(),
             "resubscribe_pending": False, "events": []}
+    # A SILENT FEED MUST BE VISIBLE. guard() polls the deadline, disk headroom
+    # and the corpus cap -- never whether anything is still arriving. On
+    # 2026-08-25 that combination made a five-hour outage invisible: the
+    # socket stayed ESTABLISHED, the process stayed healthy, and the corpus
+    # stopped growing at 09:26 while the harness reported itself sustaining
+    # until 15:40.
+    #
+    # THE THRESHOLD IS MEASURED, NOT CHOSEN. In that session's live window,
+    # 264,874 records across 369 symbols produced a median aggregate gap of
+    # 0.09 ms, a p999 of 359 ms and a MAXIMUM of 0.51 s -- not one gap
+    # exceeded two seconds. 30 s therefore sits about 59x above the worst
+    # gap ever observed while the market was open, which is enough margin
+    # that a trip means something.
+    #
+    # It arms only AFTER the open. Pre-open is legitimately quiet: the same
+    # session saw 43 s aggregate gaps and 21 gaps over 15 s before the bell,
+    # so an always-armed detector would cry outage every morning.
+    SILENCE_WARN_S = 30.0
+    SILENCE_CRITICAL_S = 120.0
+    silence = {"armed": False, "episode_start": None, "warned": False,
+               "critical": False, "events": []}
     # INGEST ORDER AND RECEIVE TIME, assigned at the callback boundary before
     # anything else touches the message.
     seq = {"n": 0}
@@ -267,6 +288,53 @@ def main() -> int:
             print(f"[reconnect] connection {state['connects']}; "
                   f"{pending} subscription(s) must be restored", flush=True)
 
+    def check_feed_silence():
+        """Notice a feed that has stopped, and try the cheap recovery.
+
+        Deliberately does NOT close and reopen the socket. close_connection()
+        cannot be exercised against the real SDK from a sandbox, and a forced
+        restart that fails converts a recoverable outage into a certainly dead
+        one. Re-subscribing is cheap, idempotent and safe; escalating beyond
+        that is a decision for an operator with the evidence in front of them,
+        which is what the CRITICAL line exists to produce.
+        """
+        if not silence["armed"]:
+            return
+        last = state.get("last_msg_t")
+        if last is None:
+            return
+        quiet = time.time() - last
+        if quiet < SILENCE_WARN_S:
+            if silence["episode_start"] is not None:
+                # Recovered. Record the episode so the gap is in the evidence
+                # rather than only inferable from corpus timestamps.
+                silence["events"].append({
+                    "kind": "FEED_SILENCE_ENDED",
+                    "t": time.time(),
+                    "silent_seconds": round(time.time() - silence["episode_start"], 1)})
+                print(f"[feed] resumed after "
+                      f"{time.time() - silence['episode_start']:.0f}s silent",
+                      flush=True)
+                silence.update(episode_start=None, warned=False, critical=False)
+            return
+        if silence["episode_start"] is None:
+            silence["episode_start"] = last
+        if not silence["warned"]:
+            silence["warned"] = True
+            silence["events"].append({"kind": "FEED_SILENT", "t": time.time(),
+                                      "quiet_seconds": round(quiet, 1)})
+            print(f"[feed] SILENT for {quiet:.0f}s -- resubscribing", flush=True)
+            with subs["lock"]:
+                subs["resubscribe_pending"] = True
+        if quiet >= SILENCE_CRITICAL_S and not silence["critical"]:
+            silence["critical"] = True
+            silence["events"].append({"kind": "FEED_SILENT_CRITICAL",
+                                      "t": time.time(),
+                                      "quiet_seconds": round(quiet, 1)})
+            # A distinctive line the orchestrator can match and notify on.
+            print(f"[feed] CRITICAL: no market data for {quiet:.0f}s; "
+                  f"resubscribe did not restore it", flush=True)
+
     def resubscribe_if_needed():
         """Restore the intended subscription set after a reconnect.
 
@@ -370,6 +438,11 @@ def main() -> int:
         time.sleep(0.2)
     opening_ts = time.time()
     open_ts["t"] = opening_ts          # arms the first-spot detector
+    # Arm silence detection only now. Pre-open quiet is normal -- the
+    # 2026-08-25 session saw 43 s aggregate gaps before the bell -- so an
+    # always-armed detector would report an outage every morning and be
+    # ignored by the time one was real.
+    silence["armed"] = True
     results["opening_capture_started_ist"] = iso(datetime.fromtimestamp(opening_ts, IST))
     results["messages_before_open"] = seq["n"]
     print(f"[OPEN] capture live at {datetime.fromtimestamp(opening_ts, IST):%H:%M:%S.%f} "
@@ -480,6 +553,7 @@ def main() -> int:
             if _left <= 0:
                 break
             guard(corpus)
+            check_feed_silence()
             # A reconnect is only useful if the subscriptions come back with
             # it. 5s rather than 30s bounds how much of the feed a recovery
             # costs; the bound that matters -- never sleeping past the
@@ -503,6 +577,7 @@ def main() -> int:
         _terminal_detail = "KeyboardInterrupt (SIGINT)"
         print("[sustained] INTERRUPTED", flush=True)
     results["reconnect_events"] = subs["events"]
+    results["feed_silence_events"] = silence["events"]
     results["subscriptions_intended"] = len(subs["intended"])
     results["terminal_state"] = _terminal
     results["terminal_detail"] = _terminal_detail

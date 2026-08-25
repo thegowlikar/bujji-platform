@@ -88,7 +88,8 @@ def stage(capture_path: Path, work: Path) -> Path:
     return staged
 
 
-def run_capture(capture_path: Path, work: Path, seconds: float):
+def run_capture(capture_path: Path, work: Path, seconds: float,
+                mode: str = "reconnect", drop_after: float = 6.0):
     """Run the real capture against the fake socket, on a short deadline."""
     capture_path = stage(capture_path, work)
     stub = work / "stub"
@@ -121,7 +122,8 @@ def run_capture(capture_path: Path, work: Path, seconds: float):
     env = {"PYTHONPATH": f"{stub}:/opt/bujji/work-m4", "PATH": "/usr/bin:/bin",
            "HOME": str(work),
            "FYERS_APP_ID": "SANDBOX-APP-ID-NOT-REAL",
-           "FYERS_ACCESS_TOKEN": "sandbox-token-not-real"}
+           "FYERS_ACCESS_TOKEN": "sandbox-token-not-real",
+           "FAKE_MODE": mode, "FAKE_DROP_AFTER_S": str(drop_after)}
     p = subprocess.run(cmd, capture_output=True, text=True, timeout=seconds + 90,
                        env=env, cwd=str(work))
     results = {}
@@ -167,6 +169,9 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--control", help="path to an unpatched copy to compare")
     ap.add_argument("--seconds", type=float, default=30.0)
+    ap.add_argument("--silence", action="store_true",
+                    help="also prove the half-open (silent feed) case")
+    ap.add_argument("--silence-seconds", type=float, default=75.0)
     args = ap.parse_args()
 
     print("PROOF: a dropped connection must resubscribe and resume\n")
@@ -177,6 +182,39 @@ def main():
         if not results:
             print("    stdout tail:", p.stdout[-600:])
             print("    stderr tail:", p.stderr[-600:])
+
+    if args.silence:
+        # A HALF-OPEN FEED: no on_close, no on_connect, nothing to react to.
+        # Only a detector watching for absence of data can see this at all.
+        print("\nPROOF: a feed that dies without disconnecting is still noticed\n")
+        with tempfile.TemporaryDirectory() as td:
+            work = Path(td)
+            p, results, symbols = run_capture(CAPTURE, work, args.silence_seconds,
+                                              mode="silent", drop_after=5.0)
+            ev = results.get("feed_silence_events", [])
+            silent = [e for e in ev if e.get("kind") == "FEED_SILENT"]
+            rc = results.get("reconnect_events", [])
+            print(f"--- silent-feed ---\n    exit={p.returncode} "
+                  f"silence_events={len(ev)} reconnect_events={len(rc)}")
+            # The half-open case is defined by the ABSENCE of a reconnect
+            # signal. A RESUBSCRIBED entry is expected here and is not one --
+            # it is the detector's own cheap recovery firing, which is the
+            # behaviour being proven.
+            detected = [e for e in rc if e.get("kind") == "RECONNECT_DETECTED"]
+            check("silent feed: no reconnect was signalled", not detected,
+                  fail_detail="a reconnect was signalled, so this does not "
+                              "exercise the half-open case")
+            check("silent feed: the detector attempted a resubscribe",
+                  any(e.get("kind") == "RESUBSCRIBED" for e in rc),
+                  fail_detail="silence was seen but no recovery was tried")
+            check("silent feed: the silence was detected", bool(silent),
+                  f"{len(silent)} FEED_SILENT event(s)")
+            if silent:
+                check("silent feed: quiet time exceeded the threshold",
+                      silent[0].get("quiet_seconds", 0) >= 30.0,
+                      f"{silent[0].get('quiet_seconds')}s")
+            if not results:
+                print("    stderr tail:", p.stderr[-500:])
 
     if args.control:
         with tempfile.TemporaryDirectory() as td:
