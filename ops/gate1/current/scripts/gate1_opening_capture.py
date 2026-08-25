@@ -134,7 +134,22 @@ def main() -> int:
     corpus = G5.RawCorpus(out / "raw_full.jsonl")
     holder: dict = {"m": None, "on_first_tick": None}
     acks: dict = {}
-    state = {"connects": 0, "closes": 0, "errors": []}
+    state = {"connects": 0, "closes": 0, "errors": [], "last_msg_t": None}
+    # THE SUBSCRIPTION SET IS SESSION STATE, AND A RECONNECT DOES NOT CARRY IT.
+    #
+    # On 2026-08-25 the feed dropped at 09:26:45, eleven minutes after the
+    # open. The SDK reconnected and the socket stayed ESTABLISHED for the next
+    # five hours -- and not one further message arrived, because a reconnected
+    # socket carries no subscriptions and nothing re-submitted them. The
+    # process looked healthy the whole time, which is worse than a crash: a
+    # dead process is visible, a live silent one is not. That session captured
+    # 11.6 minutes of a 6.5-hour window.
+    #
+    # "intended" is what we have asked for, in order, deduplicated. A
+    # reconnect restores EXACTLY that -- never more, so containment cannot be
+    # widened by a network event, and never less.
+    subs = {"intended": [], "seen": set(), "lock": threading.Lock(),
+            "resubscribe_pending": False, "events": []}
     # INGEST ORDER AND RECEIVE TIME, assigned at the callback boundary before
     # anything else touches the message.
     seq = {"n": 0}
@@ -172,6 +187,8 @@ def main() -> int:
         # object. The corpus never sees the mutable dict again.
         corpus.offer(seq=n, recv_wall=recv, recv_mono=recv_mono,
                      tid=threading.get_ident(), payload=msg)
+        # One assignment on the hot path, so a silence gap is measurable.
+        state["last_msg_t"] = recv
         proc = time.time()
         proc_mono = time.monotonic()
         blob_size = corpus.last_line_size
@@ -225,10 +242,78 @@ def main() -> int:
             m.observe(msg, recv, proc, blob_size, threading.get_ident(),
                       recv_mono=recv_mono, proc_mono=proc_mono)
 
+    def _on_connect():
+        """Count the connect and, if it is a RE-connect, flag a resubscribe.
+
+        It only FLAGS. Calling sock.subscribe from inside the SDK's own
+        callback thread risks re-entering a library holding its own lock, and
+        a capture that deadlocks in its recovery path is worse than one that
+        recovers a few seconds later. The wait loops perform it.
+        """
+        state["connects"] += 1
+        if state["connects"] > 1:
+            with subs["lock"]:
+                subs["resubscribe_pending"] = True
+                pending = len(subs["intended"])
+            silent_since = state.get("last_msg_t")
+            subs["events"].append({
+                "kind": "RECONNECT_DETECTED",
+                "connect_number": state["connects"],
+                "t": time.time(),
+                "seconds_since_last_message": (
+                    (time.time() - silent_since) if silent_since else None),
+                "symbols_to_restore": pending,
+            })
+            print(f"[reconnect] connection {state['connects']}; "
+                  f"{pending} subscription(s) must be restored", flush=True)
+
+    def resubscribe_if_needed():
+        """Restore the intended subscription set after a reconnect.
+
+        Called from the wait loops, never from the SDK thread. A no-op unless
+        a reconnect actually happened, so it is safe to call frequently.
+        """
+        with subs["lock"]:
+            if not subs["resubscribe_pending"]:
+                return
+            subs["resubscribe_pending"] = False
+            want = list(subs["intended"])
+        if not want:
+            return
+        t0 = time.time()
+        try:
+            sock.subscribe(symbols=want, data_type="SymbolUpdate")
+            subs["events"].append({"kind": "RESUBSCRIBED", "t": t0,
+                                   "symbols": len(want)})
+            print(f"[reconnect] resubscribed {len(want)} symbol(s)", flush=True)
+        except Exception as exc:  # noqa: BLE001 -- recorded, never fatal
+            # A failed restore must be visible in the evidence. Silence here
+            # is exactly the defect this whole block exists to remove.
+            subs["events"].append({"kind": "RESUBSCRIBE_FAILED", "t": t0,
+                                   "symbols": len(want), "error": str(exc)[:400]})
+            state["errors"].append({"t": t0, "msg": f"resubscribe: {exc}"})
+            with subs["lock"]:
+                subs["resubscribe_pending"] = True   # try again next tick
+            print(f"[reconnect] resubscribe FAILED: {exc}", flush=True)
+
+    def subscribe(symbols, why):
+        """Subscribe, and record what we asked for so a reconnect can restore it.
+
+        Every subscribe in this file goes through here. A call site that
+        bypassed it would create symbols that vanish on the first reconnect
+        and never come back -- which is the 2026-08-25 defect in miniature.
+        """
+        with subs["lock"]:
+            for sym in symbols:
+                if sym not in subs["seen"]:
+                    subs["seen"].add(sym)
+                    subs["intended"].append(sym)
+        sock.subscribe(symbols=symbols, data_type="SymbolUpdate")
+
     sock = data_ws.FyersDataSocket(
         access_token=f"{app_id}:{token}", log_path=str(out), litemode=False,
         write_to_file=False, reconnect=True,
-        on_connect=lambda: state.__setitem__("connects", state["connects"] + 1),
+        on_connect=lambda: _on_connect(),
         on_close=lambda m: state.__setitem__("closes", state["closes"] + 1),
         on_error=lambda m: state["errors"].append({"t": time.time(), "msg": str(m)[:400]}),
         on_message=on_msg)
@@ -257,7 +342,7 @@ def main() -> int:
     # harness exists to remove. Capacity is measured from the sustained phase
     # and from per-minute buckets instead.
     sub_started = time.time()
-    sock.subscribe(symbols=prov_symbols, data_type="SymbolUpdate")
+    subscribe(prov_symbols, "pre-open provisional universe")
     sub_done = time.time()
     results["subscription"] = {
         "submitted_count": len(prov_symbols),
@@ -350,7 +435,7 @@ def main() -> int:
             cov["status"] = "GAP"
             add_at = time.time()
             try:
-                sock.subscribe(symbols=missing, data_type="SymbolUpdate")
+                subscribe(missing, "canonical gap fill")
                 cov["late_subscription_submitted_ist"] = iso(
                     datetime.fromtimestamp(add_at, IST))
             except Exception as exc:
@@ -395,7 +480,12 @@ def main() -> int:
             if _left <= 0:
                 break
             guard(corpus)
-            time.sleep(min(30, _left))
+            # A reconnect is only useful if the subscriptions come back with
+            # it. 5s rather than 30s bounds how much of the feed a recovery
+            # costs; the bound that matters -- never sleeping past the
+            # deadline -- is unchanged.
+            resubscribe_if_needed()
+            time.sleep(min(5, _left))
         # Reaching sustained_until IS the deadline in clean-capture mode,
         # where no budget is reserved and sustained_until == stop_at. Say so
         # explicitly rather than letting a normal loop exit imply a full run.
@@ -412,6 +502,8 @@ def main() -> int:
         _terminal = "INTERRUPTED"
         _terminal_detail = "KeyboardInterrupt (SIGINT)"
         print("[sustained] INTERRUPTED", flush=True)
+    results["reconnect_events"] = subs["events"]
+    results["subscriptions_intended"] = len(subs["intended"])
     results["terminal_state"] = _terminal
     results["terminal_detail"] = _terminal_detail
     results["evidence_complete"] = (_terminal == "COMPLETED")
@@ -481,7 +573,7 @@ def main() -> int:
         first_after = {"t": None}
         holder["on_first_tick"] = lambda: first_after.__setitem__("t", time.time())
         try:
-            sock.subscribe(symbols=prov_symbols, data_type="SymbolUpdate")
+            subscribe(prov_symbols, "reconnect test")
         except Exception as exc:
             state["errors"].append({"t": time.time(), "msg": f"resubscribe: {exc}"})
         window = max(120, min(args.reconnect_seconds - 60,
@@ -547,7 +639,7 @@ def main() -> int:
                 errs_before = len(state["errors"])
                 ok = True
                 try:
-                    sock.subscribe(symbols=pool[:n], data_type="SymbolUpdate")
+                    subscribe(pool[:n], "capacity probe")
                 except Exception as exc:
                     ok = False
                     state["errors"].append({"t": time.time(),
