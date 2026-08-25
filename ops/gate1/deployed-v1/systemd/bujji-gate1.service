@@ -1,0 +1,79 @@
+[Unit]
+# Bujji Gate 1 — unattended no-trade market-data measurement (Tue 2026-08-25).
+#
+# MEASUREMENT ONLY. This unit cannot trade, and that is structural rather than
+# intentional: its orchestrator issues no systemctl command, writes no gate
+# sentinel, and imports no order path. /opt/bujji/gate1-run/prove_no_trading.py
+# asserts all three by AST, with positive controls proving the detectors fire.
+#
+# It has NO relationship to bujji-options-os-trading. It does not Want, Require,
+# Before, After or Conflict with it. The trading unit stays disabled and
+# condition-gated for the whole session; nothing here can change that.
+#
+# ONE-SHOT, FOR ONE DAY. The timer carries an explicit calendar date and
+# disables itself after a terminal result, so a forgotten timer cannot fire
+# into a future trading day.
+Description=Bujji Gate 1 — no-trade market-data measurement (one-shot)
+Documentation=file:/opt/bujji/gate1-run/RUNBOOK.html
+ConditionPathExists=/opt/bujji/gate1-run/gate1_orchestrator.py
+# Failure reaches the phone through the same path every other unit uses.
+# Belongs in [Unit]: systemd silently IGNORES it under [Service], which would
+# have lost the alert without any error at load time.
+OnFailure=bujji-alert@%n.service
+
+[Service]
+Type=oneshot
+User=root
+WorkingDirectory=/opt/bujji/gate1-run
+Environment=PYTHONUNBUFFERED=1
+
+# Wall-clock ceiling above the harness's own 8h bound, so systemd is the
+# outer backstop and the harness is the inner one.
+TimeoutStartSec=9h
+
+# TIMING IS DRIVEN BY THE BELL, not by the open.
+#
+# The earlier design fetched a live spot at 09:18, built the universe, then
+# subscribed -- leaving 09:15:01 onward uncaptured. It was safe and it was not
+# a full-session measurement. Now everything that must happen before 09:15
+# happens before 09:15:
+#
+#   08:45  unit starts, waits for the token
+#   09:02  STRICT pre-open token cutoff (a later token cannot be subscribed
+#          in time, so the run is abandoned rather than started late)
+#   09:02+ provisional universe built from a prior-session reference price
+#   09:14:30  every subscription submitted, or OPENING_COVERAGE_UNAVAILABLE
+#   09:15:00  capture is already recording
+#   09:15+ first valid post-open spot CALLBACK -> canonical -> containment
+#   ~15:02 reconnect phase (bounded)
+#   ~15:11 capacity probe (bounded, LAST, verdict-neutral)
+ExecStart=/opt/bujji/.venv/bin/python /opt/bujji/gate1-run/gate1_orchestrator.py \
+    --session-id GATE1_20260825 \
+    --measurement-date 2026-08-25 \
+    --token-deadline 09:02 \
+    --open-at 09:15:00 \
+    --subscribe-by 09:14:30 \
+    --opening-buffer-points 500 \
+    --capacity-probe \
+    --capacity-steps 500,750,1000,1250,1465
+
+# TERMINAL MEANS TERMINAL. After any outcome the timer disables itself, so a
+# reboot on Tuesday cannot re-run Monday's measurement. Prefixed "-" so a
+# cleanup failure never masks the measurement's own exit code.
+ExecStopPost=-/bin/systemctl --no-block disable bujji-gate1.timer
+
+# NEVER RESTART. A retry would re-enter the market mid-session with a partial
+# corpus and no operator watching. One bounded attempt, then a sealed result.
+Restart=no
+
+# Hardening. The unit needs the run dir, the durable output dir, and read
+# access to the credential file the approved receiver maintains.
+NoNewPrivileges=true
+PrivateTmp=false
+ProtectSystem=full
+ProtectHome=true
+ReadWritePaths=/opt/bujji/gate1-run /opt/bujji/gate1 /opt/bujji/app/data
+ReadOnlyPaths=/opt/bujji/app /opt/bujji/work-m4
+
+[Install]
+WantedBy=multi-user.target

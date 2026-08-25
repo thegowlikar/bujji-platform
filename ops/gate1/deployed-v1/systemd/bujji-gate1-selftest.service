@@ -1,0 +1,28 @@
+[Unit]
+# END-TO-END SANDBOX PROOF for bujji-gate1.service.
+#
+# Runs the orchestrator's dry-run path under the REAL service sandbox --
+# same user, WorkingDirectory, ProtectSystem/ProtectHome, ReadWritePaths
+# and ReadOnlyPaths -- because a dry run that passes as root in an
+# interactive shell proves nothing about what systemd will permit at
+# 09:10 with nobody watching.
+#
+# The [Service] block below is copied VERBATIM from the real unit; only
+# the command differs. It places nothing and touches no trading unit.
+Description=Bujji Gate 1 - service-sandbox self test (no market, no trading)
+ConditionPathExists=/opt/bujji/gate1-run/gate1_sandbox_selftest.py
+
+[Service]
+Type=oneshot
+User=root
+WorkingDirectory=/opt/bujji/gate1-run
+Environment=PYTHONUNBUFFERED=1
+NoNewPrivileges=true
+PrivateTmp=false
+ProtectSystem=full
+ProtectHome=true
+ReadWritePaths=/opt/bujji/gate1-run /opt/bujji/gate1 /opt/bujji/app/data
+ReadOnlyPaths=/opt/bujji/app /opt/bujji/work-m4
+TimeoutStartSec=10min
+Restart=no
+ExecStart=/opt/bujji/.venv/bin/python /opt/bujji/gate1-run/gate1_sandbox_selftest.py

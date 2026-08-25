@@ -129,18 +129,18 @@ are deliberately absent from the table above.
 
 ## 3. Runtime reachability, and what "test-only" means
 
-`tools/reachability.py` computes, from the eight entry points systemd actually
+`tools/reachability.py` computes, from the seven entry points systemd actually
 starts, which modules production can reach. Current measurement:
 
 ```
-python files            1870
-  test modules           579
-  production modules    1291
+python files            1918
+  test modules           583
+  production modules    1335
 
-REACHABLE                487   (37.7% of production)
-orphaned                 804
-  test-only              603
-  unreferenced           201
+REACHABLE                487   (36.5% of production)
+orphaned                 848
+  test-only              613
+  unreferenced           235
 ```
 
 **`test-only` is a classification, not a verdict.** It means exactly one thing:
@@ -593,6 +593,184 @@ chain that strikes were selected from is not part of the evidence package.
 Strikes cannot be re-derived from a book nobody wrote down. Whether a
 per-entry chain snapshot is worth its size is an operator decision about
 evidence volume, recorded here rather than patched quietly.
+
+## 5g. Market Intelligence: descriptive, offline, and deliberately inert
+
+### The OI pipeline, and where it was lossy
+
+```
+FYERS optionchain (oi, prev_oi, oich)
+  -> LiveChainProvider          -> OptionObservation   [the snapshot-fact authority]
+  -> _build_strike_evidence     -> _StrikeEvidence.oi_evidence
+  -> _liquidity_ok              -> named, replayable refusal
+  -> TradeConstructionAssessment.explanation.dominant_constraints
+```
+
+**Two authorities, one of them lossy.** `LiveChainProvider` feeds the trading
+path and already carried `oi` and `oich`; `FyersBroker.get_option_chain()` feeds
+the `MarketSnapshot` path and carried only `oi` — substituting **`0.0` for an
+absent CE/PE row**, so a strike nobody reported arrived as a hard zero and could
+be compared to `MIN_OPEN_INTEREST`. Both are repaired in place. Neither was
+replaced, and no third chain path exists.
+
+`prev_oi` was discarded by both. It is now a first-class observation field,
+`FIELD_PREVIOUS_OPEN_INTEREST` — **non-mandatory**, because bhavcopy has no
+previous-OI column and making it mandatory would mark every bhavcopy
+observation permanently incomplete for a field that source structurally cannot
+supply.
+
+### `OptionObservation` is the OI model. There is no other.
+
+It already carries contract identity, chain timestamp, `missing_fields`, and
+all three OI values. Decision evidence records its **identity**, not a copy —
+`observation_id`, `instrument_symbol`, `chain_timestamp`, `provenance`,
+availability — so an OI-dependent accept or refusal can be replayed against the
+exact record it used.
+
+The broker's own `oich` is kept verbatim. Bujji does **not** compute a competing
+`oi - prev_oi` delta: two answers to one question is how a split starts.
+
+### OI is a REST fact and can never be a tick fact
+
+Measured on 2026-08-24: **zero occurrences** of `open_interest`, `"oi"` or
+`prev_oi` across a 394 MB websocket corpus, on options as well as futures. The
+verifier therefore treats any tick provenance on an OI fact as a refusal
+(`TICK_PROVENANCE_ON_REST_FACT`) — it is a false claim of simultaneity, not a
+mislabel.
+
+### `bujji.market_intelligence` — offline by reachability, not by docstring
+
+Descriptive reporting over persisted observations: OI level and availability,
+put/call ratio with its denominator stated, concentration and OI-weighted
+distance from spot, broker `oich` dispersion, per-expiry rollup, and data
+quality. It defines **no** OI model, emits **no** signal, and is **absent from
+the reachability closure of every declared entrypoint** — asserted by a test,
+because "offline" in a docstring has meant "reachable and simply not called
+yet" in this codebase before.
+
+**What it may never say.** OI is unsigned and aggregated. It cannot identify
+buyer or seller initiation, participant class, opening versus closing flow, or
+bullish/bearish intent — a rise in OI with a rise in price cannot distinguish a
+buyer opening from a seller opening, because both create exactly one contract.
+The quadrant vocabulary contains no directional member and no quadrant is
+emitted from a single snapshot, since a price/OI quadrant needs a price change
+over the *same* interval as the OI change.
+
+### The intelligence-to-decision contract is built and consumed by nothing
+
+`decision_market_context()` produces the record a later policy would read —
+named facts, their timestamps and sources, and the fields that were
+unavailable. Its status is literally `CONSTRUCTED_NOT_CONSUMED`, and a test
+asserts no module outside the package imports it. **Activating it is a separate
+decision requiring measured evidence about OI freshness that does not exist.**
+
+### `bujji.quant_research` — offline research, and what the data actually supports
+
+Seven modules, none reachable from any declared entrypoint (asserted by the
+same closure test the intelligence package uses). It reads durable artifacts
+and writes research outputs; it feeds no selection, ranking, sizing, risk or
+execution path.
+
+**Dataset identity.** `manifest.py` binds a research dataset to its source
+SHA-256s, universe identity, session date and phase classification, and refuses
+seven ways — a changed file under an unchanged manifest, a missing source, an
+absent universe identity, an unclassified phase, or the inclusion of a phase
+classified INVALID or UNMEASURED. The fingerprint covers the inclusion rule as
+well as the bytes, because the same corpus filtered differently is a different
+dataset and a result does not carry between them.
+
+**No look-ahead, structurally.** `dataset.py` exposes streaming access only.
+A `PointInTime` view has a `history()` and its `future()` raises. Forward
+outcomes come from `label_forward_outcome()`, which is named for what it is and
+stamps every result with a warning that it may not be used as a feature. A
+corpus whose sequence goes backwards raises rather than being silently trusted.
+
+**Tick facts and chain facts are separate types.** `features.py` puts tick
+features and REST-chain OI features in different containers that can only be
+combined through `join_with_staleness()`, which computes the age of the chain
+snapshot, records it as part of the feature, and refuses when the snapshot has
+no timestamp. An unknown age is not a small age.
+
+**Measured capability, 2026-08-24 corpora.** The diagnostics were run against
+both preserved captures. The result constrains what Bujji can honestly test:
+
+| | lite sustained | full ramp |
+| --- | --- | --- |
+| span | 5.64 h | 1.08 h |
+| records | 990,689 | 419,766 |
+| option fields carried | **3** (`ltp`, `symbol`, `type`) | 22 |
+| two-sided quote observations | **0** | 412,503 |
+| median option update rate | 0.068 msg/s | — |
+| options under 1 msg/60s | 78 of 246 | — |
+| median relative spread | not measurable | 0.494% |
+| p95 relative spread | not measurable | 9.524% |
+
+**The constraint this exposes.** Bujji's only long continuous capture carries
+last price and nothing else. No bid, no ask, no size — so it cannot support an
+executable price, a spread, or any P&L that claims to be transactable. The
+capture that does carry quotes ran for one hour of one day. This is a fact
+about the data, discovered before any method was tried, rather than an
+unexplained result surfacing later inside a backtest.
+
+**The evaluation contract refuses by default.** `evaluation.py` returns
+`INSUFFICIENT_EVIDENCE` until eleven gates pass, and its best available verdict
+is `NOT_REJECTED` — the vocabulary contains no word for profitable. The
+multiple-testing gate applies a deflated Sharpe ratio (Bailey & López de
+Prado): the bar a result must clear rises with the number of configurations
+tried, so a strategy chosen from 200 variants faces a far higher threshold than
+one specified in advance. `ledger.py` records every trial including failures,
+because an unrecorded experiment under-reports N and makes the correction
+applied to every later result too weak.
+
+**Eleven negative controls, each verified by defect injection.** Each control
+was confirmed to fail when its specific guard was removed and to pass when
+restored — a control that cannot fire is not evidence. They cover: a future
+tick leaked into a feature; an INVALID phase admitted; an UNMEASURED phase
+admitted; REST OI stamped as a tick fact; P&L formed from LTP without quotes;
+source bytes changed under an unchanged manifest; a one-day in-sample result
+with 200 trials presented as a finding; an out-of-order corpus; a chain fact
+joined with no timestamp; a chain snapshot dated after the decision instant;
+and a ledger that hides failed trials.
+
+**Friction, measured on Bujji's own quotes.** `costs.py` forms a fill price
+by crossing the spread -- a taker lifts the ask and hits the bid -- and refuses
+rather than falling back to last-traded price, which is neither side of a
+market you could transact in. Run over the 246 options carrying a two-sided
+quote on 2026-08-24:
+
+| Premium bucket | n | Median breakeven | p90 |
+| --- | --- | --- | --- |
+| under Rs 10 | 70 | **42.8%** | **123.7%** |
+| Rs 10-50 | 21 | 3.4% | 5.5% |
+| Rs 50-200 | 34 | 1.1% | 1.6% |
+| over Rs 200 | 121 | 0.9% | 3.5% |
+
+A cheap option must move ~43% of its own premium before the position breaks
+even, and for the worst tenth of them the cost exceeds the premium outright.
+The itemisation shows why, and it is not the spread: on a Rs 1.50 option at
+lot 75 the spread costs Rs 3.75 while flat brokerage on two orders costs
+Rs 40 against a Rs 112 premium. **For cheap options the dominant cost is fixed
+fees, not spread** -- which the spread-focused framing in most commentary
+misses. SEBI's FY26 study reports ~88% of individual traders losing, options
+driving 92% of losses, and roughly Rs 25,000 crore paid in costs; the table
+above is that finding reproduced from this system's own data.
+
+No rate is hardcoded as truth. A `RateCard` carries an effective date and a
+`verified` flag, the shipped default is **UNVERIFIED**, and any cost computed
+from it is labelled so the evaluation contract can refuse it -- the same
+stance as `FYERS_POSITION_SCHEMA_VERIFIED`.
+
+**Volatility.** `volatility.py` implements realized variance at 5-minute
+sampling, Barndorff-Nielsen & Shephard bipower variation to separate jumps
+from diffusion, and Corsi's HAR-RV forecaster, whose published comparisons put
+it ahead of GARCH(1,1) by roughly 35-40% on forecast error because it consumes
+high-frequency data rather than squeezing daily returns. It is validated by
+recovering known coefficients from a synthetic HAR process (0.335/0.337/0.212
+against a true 0.35/0.30/0.25 over 877 rows) and **refuses to fit on Bujji's
+one session** -- 1 observation against 82 required. Realized variance never
+bridges a gap: a missing price is not a return.
+
+**No research output in this package authorizes paper trading or live trading.**
 
 ## 6. Deprecations
 

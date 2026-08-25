@@ -169,6 +169,17 @@ class OptionObservation:
         return self.field(taxonomy.FIELD_CHANGE_IN_OPEN_INTEREST)
 
     @property
+    def previous_open_interest(self) -> Optional[float]:
+        """The broker's own previous-session OI, verbatim.
+
+        None means UNAVAILABLE, never zero. A real reported 0 and an absent
+        field are opposite facts: one says the contract has no open interest,
+        the other says nobody told us. Callers that cannot tell them apart
+        will eventually compare a fabricated zero to a threshold.
+        """
+        return self.field(taxonomy.FIELD_PREVIOUS_OPEN_INTEREST)
+
+    @property
     def underlying_price(self) -> Optional[float]:
         return self.field(taxonomy.FIELD_UNDERLYING_PRICE)
 

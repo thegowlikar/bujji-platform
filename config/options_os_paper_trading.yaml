@@ -37,7 +37,30 @@ session:
     decision_interval_seconds: 300
     evidence_window_polls: 16
     entry_cutoff: "14:30"
-    observe_until: "15:30"
+    # OBSERVATION RUNS TO THE F&O CLOSE (operator decision, 2026-08-24).
+    #
+    # Was "15:30". That is the CASH close, and Bujji trades F&O, which closes
+    # 15:40 (bujji/market_calendar.py: NSE circular 2026-05-30, effective
+    # 2026-08-03). So the session stopped observing ten minutes before its own
+    # market closed, and those ten minutes are not quiet ones -- the close is
+    # the busiest window of the day for options.
+    #
+    # WHAT THIS DOES NOT CHANGE, deliberately. Entries still stop at
+    # entry_cutoff 14:30 and positions are still flattened at
+    # mandatory_exit_time 15:15. So the extra ten minutes are OBSERVATION
+    # ONLY: no new risk can be taken in them, and no position should be open
+    # during them. Extending the exit time instead would mean holding risk
+    # twenty-five minutes longer, which is a different decision and was not
+    # the one made.
+    #
+    # tests/test_eod_knows_the_fo_close.py previously described the 15:30 end
+    # as "a deliberate ten-minute buffer before the close, and that is
+    # correct". It was a defensible buffer; the operator has since decided the
+    # closing ten minutes are worth watching. Exit buffers are a trading
+    # judgement that belongs in this file -- market_calendar.py says so
+    # explicitly, and the close-authority tests deliberately do not police
+    # them.
+    observe_until: "15:40"
     max_cycles: 96
     # Burst separation from the shadow campaign's :15/:20/:25 beat, moved
     # off the START time and onto the DECISION cadence: cycle 1 runs 150s

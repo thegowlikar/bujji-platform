@@ -1,0 +1,49 @@
+[Unit]
+# Gate 1 clean-capture SHORT-DEADLINE SANDBOX PROOF.
+#
+# A dedicated, temporary test unit. It exists to prove that the revised
+# clean-capture path stops on its absolute deadline, shuts the feed down,
+# seals its artifacts, and reports an unambiguous terminal result -- under the
+# SAME systemd sandbox restrictions as bujji-gate1.service, not merely from a
+# shell.
+#
+# NO LIVE DATA. fyers_apiv3 is shadowed by a synthetic shim on PYTHONPATH, so
+# no websocket is opened, no subscription is sent, and no credential is used.
+# The token below is deliberately fake and the stub asserts on it.
+#
+# NOTHING PRODUCTION IS TOUCHED: separate unit, separate output root, and
+# ReadWritePaths deliberately EXCLUDES /opt/bujji/app/data.
+Description=Bujji Gate 1 - clean-capture short-deadline sandbox proof (test only)
+
+[Service]
+Type=oneshot
+User=root
+WorkingDirectory=/opt/bujji/gate1-run
+
+# ---- sandbox: mirrors bujji-gate1.service ----------------------------------
+NoNewPrivileges=true
+PrivateTmp=false
+ProtectSystem=full
+ProtectHome=true
+# NARROWER than production on purpose: the test writes only to its own root.
+ReadWritePaths=/opt/bujji/gate1/SANDBOXTEST
+
+Environment=PYTHONUNBUFFERED=1
+Environment=PYTHONPATH=/opt/bujji/gate1-sandboxtest/stub
+Environment=FYERS_APP_ID=SANDBOXTEST-APP
+Environment=FYERS_ACCESS_TOKEN=SANDBOXTEST-TOKEN-NOT-REAL
+Environment=GATE1_SANDBOXTEST_TELEMETRY=/opt/bujji/gate1/SANDBOXTEST/stub_telemetry.json
+Environment=GATE1_SANDBOXTEST_TICK_HZ=50
+
+ExecStart=/opt/bujji/.venv/bin/python /opt/bujji/gate1-run/gate1_opening_capture.py \
+    --provisional-universe /opt/bujji/gate1/SANDBOXTEST/universe.json \
+    --canonical-handoff /opt/bujji/gate1/SANDBOXTEST/canonical_handoff.json \
+    --first-spot-out /opt/bujji/gate1/SANDBOXTEST/first_post_open_spot.json \
+    --out /opt/bujji/gate1/SANDBOXTEST/run \
+    --open-at ${GATE1_OPEN_AT} \
+    --subscribe-by ${GATE1_SUBSCRIBE_BY} \
+    --stop-deadline ${GATE1_STOP_DEADLINE} \
+    --handoff-timeout-s 10
+
+[Install]
+WantedBy=multi-user.target

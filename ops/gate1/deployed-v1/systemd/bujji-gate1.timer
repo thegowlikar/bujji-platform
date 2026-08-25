@@ -1,0 +1,27 @@
+[Unit]
+# One-shot, dated, and self-retiring.
+#
+# FIRES 08:45, NOT 09:10. The unit must wait for a token, build a provisional
+# universe, connect and subscribe -- ALL before the 09:15 bell. Starting at
+# 09:10 left no room for any of it.
+#
+# WHY Persistent=true WITH AN EXPLICIT DATE. If the box reboots at 09:20 the
+# measurement should still start -- a missed morning cannot be recovered,
+# because intraday option-chain data does not backfill. The date pins it to
+# that one morning alone, and the orchestrator independently refuses to start after the
+# window closes, so a late catch-up seals WINDOW_MISSED instead of measuring
+# a partial session and calling it evidence.
+#
+# A REBOOT CANNOT START TRADING. This timer starts only the measurement unit.
+# The trading timer is disabled and its service condition-gated; neither is
+# referenced here.
+Description=Bujji Gate 1 - one-shot PRE-OPEN trigger (2026-08-25 only)
+
+[Timer]
+OnCalendar=2026-08-25 08:45:00 Asia/Kolkata
+AccuracySec=1s
+Persistent=true
+Unit=bujji-gate1.service
+
+[Install]
+WantedBy=timers.target
